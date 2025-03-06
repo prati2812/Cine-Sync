@@ -9,33 +9,58 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  StatusBar,
+  TouchableWithoutFeedback,
+  Keyboard,
+  ScrollView,
+  ActivityIndicator
 } from 'react-native';
 import Logo from '../../components/Logo';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { auth } from '../../config/firebase';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { getDatabase, ref, set } from 'firebase/database';
+
 
 const SignUpScreen = ({ navigation }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSignUp = async () => {
+    console.log('Creating user account...', auth, email, password);
+    setIsLoading(true);
     if (!username || !email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
+      setIsLoading(false);
       return;
     }
 
     try {
+      
       // Create user with email and password
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       
-    
-      console.log('User account created & signed in!');
+      await sendEmailVerification(userCredential.user);
+
+      const db = getDatabase();
       
-      // No need to navigate manually, App.js will handle navigation
-      // based on authentication state
+      // Create user data object
+      const userData = {
+        username: username,
+        email: email,
+        userId: userCredential.user.uid,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Store user data in Realtime Database
+      await set(ref(db, 'users/' + userCredential.user.uid), userData);
+      
+      console.log('User account created & signed in!');
+      setIsLoading(false);
     } catch (error) {
+      setIsLoading(false);
       if (error.code === 'auth/email-already-in-use') {
         Alert.alert('Error', 'That email address is already in use!');
       } else if (error.code === 'auth/invalid-email') {
@@ -43,17 +68,26 @@ const SignUpScreen = ({ navigation }) => {
       } else if (error.code === 'auth/weak-password') {
         Alert.alert('Error', 'Password should be at least 6 characters');
       } else {
-        Alert.alert('Error', error.message);
+        Alert.alert('Errorrrr', error.message);
       }
-      console.error(error);
+      console.log("New Error",error);
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar
+         backgroundColor="#121212"
+         barStyle="light-content"
+       />
+
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}> 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>
+      <ScrollView
+        contentContainerStyle={{flexGrow: 1, paddingBottom:15}}
+        showsVerticalScrollIndicator={false}>    
         <View style={styles.contentContainer}>
           <View style={styles.headerContainer}>
             <Logo size="large" />
@@ -111,10 +145,15 @@ const SignUpScreen = ({ navigation }) => {
             </View>
 
             <TouchableOpacity 
-              style={styles.button}
+              style={[styles.button, isLoading && styles.buttonDisabled]}
               onPress={handleSignUp}
+              disabled={isLoading}
               activeOpacity={0.8}>
-              <Text style={styles.buttonText}>Create Account</Text>
+              {isLoading ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.buttonText}>Create Account</Text>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -125,7 +164,9 @@ const SignUpScreen = ({ navigation }) => {
             </TouchableOpacity>
           </View>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 };

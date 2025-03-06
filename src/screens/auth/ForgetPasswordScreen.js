@@ -8,6 +8,8 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  ActivityIndicator
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import Animated, { 
@@ -18,10 +20,15 @@ import Animated, {
   withTiming,
   runOnJS
 } from 'react-native-reanimated';
+import { auth } from '../../config/firebase';
+import { fetchSignInMethodsForEmail, sendPasswordResetEmail } from 'firebase/auth';
+import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
+
 
 const ForgetPasswordScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   
   // Animation values
   const scale = useSharedValue(1);
@@ -38,25 +45,64 @@ const ForgetPasswordScreen = ({ navigation }) => {
     transform: [{ scale: successOpacity.value }],
   }));
 
+  const checkUserExists = async (email) => {
+      try {
+        const db = getDatabase();
+        const usersRef = ref(db, 'users');
+        const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
+        
+        const snapshot = await get(userQuery);
+        console.log('User snapshot:', snapshot.val());
+        
+        return snapshot.exists();
+      } catch (error) {
+        console.log('Error checking user:', error);
+        return false;
+      }
+    };
+
   const handleResetPassword = async () => {
-    // Animate form out
-    opacity.value = withTiming(0, { duration: 300 });
-    scale.value = withTiming(0.8, { duration: 300 });
 
-    // Show success animation
-    setTimeout(() => {
-      setIsSuccess(true);
-      successOpacity.value = withSequence(
-        withTiming(1, { duration: 300 }),
-        withSpring(1.1),
-        withSpring(1)
-      );
-    }, 300);
+    try{
+      setIsLoading(true);
+      const userExists = await checkUserExists(email);
+      
+      if (userExists) {
+        await sendPasswordResetEmail(auth, email).then(() => {
+          opacity.value = withTiming(0, { duration: 300 });
+        scale.value = withTiming(0.8, { duration: 300 });
+    
+        // Show success animation
+        setTimeout(() => {
+          setIsSuccess(true);
+          successOpacity.value = withSequence(
+            withTiming(1, { duration: 300 }),
+            withSpring(1.1),
+            withSpring(1)
+          );
+        }, 300);
+    
+        // Navigate back after delay
+        setTimeout(() => {
+          navigation.navigate('Login');
+        }, 3000);
+          
+        }).catch((error) => {
+          console.log("Error sending password reset email:", error);
+          setIsLoading(false);
+        });
+      }else{
+        Alert.alert(
+                  'User Not Found',
+                  'This user is not registered in the app.');
+        setIsLoading(false);          
+      }
 
-    // Navigate back after delay
-    setTimeout(() => {
-      navigation.navigate('Login');
-    }, 3000);
+      
+    }catch(error){
+      console.log(error);
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -96,8 +142,14 @@ const ForgetPasswordScreen = ({ navigation }) => {
                   style={styles.button}
                   onPress={handleResetPassword}
                   activeOpacity={0.7}>
-                  <Text style={styles.buttonText}>Send Instructions</Text>
-                  <Icon name="arrow-forward" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+                    {isLoading ? (
+                                    <ActivityIndicator color="#FFFFFF" size="small" />
+                                  ) : (
+                                    <>
+                                     <Text style={styles.buttonText}>Send Instructions</Text>
+                                     <Icon name="arrow-forward" size={20} color="#FFFFFF" style={styles.buttonIcon} />
+                                    </>
+                    )}
                 </TouchableOpacity>
 
                 <TouchableOpacity

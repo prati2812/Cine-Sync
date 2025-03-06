@@ -7,20 +7,37 @@ import {
   TouchableOpacity,
   Text,
   Pressable,
-  Animated,
+  Alert,
 } from 'react-native';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import Orientation from 'react-native-orientation-locker';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { getDatabase, ref, onValue, set } from 'firebase/database';
+import { auth } from '../../config/firebase';
+import Animated, { 
+  withSpring, 
+  useAnimatedStyle, 
+  withTiming,
+  withSequence,
+} from 'react-native-reanimated';
 
-const StreamingScreen = ({ route }) => {
+const StreamingScreen = ({ route, navigation }) => {
   const [playing, setPlaying] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
   const screenWidth = Dimensions.get('window').width;
   const screenHeight = Dimensions.get('window').height;
   const playerRef = React.useRef();
   const [controlsVisible, setControlsVisible] = useState(true);
-  const fadeAnim = React.useRef(new Animated.Value(1)).current;
+  const fadeAnim = useAnimatedStyle(() => {
+    return {
+      opacity: withTiming(controlsVisible ? 1 : 0, {
+        duration: 300,
+      }),
+    };
+  }, [controlsVisible]);
+  const [isCreator, setIsCreator] = useState(false);
+  const { streamUrl, roomName, roomId } = route.params;
+
 
   // Auto-hide controls after 3 seconds of inactivity
   useEffect(() => {
@@ -34,34 +51,93 @@ const StreamingScreen = ({ route }) => {
   }, [controlsVisible, playing]);
 
   const fadeOutControls = () => {
-    Animated.timing(fadeAnim, {
-      toValue: 0,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(() => setControlsVisible(false));
+    setControlsVisible(false);
   };
 
   const fadeInControls = () => {
     setControlsVisible(true);
-    fadeAnim.setValue(1);
   };
 
-  // Lock to landscape when component mounts
-  useEffect(() => {
-    Orientation.lockToLandscape();
-    return () => {
-      Orientation.unlockAllOrientations();
-    };
-  }, []);
+  // // Lock to landscape when component mounts
+  // useEffect(() => {
+  //   Orientation.lockToLandscape();
+  //   return () => {
+  //     Orientation.unlockAllOrientations();
+  //   };
+  // }, []);
 
-  // Extract video ID from YouTube URL
+  // Extract video ID from the streamUrl passed through navigation
   const getYoutubeVideoId = (url) => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
     const match = url.match(regExp);
     return (match && match[7].length === 11) ? match[7] : false;
   };
 
-  const videoId = getYoutubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  // Get streamUrl from navigation params
+  const videoId = getYoutubeVideoId(streamUrl);
+
+  // Add error handling if videoId is not valid
+  useEffect(() => {
+    if (!videoId) {
+      Alert.alert(
+        'Invalid URL',
+        'The provided YouTube URL is not valid.',
+        [
+          { 
+            text: 'OK', 
+            onPress: () => navigation.goBack() 
+          }
+        ]
+      );
+    }
+  }, [videoId]);
+
+  // Check if current user is the creator
+  useEffect(() => {
+    const db = getDatabase();
+    const roomRef = ref(db, `rooms/${roomId}`);
+    
+    onValue(roomRef, (snapshot) => {
+      const roomData = snapshot.val();
+      if (roomData) {
+        setIsCreator(roomData.creator.email === auth.currentUser?.email);
+      }
+    });
+  }, [roomId]);
+
+  // Sync playback state with Firebase
+  useEffect(() => {
+    const db = getDatabase();
+    const playbackRef = ref(db, `rooms/${roomId}/playback`);
+    
+    // Listen for playback changes
+    const unsubscribe = onValue(playbackRef, (snapshot) => {
+      const playbackData = snapshot.val();
+      if (playbackData && !isCreator) {
+        setPlaying(playbackData.isPlaying);
+        if (playerRef.current) {
+          playerRef.current.seekTo(playbackData.currentTime || 0);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [roomId, isCreator]);
+
+  // Update playback state in Firebase (only creator can do this)
+  const updatePlaybackState = async (isPlaying) => {
+    if (!isCreator) return;
+
+    const db = getDatabase();
+    const playbackRef = ref(db, `rooms/${roomId}/playback`);
+    const currentTime = await playerRef.current?.getCurrentTime() || 0;
+
+    await set(playbackRef, {
+      isPlaying,
+      currentTime,
+      updatedAt: Date.now()
+    });
+  };
 
   const onStateChange = useCallback((state) => {
     if (state === "ended") {
@@ -70,26 +146,33 @@ const StreamingScreen = ({ route }) => {
   }, []);
 
   const seekBackward = async () => {
-    try{
-      if (playerRef.current) {
-        const currentTime = await playerRef.current.getCurrentTime();
-        playerRef.current.seekTo(Math.max(currentTime - 10, 0));
-      } 
-    }catch(error){
-      console.log(error);
-    }
+    if (!isCreator) return;
     
+    if (playerRef.current) {
+      const currentTime = await playerRef.current.getCurrentTime();
+      const newTime = Math.max(currentTime - 10, 0);
+      playerRef.current.seekTo(newTime);
+      await updatePlaybackState(playing);
+    }
   };
 
   const seekForward = async () => {
+    if (!isCreator) return;
+    
     if (playerRef.current) {
       const currentTime = await playerRef.current.getCurrentTime();
-      playerRef.current.seekTo(currentTime + 10);
+      const newTime = currentTime + 10;
+      playerRef.current.seekTo(newTime);
+      await updatePlaybackState(playing);
     }
   };
 
-  const togglePlayback = () => {
-    setPlaying(prev => !prev);
+  const togglePlayback = async () => {
+    if (isCreator) {
+      const newPlayingState = !playing;
+      setPlaying(newPlayingState);
+      await updatePlaybackState(newPlayingState);
+    }
   };
 
   const changeSpeed = () => {
@@ -115,42 +198,64 @@ const StreamingScreen = ({ route }) => {
         onPress={fadeInControls}
       >
         <View style={styles.videoContainer}>
-           <YoutubePlayer
-            ref={playerRef}
-            height={screenWidth}
-            width={screenHeight}
-            play={playing}
-            videoId={videoId}
-            initialPlayerParams={{
-              controls: 1,
-              modestbranding: 1,
-              preventFullScreen: true,
-            }}
-           />
+          {videoId ? (
+            <YoutubePlayer
+              ref={playerRef}
+              height={screenWidth}
+              width={screenHeight}
+              play={playing}
+              videoId={videoId}
+              initialPlayerParams={{
+                controls: 1,
+                modestbranding: 1,
+                preventFullScreen: true,
+              }}
+            />
+          ) : (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>Invalid video URL</Text>
+            </View>
+          )}
           <Pressable style={styles.touchOverlay} onPress={() => {}} disabled={true}/>
         </View>
 
         <Animated.View 
-          style={[styles.controlsWrapper, { opacity: fadeAnim }]}
+          style={[
+            styles.controlsWrapper, 
+            fadeAnim,
+            !isCreator && styles.disabledControls
+          ]}
           pointerEvents={controlsVisible ? 'auto' : 'none'}
         >
           <View style={styles.controls}>
             <View style={styles.mainControls}>
-              <TouchableOpacity onPress={seekBackward} style={styles.controlButton}>
-                <Icon name="replay-10" size={26} color="white" style={{transform: [{rotate: '90deg'}]}}/>
+              <TouchableOpacity 
+                onPress={seekBackward} 
+                style={[styles.controlButton, !isCreator && styles.disabledButton]}
+                disabled={!isCreator}
+              >
+                <Icon name="replay-10" size={26} color={isCreator ? "white" : "#666666"} style={{transform: [{rotate: '90deg'}]}}/>
               </TouchableOpacity>
 
-              <TouchableOpacity onPress={togglePlayback} style={styles.playButton}>
+              <TouchableOpacity 
+                onPress={togglePlayback} 
+                style={[styles.playButton, !isCreator && styles.disabledButton]}
+                disabled={!isCreator}
+              >
                 <Icon 
                   name={playing ? "pause" : "play-arrow"} 
                   size={40} 
-                  color="white"
+                  color={isCreator ? "white" : "#666666"}
                   style={{transform: [{rotate: '90deg'}]}}
                 />
               </TouchableOpacity>
 
-              <TouchableOpacity onPress={seekForward} style={styles.controlButton}>
-                <Icon name="forward-10" size={26} color="white" style={{transform: [{rotate: '90deg'}]}}/>
+              <TouchableOpacity 
+                onPress={seekForward} 
+                style={[styles.controlButton, !isCreator && styles.disabledButton]}
+                disabled={!isCreator}
+              >
+                <Icon name="forward-10" size={26} color={isCreator ? "white" : "#666666"} style={{transform: [{rotate: '90deg'}]}}/>
               </TouchableOpacity>
             </View>
           </View>
@@ -167,7 +272,6 @@ const styles = StyleSheet.create({
   },
   videoWrapper: {
     flex: 1,
-    position: 'relative',
   },
   videoContainer: {
     flex: 1,
@@ -215,6 +319,23 @@ const styles = StyleSheet.create({
     height: Dimensions.get('window').width,
     backgroundColor: 'transparent',
     zIndex: 2,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000000',
+  },
+  errorText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  disabledControls: {
+    opacity: 0.5,
+  },
+  disabledButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
 });
 

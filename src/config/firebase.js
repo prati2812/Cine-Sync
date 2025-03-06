@@ -5,13 +5,13 @@ import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 import config from 'react-native-config';
 
 const firebaseConfig = {
-  apiKey: config.FIREBASE_API_KEY,
-  authDomain: config.FIREBASE_AUTH_DOMAIN,
-  databaseURL: config.FIREBASE_DATABASE_URL,
-  projectId: config.FIREBASE_PROJECT_ID,
-  storageBucket: config.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: config.FIREBASE_MESSAGING_SENDER_ID,
-  appId: config.FIREBASE_APP_ID,
+  apiKey:"AIzaSyCxBAaNNiK1g5KiObdIwLqJnWav5fJsRRs",
+  authDomain:"nightwatcher-89f6e.firebaseapp.com",
+  databaseURL:"https://nightwatcher-89f6e-default-rtdb.firebaseio.com",
+  projectId:"nightwatcher-89f6e",
+  storageBucket:"nightwatcher-89f6e.firebasestorage.app",
+  messagingSenderId:"719989061898",
+  appId:"1:719989061898:web:3932f5e005a28764a1e2f3",
 };
 
 // Initialize Firebase

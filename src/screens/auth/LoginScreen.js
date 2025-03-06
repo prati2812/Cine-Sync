@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,10 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  StatusBar,
+  TouchableWithoutFeedback,
+  Keyboard,
+  ScrollView
 } from 'react-native';
 import Logo from '../../components/Logo';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -20,6 +24,14 @@ const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    try{
+
+    }catch(error){
+      console.log(error);
+    }
+  });
 
   const handleLogin = async () => {
     if (isLoading) return;
@@ -74,9 +86,17 @@ const LoginScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
+       <StatusBar
+         backgroundColor="#121212"
+         barStyle="light-content"
+       />
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>
+        <ScrollView 
+            contentContainerStyle={{ flexGrow: 1 }} 
+            showsVerticalScrollIndicator={false}>  
         <View style={styles.contentContainer}>
           <View style={styles.headerContainer}>
             <Logo size="large" />
@@ -144,7 +164,9 @@ const LoginScreen = ({ navigation }) => {
             </TouchableOpacity>
           </View>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
+      </TouchableWithoutFeedback> 
     </SafeAreaView>
   );
 };
@@ -210,7 +232,6 @@ const styles = StyleSheet.create({
   forgotPassword: {
     alignSelf: 'flex-end',
     marginBottom: 32,
-    marginTop: 8,
   },
   forgotPasswordText: {
     color: '#007AFF',

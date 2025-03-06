@@ -10,7 +10,10 @@ import StreamingScreen from './src/screens/main/StreamingScreen';
 import UserProfileScreen from './src/screens/main/UserProfileScreen';
 import { auth } from './src/config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import Config from 'react-native-config';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 const Stack = createNativeStackNavigator();
+import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
 
 const App = () => {
   const [initializing, setInitializing] = useState(true);
@@ -22,21 +25,36 @@ const App = () => {
     if (initializing) setInitializing(false);
   }
 
-  useEffect(() => {
-    // Check if there's a stored user session when the app starts
-    const checkAuthState = async () => {
-      try {
-        // Subscribe to auth state changes
-        const unsubscribe = onAuthStateChanged(auth, handleAuthStateChanged);
-        return unsubscribe;
-      } catch (error) {
-        console.error("Auth state check error:", error);
-        setInitializing(false);
-      }
-    };
+  // useEffect(() => {
+  //   const checkAuthState = async () => {
+  //     try {
+  //       const unsubscribe = onAuthStateChanged(auth, handleAuthStateChanged);
+  //       return unsubscribe;
+  //     } catch (error) {
+  //       console.error("Auth state check error:", error);
+        
+  //       setInitializing(false);
+  //     }
+  //   };
 
-    checkAuthState();
-  }, []);
+  //   checkAuthState();
+  // }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        await user.reload(); 
+        console.log("App.js User Email Verified:", user.emailVerified); 
+        setUser(auth.currentUser);
+      } else {
+        setUser(null);
+      }
+      if (initializing) setInitializing(false);
+    });
+  
+    return () => unsubscribe();
+  }, [user]);
+  
 
   if (initializing) {
     return (
@@ -47,14 +65,15 @@ const App = () => {
   }
 
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user ? (
-          <>
+            <>
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Streaming" component={StreamingScreen} />
             <Stack.Screen name="Profile" component={UserProfileScreen} />
-          </>
+            </>
         ) : (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
@@ -64,6 +83,7 @@ const App = () => {
         )}
       </Stack.Navigator>
     </NavigationContainer>
+    </GestureHandlerRootView>
   );
 };
 

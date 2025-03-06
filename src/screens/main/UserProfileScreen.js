@@ -1,18 +1,30 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
-import { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, ScrollView } from 'react-native';
 import { signOut, onAuthStateChanged } from 'firebase/auth';
+import { getDatabase, ref, onValue } from 'firebase/database';
 import { auth } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Logo from '../../components/Logo1';
 
+
 const UserProfileScreen = ({ navigation }) => {
-  const [userEmail, setUserEmail] = React.useState('');
-   
+  const [userData, setUserData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        setUserEmail(user.email);
+        // Fetch user data from Realtime Database
+        const db = getDatabase();
+        const userRef = ref(db, 'users/' + user.uid);
+        
+        onValue(userRef, (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            setUserData(data);
+          }
+          setLoading(false);
+        });
       }
     });
 
@@ -22,11 +34,18 @@ const UserProfileScreen = ({ navigation }) => {
   const handleSignOut = async () => {
     try {
       await signOut(auth);
-      // Navigation will be handled automatically by App.js when auth state changes
     } catch (error) {
       console.error(error);
     }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centerContent]}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -40,20 +59,33 @@ const UserProfileScreen = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
+      <ScrollView 
+         contentContainerStyle={{flexGrow:1}}
+         showsVerticalScrollIndicator={false}> 
+
       <View style={styles.profileSection}>
         <View style={styles.avatarContainer}>
           <Text style={styles.avatarText}>
-            {userEmail ? userEmail[0].toUpperCase() : '?'}
+            {userData?.username ? userData.username[0].toUpperCase() : '?'}
           </Text>
         </View>
         
-        <Text style={styles.emailText}>{userEmail}</Text>
+        <Text style={styles.usernameText}>{userData?.username}</Text>
+        <Text style={styles.emailText}>{userData?.email}</Text>
+        <Text style={styles.joinedText}>
+          Joined {new Date(userData?.createdAt).toLocaleDateString('en-US', {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric'
+          })}
+        </Text>
 
         <View style={styles.statsContainer}>
           <View style={styles.statItem}>
             <Text style={styles.statNumber}>0</Text>
             <Text style={styles.statLabel}>Rooms Created</Text>
           </View>
+          <View style={styles.divider} />
           <View style={styles.statItem}>
             <Text style={styles.statNumber}>0</Text>
             <Text style={styles.statLabel}>Rooms Joined</Text>
@@ -86,6 +118,7 @@ const UserProfileScreen = ({ navigation }) => {
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -95,12 +128,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#121212',
   },
+  centerContent: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 16,
-    paddingHorizontal: 24,
+    paddingRight: 24,
   },
   backButton: {
     width: 40,
@@ -126,22 +163,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 20,
     marginBottom: 16,
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation:0,
   },
   avatarText: {
     fontSize: 40,
     color: '#FFFFFF',
     fontWeight: 'bold',
   },
-  emailText: {
-    fontSize: 18,
+  usernameText: {
+    fontSize: 24,
     color: '#FFFFFF',
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  emailText: {
+    fontSize: 16,
+    color: '#888888',
+    marginBottom: 8,
+  },
+  joinedText: {
+    fontSize: 14,
+    color: '#666666',
     marginBottom: 24,
   },
   statsContainer: {
     flexDirection: 'row',
     backgroundColor: '#1E1E1E',
     borderRadius: 16,
-    padding: 16,
+    padding: 20,
     marginBottom: 32,
     width: '100%',
     borderWidth: 1,
@@ -150,6 +203,11 @@ const styles = StyleSheet.create({
   statItem: {
     flex: 1,
     alignItems: 'center',
+  },
+  divider: {
+    width: 1,
+    backgroundColor: '#333333',
+    marginHorizontal: 16,
   },
   statNumber: {
     fontSize: 24,
