@@ -27,6 +27,7 @@ import Animated, {
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
 import CreateRoomModal from '../../components/CreateRoomModal';
+import WaitingScreen from './WaitingScreen';
 
 const HomeScreen = () => {
   const [rooms, setRooms] = useState([]);
@@ -240,10 +241,9 @@ const HomeScreen = () => {
       setStreamUrl('');
       setSelectedIcon('🎬');
       
-      navigation.navigate('Streaming', {
+      navigation.navigate('WaitingScreen', {
         roomId: roomId,
         roomName: roomName,
-        streamUrl: streamUrl
       });
 
     } catch (error) {
@@ -277,7 +277,12 @@ const HomeScreen = () => {
         <TouchableOpacity
           style={styles.roomContainer}
           onPress={() =>
-            navigation.navigate('Streaming', {
+            // navigation.navigate('Streaming', {
+            //   roomId: item.roomId,
+            //   roomName: item.name,
+            //   streamUrl: item.streamUrl,
+            // })
+            navigation.navigate('WaitingScreen', {
               roomId: item.roomId,
               roomName: item.name,
               streamUrl: item.streamUrl,

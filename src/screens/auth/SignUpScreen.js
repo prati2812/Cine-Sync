@@ -19,14 +19,14 @@ import Logo from '../../components/Logo';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { auth } from '../../config/firebase';
 import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
-import { getDatabase, ref, set } from 'firebase/database';
-
+import { getDatabase, ref, set} from 'firebase/database';
 
 const SignUpScreen = ({ navigation }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSignUp = async () => {
     console.log('Creating user account...', auth, email, password);
@@ -139,8 +139,15 @@ const SignUpScreen = ({ navigation }) => {
                   placeholderTextColor="#666666"
                   value={password}
                   onChangeText={setPassword}
-                  secureTextEntry
+                  secureTextEntry={!showPassword}
                 />
+                <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                  <Icon 
+                    name={showPassword ? "eye-outline" : "eye-off-outline"} 
+                    size={20} 
+                    color="#666666" 
+                  />
+                </TouchableOpacity>
               </View>
             </View>
 

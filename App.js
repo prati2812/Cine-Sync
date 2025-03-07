@@ -13,48 +13,79 @@ import { onAuthStateChanged } from 'firebase/auth';
 import Config from 'react-native-config';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 const Stack = createNativeStackNavigator();
-import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
-
+import WaitingScreen from './src/screens/main/WaitingScreen';
+import { AppState } from 'react-native';
+import { getDatabase, ref, set, update, onValue, onDisconnect, serverTimestamp } from 'firebase/database';
 const App = () => {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
+
+  
+  const updateUserStatus = (status) => {
+    if (user) {
+      const db = getDatabase();
+      const userStatusRef = ref(db, `users/${user.uid}/status`);
+      update(userStatusRef, {
+        state: status,
+        last_changed: serverTimestamp(),
+      });
+    }
+  };
 
   // Handle user state changes
   function handleAuthStateChanged(user) {
     setUser(user);
     if (initializing) setInitializing(false);
+
+    if (user) {
+      const db = getDatabase();
+      const userStatusRef = ref(db, `users/${user.uid}/status`);
+      const connectedRef = ref(db, '.info/connected');
+      onValue(connectedRef, (snapshot) => {
+        if (snapshot.val() === false) {
+          return;
+        }
+        onDisconnect(userStatusRef).update({
+          state: 'offline',
+          last_changed: serverTimestamp(),
+        }).then(() => {
+          update(userStatusRef, {
+            state: 'online',
+            last_changed: serverTimestamp(),
+          });
+        });
+      });
+    }
   }
 
-  // useEffect(() => {
-  //   const checkAuthState = async () => {
-  //     try {
-  //       const unsubscribe = onAuthStateChanged(auth, handleAuthStateChanged);
-  //       return unsubscribe;
-  //     } catch (error) {
-  //       console.error("Auth state check error:", error);
+  useEffect(() => {
+    const checkAuthState = async () => {
+      try {
+        const unsubscribe = onAuthStateChanged(auth, handleAuthStateChanged);
+        return unsubscribe;
+      } catch (error) {
+        console.error("Auth state check error:", error);
         
-  //       setInitializing(false);
-  //     }
-  //   };
+        setInitializing(false);
+      }
+    };
 
-  //   checkAuthState();
-  // }, []);
+    checkAuthState();
+  }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        await user.reload(); 
-        console.log("App.js User Email Verified:", user.emailVerified); 
-        setUser(auth.currentUser);
+    const handleAppStateChange = (nextAppState) => {
+      if (nextAppState === 'active') {
+        updateUserStatus('online');
       } else {
-        setUser(null);
+        updateUserStatus('offline');
       }
-      if (initializing) setInitializing(false);
-    });
-  
-    return () => unsubscribe();
+    };
+    
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
   }, [user]);
-  
+
 
   if (initializing) {
     return (
@@ -71,6 +102,7 @@ const App = () => {
         {user ? (
             <>
             <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="WaitingScreen" component={WaitingScreen} />
             <Stack.Screen name="Streaming" component={StreamingScreen} />
             <Stack.Screen name="Profile" component={UserProfileScreen} />
             </>
