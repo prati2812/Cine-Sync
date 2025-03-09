@@ -1,54 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, SafeAreaView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, SafeAreaView, Animated, ScrollView } from 'react-native';
 import { getDatabase, ref, onValue } from 'firebase/database';
 import { auth } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Animated, { 
-  useAnimatedStyle, 
-  useSharedValue, 
-  withRepeat, 
-  withTiming,
-  withSequence,
-  withDelay
-} from 'react-native-reanimated';
 
 const WaitingScreen = ({ route, navigation }) => {
   const { roomId, roomName, streamUrl } = route.params;
   const [participants, setParticipants] = useState([]);
   const [isStreamingAllowed, setIsStreamingAllowed] = useState(false);
   const currentUser = auth.currentUser;
+  const [rotationAnim] = useState(new Animated.Value(0));
 
-  // Animation values
-  const scale = useSharedValue(1);
-  const opacity = useSharedValue(1);
-  const rotation = useSharedValue(0);
-
-  useEffect(() => {
-    // Start animations
-    scale.value = withRepeat(
-      withSequence(
-        withTiming(1.2, { duration: 1000 }),
-        withTiming(1, { duration: 1000 })
-      ),
-      -1,
-      true
-    );
-
-    opacity.value = withRepeat(
-      withSequence(
-        withTiming(0.5, { duration: 1000 }),
-        withTiming(1, { duration: 1000 })
-      ),
-      -1,
-      true
-    );
-
-    rotation.value = withRepeat(
-      withTiming(360, { duration: 3000 }),
-      -1,
-      true
-    );
-  }, []);
+  const mockParticipants = [
+    { id: 1, name: 'John Doe', username: '@johndoe', color: '#FF6B6B', avatar: '👤', isHost: true },
+    { id: 2, name: 'Jane Smith', username: '@janesmith', color: '#4ECDC4', avatar: '👤' },
+    { id: 3, name: 'Mike Johnson', username: '@mikej', color: '#45B7D1', avatar: '👤' },
+  ];
 
   useEffect(() => {
     const db = getDatabase();
@@ -65,13 +32,19 @@ const WaitingScreen = ({ route, navigation }) => {
     return () => unsubscribe();
   }, [roomId, currentUser]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: scale.value },
-      { rotateZ: `${rotation.value}deg` }
-    ],
-    opacity: opacity.value,
-  }));
+  useEffect(() => {
+    const startRotationAnimation = () => {
+      Animated.loop(
+        Animated.timing(rotationAnim, {
+          toValue: 1,
+          duration: 10000, // 10 seconds per rotation
+          useNativeDriver: true,
+        })
+      ).start();
+    };
+
+    startRotationAnimation();
+  }, []);
 
   const startStreaming = () => {
     if (currentUser.email === participants[0]) {
@@ -81,22 +54,59 @@ const WaitingScreen = ({ route, navigation }) => {
     }
   };
 
-  const renderParticipantItem = (email, index) => (
-    <View key={email} style={styles.participantItem}>
-      <View style={styles.participantAvatar}>
-        <Text style={styles.avatarText}>
-          {email.charAt(0).toUpperCase()}
-        </Text>
-      </View>
-      <View style={styles.participantInfo}>
-        <Text style={styles.participantEmail}>{email}</Text>
-        <View style={styles.statusContainer}>
-          <View style={styles.statusDot} />
-          <Text style={styles.statusText}>Online</Text>
+  const renderParticipantDots = () => {
+    const radius = 125;
+    return mockParticipants.map((participant, index) => {
+      const angle = (2 * Math.PI * index) / mockParticipants.length - Math.PI / 2;
+      const x = radius * Math.cos(angle);
+      const y = radius * Math.sin(angle);
+
+      return (
+        <View
+          key={participant.id}
+          style={[
+            styles.participantDot,
+            { 
+              backgroundColor: participant.color,
+              transform: [
+                { translateX: x },
+                { translateY: y },
+              ],
+              position: 'absolute',
+            }
+          ]}
+        >
+          <Text style={styles.participantAvatar}>{participant.avatar}</Text>
+          <View style={styles.participantLabel}>
+            <Text style={styles.participantLabelText}>{participant.username}</Text>
+          </View>
         </View>
+      );
+    });
+  };
+
+  const renderParticipantsList = () => {
+    return (
+      <View style={styles.participantsList}>
+        {mockParticipants.map((participant) => (
+          <View key={participant.id} style={styles.participantItem}>
+            <View style={[styles.participantIcon, { backgroundColor: participant.color }]}>
+              <Text style={styles.participantAvatar}>{participant.avatar}</Text>
+            </View>
+            <View style={styles.participantInfo}>
+              <Text style={styles.participantName}>{participant.name}</Text>
+              <Text style={styles.participantUsername}>{participant.username}</Text>
+            </View>
+            {participant.isHost && (
+              <View style={styles.hostBadge}>
+                <Text style={styles.hostBadgeText}>Host</Text>
+              </View>
+            )}
+          </View>
+        ))}
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -107,38 +117,58 @@ const WaitingScreen = ({ route, navigation }) => {
         >
           <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.roomName}>{roomName}</Text>
+        <Text style={styles.roomName}>Waiting Room</Text>
       </View>
 
+     <ScrollView
+        style={{flex:1}}
+        showsVerticalScrollIndicator={false}>
       <View style={styles.content}>
-        <Animated.View style={[styles.waitingIcon, animatedStyle]}>
-          <MaterialIcons name="movie" size={40} color="#FFFFFF" />
-        </Animated.View>
-
-        <Text style={styles.title}>Waiting Room</Text>
-        <Text style={styles.subtitle}>
-          Waiting for participants to join...
-        </Text>
-
-        <View style={styles.participantsContainer}>
-          <Text style={styles.participantsTitle}>
-            Participants ({participants.length})
-          </Text>
-          {participants.map(renderParticipantItem)}
+        <View style={styles.animationContainer}>
+          <Animated.View
+            style={[
+              styles.circle,
+              {
+                transform: [{
+                  rotate: rotationAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0deg', '360deg']
+                  })
+                }]
+              }
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.innerCircle,
+              {
+                transform: [{
+                  rotate: rotationAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['360deg', '0deg']
+                  })
+                }]
+              }
+            ]}
+          />
+          <View style={styles.participantsContainer}>
+            {renderParticipantDots()}
+            <View style={styles.centerButtonContainer}>
+              <TouchableOpacity
+                style={styles.centerButton}
+                onPress={startStreaming}
+                disabled={!isStreamingAllowed}
+              >
+                <MaterialIcons name="play-arrow" size={40} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
 
-        {isStreamingAllowed && (
-          <TouchableOpacity 
-            style={styles.startButton}
-            onPress={startStreaming}
-          >
-            <MaterialIcons name="play-arrow" size={24} color="#FFFFFF" />
-            <Text style={styles.startButtonText}>
-              Start Streaming
-            </Text>
-          </TouchableOpacity>
-        )}
+        <Text style={styles.waitingText}>Waiting for participants...</Text>
+        {renderParticipantsList()}
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -154,6 +184,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#2A2A2A',
+    marginBottom:20,
   },
   backButton: {
     padding: 8,
@@ -165,108 +196,153 @@ const styles = StyleSheet.create({
     marginLeft: 16,
   },
   content: {
-    flex: 1,
-    alignItems: 'center',
-    paddingTop: 48,
-    paddingHorizontal: 24,
-  },
-  waitingIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#888888',
-    marginBottom: 48,
+  animationContainer: {
+    width: 340,
+    height: 340,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
   },
   participantsContainer: {
     width: '100%',
-    backgroundColor: '#1E1E1E',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
   },
-  participantsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+  circle: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 170,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    position: 'absolute',
+    borderStyle: 'dashed',
+  },
+  innerCircle: {
+    width: '80%',
+    height: '80%',
+    borderRadius: 140,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+    position: 'absolute',
+    borderStyle: 'dashed',
+  },
+  participantDot: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  participantAvatar: {
+    fontSize: 24,
     color: '#FFFFFF',
-    marginBottom: 16,
+  },
+  participantLabel: {
+    position: 'absolute',
+    bottom: -25,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 80,
+  },
+  participantLabelText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  participantsList: {
+    marginTop: 40,
+    width: '100%',
+    paddingHorizontal: 20,
   },
   participantItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
-    backgroundColor: '#2A2A2A',
-    padding: 12,
-    borderRadius: 12,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
-  participantAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#007AFF',
+  participantIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
-  },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
+    marginRight: 16,
   },
   participantInfo: {
     flex: 1,
   },
-  participantEmail: {
+  participantName: {
     color: '#FFFFFF',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4CAF50',
-    marginRight: 6,
-  },
-  statusText: {
-    color: '#4CAF50',
-    fontSize: 12,
-  },
-  startButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 12,
-    position: 'absolute',
-    bottom: 32,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-  },
-  startButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
-    marginLeft: 8,
+  },
+  participantUsername: {
+    color: '#AAAAAA',
+    fontSize: 14,
+    marginTop: 2,
+  },
+  hostBadge: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  hostBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  centerButtonContainer: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#007AFF',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 8,
+    position: 'absolute',
+  },
+  centerButton: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 35,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 122, 255, 0.8)',
+  },
+  waitingText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginTop: 30,
+    letterSpacing: 0.5,
   },
 });
 

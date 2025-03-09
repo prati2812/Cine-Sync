@@ -31,12 +31,6 @@ import WaitingScreen from './WaitingScreen';
 
 const HomeScreen = () => {
   const [rooms, setRooms] = useState([]);
-  const [isCreateRoomModalVisible, setCreateRoomModalVisible] = useState(false);
-  const [roomName, setRoomName] = useState('');
-  const [inviteEmails, setInviteEmails] = useState([]);
-  const [currentEmail, setCurrentEmail] = useState('');
-  const [streamUrl, setStreamUrl] = useState('');
-  const [selectedIcon, setSelectedIcon] = useState('🎬');
   const [filterType, setFilterType] = useState('all'); // 'all', 'created', 'invited'
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('newest'); // 'newest', 'oldest', 'alphabetical'
@@ -252,42 +246,112 @@ const HomeScreen = () => {
     }
   };
 
-  const renderRoom = ({ item, onDelete }) => {
+  const deleteRoom = async (roomId) => {
+    try {
+      const db = getDatabase();
+      const currentUser = auth.currentUser;
+      
+      // Get the room data first to check permissions
+      const roomRef = ref(db, `rooms/${roomId}`);
+      const roomSnapshot = await get(roomRef);
+      const roomData = roomSnapshot.val();
+
+      // Only allow creator to delete the room
+      if (roomData.creator.email !== currentUser.email) {
+        Alert.alert('Error', 'Only the room creator can delete this room');
+        return;
+      }
+
+      // Show confirmation dialog
+      Alert.alert(
+        'Delete Room',
+        'Are you sure you want to delete this room?',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              await set(roomRef, null);
+              Alert.alert('Success', 'Room deleted successfully');
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error deleting room:', error);
+      Alert.alert('Error', 'Failed to delete room');
+    }
+  };
+
+  const renderRoom = ({ item }) => {
+    const currentUser = auth.currentUser;
+    const isCreator = item.creator.email === currentUser?.email;
+
     const renderRightActions = () => (
       <TouchableOpacity
-        style={{
-          backgroundColor: 'red',
-          padding: 16,
-          borderRadius: 16,
-          marginBottom: 16,
-          flexDirection: 'row',
-          alignItems: 'center',
-          borderWidth: 1,
-          borderColor: 'red',
-          marginLeft: 10,
-        }}
-        onPress={() => onDelete(item.roomId)}>
-             <Text style={styles.deleteText}>Delete</Text>
+        style={[
+           {
+              backgroundColor: 'red',
+              padding: 16,
+              borderRadius: 16,
+              marginBottom: 16,
+              flexDirection: 'row',
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: 'red',
+              marginLeft: 10
+           },
+          { display: isCreator ? 'flex' : 'none' }
+        ]}
+        onPress={() => deleteRoom(item.roomId)}
+      >
+        <MaterialIcons name="delete" size={24} color="#FFFFFF" />
+        <Text style={styles.deleteText}>Delete</Text>
       </TouchableOpacity>
     );
-    
-  
+
+    const onRoomPress = () => {
+      if (isCreator) {
+        Alert.alert(
+          'Room Options',
+          'What would you like to do?',
+          [
+            {
+              text: 'Join Room',
+              onPress: () => navigation.navigate('WaitingScreen', {
+                roomId: item.roomId,
+                roomName: item.name,
+                streamUrl: item.streamUrl,
+              })
+            },
+            {
+              text: 'Edit Room',
+              onPress: () => navigation.navigate('CreateRoom', { room: item })
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel'
+            }
+          ]
+        );
+      } else {
+        navigation.navigate('WaitingScreen', {
+          roomId: item.roomId,
+          roomName: item.name,
+          streamUrl: item.streamUrl,
+        });
+      }
+    };
+
     return (
       <Swipeable renderRightActions={renderRightActions}>
         <TouchableOpacity
           style={styles.roomContainer}
-          onPress={() =>
-            // navigation.navigate('Streaming', {
-            //   roomId: item.roomId,
-            //   roomName: item.name,
-            //   streamUrl: item.streamUrl,
-            // })
-            navigation.navigate('WaitingScreen', {
-              roomId: item.roomId,
-              roomName: item.name,
-              streamUrl: item.streamUrl,
-            })
-          }
+          onPress={onRoomPress}
         >
           <View style={styles.roomThumbnail}>
             <Text style={styles.thumbnailText}>{item.thumbnail || '🎬'}</Text>
@@ -478,12 +542,8 @@ const HomeScreen = () => {
   />
       <View style={styles.header}>
         <Logo size="small" />
-        <TouchableOpacity 
-          style={styles.profileButton}
-          onPress={() => navigation.navigate('Profile')}
-        >
-          <MaterialIcons name="person" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+        </View>
       </View>
 
       <View style={styles.roomsSection}>
@@ -492,7 +552,7 @@ const HomeScreen = () => {
         {getFilteredRooms().length > 0 ? (
           <FlatList
             data={getFilteredRooms()}
-            renderItem={({ item }) => renderRoom({ item, onDelete: handleDelete })}
+            renderItem={({ item }) => renderRoom({ item })}
             keyExtractor={(item) => item.roomId}
             contentContainerStyle={styles.roomsListContent}
             showsVerticalScrollIndicator={false}
@@ -510,108 +570,10 @@ const HomeScreen = () => {
 
       <TouchableOpacity 
         style={styles.createRoomButton}
-        onPress={() => setCreateRoomModalVisible(true)}
+        onPress={() => navigation.navigate('CreateRoom')}
       >
         <Text style={styles.createButtonIcon}>+</Text>
       </TouchableOpacity>
-
-      <Modal
-        visible={isCreateRoomModalVisible}
-        animationType="slide"
-        transparent={true}
-      >
-        <View style={styles.modalContainer}>
-          <KeyboardAvoidingView 
-            style={styles.modalContent} 
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          >
-            <ScrollView 
-              contentContainerStyle={{
-                flexGrow:1,
-                paddingBottom: 20
-              }} 
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Create New Room</Text>
-                <TouchableOpacity 
-                  style={styles.closeButton}
-                  onPress={() => setCreateRoomModalVisible(false)}
-                >
-                  <Text style={styles.closeButtonText}>×</Text>
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Room Name</Text>
-                <View style={styles.inputWrapper}>
-                  <Text style={styles.inputIcon}>🎬</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter room name"
-                    placeholderTextColor="#666666"
-                    value={roomName}
-                    onChangeText={setRoomName}
-                  />
-                </View>
-              </View>
-              
-              {renderIconSelector()}
-              
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Invite Users</Text>
-                <View style={styles.inputWrapper}>
-                  <Text style={styles.inputIcon}>👥</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter email address"
-                    placeholderTextColor="#666666"
-                    value={currentEmail}
-                    onChangeText={setCurrentEmail}
-                    keyboardType="email-address"
-                    onSubmitEditing={addEmail}
-                    autoCapitalize="none"
-                  />
-                  <TouchableOpacity 
-                    style={styles.addButton}
-                    onPress={addEmail}
-                  >
-                    <Text style={styles.addButtonText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-                
-                {inviteEmails.length > 0 && (
-                  <View style={styles.emailChipsContainer}>
-                    {inviteEmails.map(renderEmailChip)}
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Stream URL</Text>
-                <View style={styles.inputWrapper}>
-                  <Text style={styles.inputIcon}>🔗</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter streaming URL"
-                    placeholderTextColor="#666666"
-                    value={streamUrl}
-                    onChangeText={setStreamUrl}
-                  />
-                </View>
-              </View>
-
-              <TouchableOpacity 
-                style={styles.createButton}
-                onPress={createRoom}
-              >
-                <Text style={styles.createButtonText}>Create Room</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
 
     </SafeAreaView>
   );
@@ -628,6 +590,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 16,
     paddingRight: 24,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  headerButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   createRoomButton: {
     position: 'absolute',
@@ -858,18 +836,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  profileButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 1,
-  },
   emptyStateContainer: {
     flex: 1,
     alignItems: 'center',
@@ -1012,15 +978,21 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   deleteButton: {
-    backgroundColor: 'red',
+    backgroundColor: '#FF3B30',
     justifyContent: 'center',
     alignItems: 'center',
     width: 100,
     height: '100%',
+    borderRadius: 16,
+    marginBottom: 16,
+    marginLeft: 10,
+    flexDirection: 'column',
   },
   deleteText: {
-    color: 'white',
-    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontSize: 12,
+    marginTop: 4,
+    fontWeight: '600',
   },
 });
 

@@ -51,12 +51,6 @@ const UserProfileScreen = ({ navigation }) => {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Logo size="small" />
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
       </View>
 
       <ScrollView 
@@ -94,7 +88,7 @@ const UserProfileScreen = ({ navigation }) => {
 
         <TouchableOpacity 
           style={styles.menuItem}
-          onPress={() => {/* Handle press */}}
+          onPress={() => {navigation.navigate('Settings')}}
         >
           <MaterialIcons name="settings" size={24} color="#FFFFFF" />
           <Text style={styles.menuItemText}>Settings</Text>
