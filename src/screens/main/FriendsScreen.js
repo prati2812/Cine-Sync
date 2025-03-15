@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,45 +8,62 @@ import {
   TouchableOpacity,
   FlatList,
   StatusBar,
+  Alert,
+  ActivityIndicator
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Logo from '../../components/Logo1';
+import { getDatabase, ref,set,remove, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
+import { auth } from '../../config/firebase';
 
 const FriendsScreen = ({ navigation }) => {
   const [searchEmail, setSearchEmail] = useState('');
   const [activeTab, setActiveTab] = useState('friends');
+  const [isLoading, setIsLoading] = useState(false);
+  const [friendRequests, setFriendRequests] = useState([]);
+  const [friendsList, setFriendsList] = useState([]);
 
-  // Dummy data for friends and requests
-  const friendRequests = [
-    { id: '1', email: 'john@example.com', status: 'pending' },
-    { id: '2', email: 'sarah@example.com', status: 'pending' },
-  ];
 
-  const friends = [
-    { id: '1', email: 'mike@example.com', status: 'online' },
-    { id: '2', email: 'emma@example.com', status: 'offline' },
-    { id: '3', email: 'alex@example.com', status: 'online' },
-  ];
+  useEffect(() => {
+    getFriendRequests();
+    const unsubscribe = getFriends();
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, []);
+
 
   const renderFriendRequest = ({ item }) => (
+    
     <View style={styles.requestCard}>
       <View style={styles.requestInfo}>
         <View style={[styles.avatarContainer, { backgroundColor: generateAvatarColor(item.email) }]}>
           <Text style={styles.avatarText}>
-            {item.email[0].toUpperCase()}
+            {item?.username[0].toUpperCase()}
           </Text>
         </View>
         <View style={styles.requestTextContainer}>
-          <Text style={styles.requestEmail}>{item.email}</Text>
-          <Text style={styles.requestTime}>2 days ago</Text>
+          <Text style={styles.requestEmail}>{item?.username}</Text>
         </View>
       </View>
       <View style={styles.requestActions}>
-        <TouchableOpacity style={styles.acceptButton}>
+        <TouchableOpacity 
+          style={styles.acceptButton}
+          onPress={() => {
+             acceptFriendRequest(item?.userId);
+          }}
+        >
           <MaterialIcons name="check" size={20} color="#FFFFFF" />
           <Text style={styles.acceptButtonText}>Accept</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.declineButton}>
+        <TouchableOpacity 
+           style={styles.declineButton}
+           onPress={() => {
+            declineFriendRequest(item?.userId);
+           }}
+           >
           <MaterialIcons name="close" size={20} color="#FF3B30" />
           <Text style={styles.declineButtonText}>Decline</Text>
         </TouchableOpacity>
@@ -55,26 +72,28 @@ const FriendsScreen = ({ navigation }) => {
   );
 
   const renderFriend = ({ item }) => (
+    console.log("item", item),
+    
     <View style={styles.friendCard}>
       <View style={styles.friendInfo}>
-        <View style={styles.avatarContainer}>
+        <View style={[styles.avatarContainer, { backgroundColor: generateAvatarColor(item?.username || '') }]}>
           <Text style={styles.avatarText}>
-            {item.email[0].toUpperCase()}
+            {(item?.username || '')[0]?.toUpperCase() || '?'}
           </Text>
         </View>
         <View>
-          <Text style={styles.friendEmail}>{item.email}</Text>
+          <Text style={styles.friendEmail}>{item?.username || 'Unknown'}</Text>
           <View style={styles.statusContainer}>
             <View style={[styles.statusDot, 
-              { backgroundColor: item.status === 'online' ? '#4CAF50' : '#666666' }
+              { backgroundColor: item?.status?.state === 'online' ? '#4CAF50' : '#666666' }
             ]} />
-            <Text style={styles.statusText}>{item.status}</Text>
+            <Text style={styles.statusText}>{item?.status?.state}</Text>
           </View>
         </View>
       </View>
       <TouchableOpacity 
         style={styles.messageButton}
-        onPress={() => navigation.navigate('Chat', { username: 'New Chat' })}
+        onPress={() => navigation.navigate('Chat', { username: item?.username || 'New Chat' })}
       >
         <MaterialIcons name="chat" size={20} color="#007AFF" />
       </TouchableOpacity>
@@ -89,6 +108,163 @@ const FriendsScreen = ({ navigation }) => {
     }
     return colors[Math.abs(hash) % colors.length];
   };
+
+  const getFriendRequests = async () => {
+    const db = getDatabase();
+    const user = await auth.currentUser;
+    const friendRequestsRef = ref(db, `friend_requests/${user?.uid}`);
+    const unsubscribe = onValue(friendRequestsRef, async (snapshot) => {
+      const friendRequests = snapshot.val();
+      if (!friendRequests) {
+        setFriendRequests([]);
+        return;
+      }
+      console.log("friendRequests", friendRequests);
+
+      let userDetails = [];
+      for(let request in friendRequests){
+        let friendUserRequestId = request;
+        let friendUserDetails = await getUserFriendDetails(friendUserRequestId);
+        userDetails.push(friendUserDetails);
+      }
+      console.log("Friend Details", userDetails);
+      
+      setFriendRequests(userDetails);
+    });
+    
+    return () => unsubscribe();
+  }
+
+  const getFriends = () => {
+    const db = getDatabase();
+    const user = auth.currentUser;
+    
+    if (!user) return null;
+    
+    const friendsRef = ref(db, `friends/${user.uid}`);
+    
+    const unsubscribe = onValue(friendsRef, (snapshot) => {
+      const friends = snapshot.val();
+      if (!friends) {
+        setFriendsList([]);
+        return;
+      }
+      
+      // Create listeners for each friend's details
+      Object.keys(friends).forEach(friendId => {
+        const userRef = ref(db, `users/${friendId}`);
+        onValue(userRef, (userSnapshot) => {
+          const friendDetails = userSnapshot.val();
+          if (friendDetails) {
+            setFriendsList(currentList => {
+              const newList = currentList.filter(f => f.userId !== friendId);
+              return [...newList, friendDetails];
+            });
+          }
+        });
+      });
+    });
+    
+    return () => {
+      const db = getDatabase();
+      if (user) {
+        const friendsRef = ref(db, `friends/${user.uid}`);
+        off(friendsRef);
+        
+        // Clean up individual user listeners if there are any friends
+        const currentFriends = friendsList;
+        currentFriends.forEach(friend => {
+          const userRef = ref(db, `users/${friend.userId}`);
+          off(userRef);
+        });
+      }
+    };
+  };
+
+  const acceptFriendRequest = async (userId) => {
+    try {
+      const db = getDatabase();
+      const user = await auth.currentUser;
+  
+      if (!user) {
+        throw new Error('No authenticated user');
+      }
+  
+      const friendRequestRef = ref(db, `friend_requests/${user.uid}/${userId}`);
+      const unsubscribe = onValue(friendRequestRef, async (snapshot) => {
+        const friendRequest = snapshot.val();
+        if (friendRequest) {
+          await remove(friendRequestRef);
+
+          const friendRef1 = ref(db, `friends/${user.uid}/${userId}`);
+          const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
+          
+          await set(friendRef1, true);  
+          await set(friendRef2, true);  
+          
+          console.log("Friend request accepted and friends updated successfully.");
+        }
+      });
+  
+      // const friendRef1 = ref(db, `friends/${user.uid}/${userId}`);
+      // const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
+  
+      // await set(friendRef1, true);  
+      // await set(friendRef2, true);  
+  
+      // console.log("Friend request accepted and friends updated successfully.");
+    } catch (error) {
+      console.error("Error accepting friend request:", error.message);
+    }
+  }
+
+  const declineFriendRequest = async (userId) => {
+    const db = getDatabase();
+    const user = await auth.currentUser;
+    const friendRequestRef = ref(db, `friend_requests/${user.uid}/${userId}`);
+    const unsubscribe = onValue(friendRequestRef, async (snapshot) => {
+      const friendRequest = snapshot.val();
+      if (friendRequest) {
+        await remove(friendRequestRef);
+        console.log("Friend request declined successfully.");
+      }
+    });
+    return unsubscribe;
+  }
+
+  const getUserFriendDetails = async (userId) => {
+    const db = getDatabase();
+    const userRef = ref(db, `users/${userId}`);
+    const snapshot = await get(userRef);
+    return snapshot.val();
+  }
+
+
+  const isFriendIsOrNot =  async (userId) => {
+    const db = getDatabase();
+    const user = await auth.currentUser;
+    const userRef = ref(db, `friends/${user.uid}/${userId}`);
+    const snapshot = await get(userRef);
+    return snapshot.val();
+  }
+
+  
+
+  const checkUserExists = async (email) => {
+    try{
+      setIsLoading(true);
+       const db = getDatabase();
+       const usersRef = ref(db, 'users');
+       const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
+       const snapshot = await get(userQuery);
+       let newVal = await snapshot.val();
+       return Object.values(newVal)[0];  
+    }catch(error){
+      setIsLoading(false);
+      return false;
+    }
+
+  }  
 
   return (
     <SafeAreaView style={styles.container}>
@@ -107,14 +283,57 @@ const FriendsScreen = ({ navigation }) => {
               placeholder="Search by email..."
               placeholderTextColor="#666666"
               value={searchEmail}
-              onChangeText={setSearchEmail}
+              onChangeText={async (text) => {
+                setSearchEmail(text);
+              }}
               autoCapitalize="none"
               keyboardType="email-address"
             />
           </View>
-          <TouchableOpacity style={styles.addButton}>
-            <MaterialIcons name="person-add" size={20} color="#FFFFFF" />
-            <Text style={styles.addButtonText}>Add Friend</Text>
+          <TouchableOpacity style={styles.addButton}
+            onPress={async () => {
+              const tempUser = await auth.currentUser;
+              if(tempUser.email !== searchEmail){
+                const userExists = await checkUserExists(searchEmail);
+                if(userExists && userExists.userId !== null){
+                  const isFriend = await isFriendIsOrNot(userExists?.userId);
+                  if(isFriend){
+                    Alert.alert('User already in friends list');
+                    setIsLoading(false);
+                    return;
+                  }else{
+                    const db = getDatabase();
+                    const user = await auth.currentUser;
+                    console.log("user", user.uid);
+                    if(user.uid){
+                      const friendRequestRef = ref(db, `friend_requests/${userExists?.userId}/${user?.uid}`);
+                      set(friendRequestRef , true);
+                      setSearchEmail('');
+                      setIsLoading(false);
+                    }  
+                  }
+                }else{
+                  Alert.alert('User not found', 'Please enter a valid email address');
+                  setIsLoading(false);
+                  return;
+                }
+              }else{
+                Alert.alert('You cannot add yourself as a friend');
+                setIsLoading(false);
+                return;
+              }
+            }}
+          >
+            {
+              isLoading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <MaterialIcons name="person-add" size={20} color="#FFFFFF" />
+                  <Text style={styles.addButtonText}>Add Friend</Text>
+                </>
+              )
+            }
           </TouchableOpacity>
         </View>
 
@@ -124,7 +343,7 @@ const FriendsScreen = ({ navigation }) => {
             onPress={() => setActiveTab('friends')}
           >
             <Text style={[styles.tabText, activeTab === 'friends' && styles.activeTabText]}>
-              Friends ({friends.length})
+              Friends ({friendsList.length})
             </Text>
           </TouchableOpacity>
           <TouchableOpacity 
@@ -139,9 +358,9 @@ const FriendsScreen = ({ navigation }) => {
 
         {activeTab === 'friends' ? (
           <FlatList
-            data={friends}
+            data={friendsList}
             renderItem={renderFriend}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(item) => item.userId}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.friendsList}
           />
@@ -149,7 +368,7 @@ const FriendsScreen = ({ navigation }) => {
           <FlatList
             data={friendRequests}
             renderItem={renderFriendRequest}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(item) => item.userId}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.friendsList}
           />

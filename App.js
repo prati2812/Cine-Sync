@@ -27,6 +27,10 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import SettingsScreen from './src/screens/main/SettingsScreen';
 import ChatScreen from './src/screens/main/ChatScreen';
 import CreateRoomScreen from './src/screens/main/CreateRoomScreen';
+import HelpAndSupportScreen from './src/screens/main/HelpAndSupportScreen';
+import SetupPINScreen from './src/screens/main/SetupPINScreen';
+import PINVerificationScreen from './src/screens/auth/PINVerificationScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 const Stack = createNativeStackNavigator();
@@ -35,6 +39,8 @@ const Tab = createBottomTabNavigator();
 const App = () => {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
+  const [isPINRequired, setIsPINRequired] = useState(false);
+  const [isPINVerified, setIsPINVerified] = useState(false);
 
   
   const updateUserStatus = (status) => {
@@ -47,6 +53,19 @@ const App = () => {
       });
     }
   };
+
+  // Check if PIN is required
+  useEffect(() => {
+    const checkPIN = async () => {
+      try {
+        const pin = await AsyncStorage.getItem('@app_lock_pin');
+        setIsPINRequired(!!pin);
+      } catch (error) {
+        console.error('Error checking PIN:', error);
+      }
+    };
+    checkPIN();
+  }, []);
 
   // Handle user state changes
   function handleAuthStateChanged(user) {
@@ -111,6 +130,11 @@ const App = () => {
     );
   }
 
+  // Show PIN verification screen if required and not verified
+  if (user && isPINRequired && !isPINVerified) {
+    return <PINVerificationScreen onSuccess={() => setIsPINVerified(true)} />;
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
     <NavigationContainer>
@@ -123,6 +147,12 @@ const App = () => {
             <Stack.Screen name="Settings" component={SettingsScreen} />
             <Stack.Screen name="Chat" component={ChatScreen} />
             <Stack.Screen name="CreateRoom" component={CreateRoomScreen} />
+            <Stack.Screen name="HelpAndSupport" component={HelpAndSupportScreen} />
+            <Stack.Screen 
+              name="SetupPIN" 
+              component={SetupPINScreen}
+              options={{ headerShown: false }}
+            />
             </>
         ) : (
           <>

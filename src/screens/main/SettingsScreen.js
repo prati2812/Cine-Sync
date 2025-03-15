@@ -24,6 +24,7 @@ import {
 import { getDatabase, ref, update } from 'firebase/database';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -32,6 +33,8 @@ const SettingsScreen = ({ navigation }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [notifications, setNotifications] = useState(true);
   const [darkMode, setDarkMode] = useState(true);
+  const [appLock, setAppLock] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
 
   useEffect(() => {
     const currentUser = auth.currentUser;
@@ -40,6 +43,17 @@ const SettingsScreen = ({ navigation }) => {
     if (currentUser?.username) {
       setUsername(currentUser.username);
     }
+
+    const checkAppLock = async () => {
+      try {
+        const pin = await AsyncStorage.getItem('@app_lock_pin');
+        setAppLock(!!pin);
+      } catch (error) {
+        console.error('Error checking app lock:', error);
+      }
+    };
+
+    checkAppLock();
   }, []);
 
   const handleUpdateUsername = async () => {
@@ -114,6 +128,49 @@ const SettingsScreen = ({ navigation }) => {
       ]
     );
   };
+
+  const handleAppLockToggle = async () => {
+    if (!appLock) {
+      navigation.navigate('SetupPIN');
+    } else {
+      Alert.alert(
+        'Disable App Lock',
+        'Are you sure you want to disable app lock?',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Disable',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await AsyncStorage.removeItem('@app_lock_pin');
+                setAppLock(false);
+              } catch (error) {
+                Alert.alert('Error', 'Failed to disable app lock');
+              }
+            }
+          }
+        ]
+      );
+    }
+  };
+
+  // Add a focus effect to check PIN status when screen is focused
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', async () => {
+      try {
+        const pin = await AsyncStorage.getItem('@app_lock_pin');
+        setAppLock(!!pin);
+      } catch (error) {
+        console.error('Error checking app lock:', error);
+      }
+    });
+
+    return unsubscribe;
+  }, [navigation]);
 
   const SettingRow = ({ label, value, onPress, icon, isLast }) => (
     <TouchableOpacity 
@@ -200,7 +257,7 @@ const SettingsScreen = ({ navigation }) => {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Preferences</Text>
+          <Text style={styles.sectionTitle}>App Settings</Text>
           <View style={styles.sectionContent}>
             <SettingRow
               label="Push Notifications"
@@ -213,6 +270,12 @@ const SettingsScreen = ({ navigation }) => {
               value={darkMode}
               onPress={() => setDarkMode(!darkMode)}
               icon="brightness-4"
+            />
+            <SettingRow
+              label="App Lock"
+              value={appLock}
+              onPress={handleAppLockToggle}
+              icon="lock"
               isLast
             />
           </View>
@@ -224,7 +287,7 @@ const SettingsScreen = ({ navigation }) => {
             <SettingRow
               label="Reset Password"
               onPress={handleResetPassword}
-              icon="lock"
+              icon="lock-reset"
             />
             <SettingRow
               label="Privacy Settings"
@@ -235,6 +298,29 @@ const SettingsScreen = ({ navigation }) => {
               label="Blocked Users"
               onPress={() => {/* Handle blocked users */}}
               icon="block"
+              isLast
+            />
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>About</Text>
+          <View style={styles.sectionContent}>
+            <SettingRow
+              label="App Version"
+              value="1.0.0"
+              icon="info"
+              onPress={() => {}}
+            />
+            <SettingRow
+              label="Terms of Service"
+              icon="description"
+              onPress={() => {}}
+            />
+            <SettingRow
+              label="Privacy Policy"
+              icon="privacy-tip"
+              onPress={() => {}}
               isLast
             />
           </View>
@@ -286,11 +372,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1E1E1E',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 20,
+    padding: 20,
     marginBottom: 24,
     borderWidth: 1,
     borderColor: '#333333',
+    shadowColor: '#007AFF',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
   },
   avatarContainer: {
     width: 60,
@@ -336,17 +430,25 @@ const styles = StyleSheet.create({
   },
   sectionContent: {
     backgroundColor: '#1E1E1E',
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#333333',
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
   },
   settingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
   },
   settingRowBorder: {
     borderBottomWidth: 1,
@@ -357,13 +459,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   iconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     backgroundColor: '#007AFF20',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
   },
   settingLabel: {
     fontSize: 16,
@@ -406,11 +508,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FF3B3010',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: '#FF3B3015',
+    borderRadius: 20,
+    padding: 18,
     marginBottom: 32,
-    gap: 8,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#FF3B3030',
   },
   deleteButtonText: {
     color: '#FF3B30',

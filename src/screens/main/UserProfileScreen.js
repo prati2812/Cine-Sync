@@ -97,7 +97,7 @@ const UserProfileScreen = ({ navigation }) => {
 
         <TouchableOpacity 
           style={styles.menuItem}
-          onPress={() => {/* Handle press */}}
+          onPress={() => navigation.navigate('HelpAndSupport')}
         >
           <MaterialIcons name="help" size={24} color="#FFFFFF" />
           <Text style={styles.menuItemText}>Help & Support</Text>

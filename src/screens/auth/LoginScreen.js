@@ -54,7 +54,6 @@ const LoginScreen = ({ navigation }) => {
     } catch (error) {
       console.log(error);
       // Handle specific Firebase auth errors
-
       let errorMessage = "An error occurred during login";
 
       switch (error.code) {

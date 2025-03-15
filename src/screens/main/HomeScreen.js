@@ -529,10 +529,6 @@ const HomeScreen = () => {
       </View>
     </View>
   );
-
-  const handleDelete = (roomId) => {
-    setRooms((prevRooms) => prevRooms.filter((room) => room.roomId !== roomId));
-  };
   
   return (
     <SafeAreaView style={styles.container}>
@@ -568,12 +564,17 @@ const HomeScreen = () => {
         )}
       </View>
 
-      <TouchableOpacity 
+      {
+        filterType !== 'invited' && (
+          <TouchableOpacity 
         style={styles.createRoomButton}
-        onPress={() => navigation.navigate('CreateRoom')}
-      >
-        <Text style={styles.createButtonIcon}>+</Text>
-      </TouchableOpacity>
+        onPress={() => navigation.navigate('CreateRoom')}>
+           <Text style={styles.createButtonIcon}>+</Text>
+         </TouchableOpacity>
+        )
+      }
+
+      
 
     </SafeAreaView>
   );
