@@ -107,7 +107,7 @@ const PINVerificationScreen = ({ onSuccess }) => {
         {renderPinDots()}
 
         <View style={styles.numberPad}>
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0].map((num, index) => (
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, '#', 0].map((num, index) => (
             <NumberButton
               key={index}
               number={num.toString()}

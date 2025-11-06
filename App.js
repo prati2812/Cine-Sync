@@ -31,6 +31,7 @@ import HelpAndSupportScreen from './src/screens/main/HelpAndSupportScreen';
 import SetupPINScreen from './src/screens/main/SetupPINScreen';
 import PINVerificationScreen from './src/screens/auth/PINVerificationScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';
 
 
 const Stack = createNativeStackNavigator();
@@ -41,6 +42,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [isPINRequired, setIsPINRequired] = useState(false);
   const [isPINVerified, setIsPINVerified] = useState(false);
+  const [isEmailVerifed, setIsEmailVerified] = useState(false); 
 
   
   const updateUserStatus = (status) => {
@@ -133,6 +135,13 @@ const App = () => {
   // Show PIN verification screen if required and not verified
   if (user && isPINRequired && !isPINVerified) {
     return <PINVerificationScreen onSuccess={() => setIsPINVerified(true)} />;
+  }
+
+  if(user && !user?.emailVerified && !isEmailVerifed){
+    return <VerifyEmailScreen onSuccess={() => setIsEmailVerified(true)}/>
+  }
+
+  {console.log("Newwwww Useerr", user);
   }
 
   return (

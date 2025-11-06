@@ -1,29 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import Animated, { 
-  withSpring,
+import Animated, {
   useAnimatedStyle,
   useSharedValue,
-  withSequence,
-  withTiming,
 } from 'react-native-reanimated';
-import { auth } from '../../config/firebase';
-import { sendEmailVerification, onAuthStateChanged } from 'firebase/auth';
-import { CommonActions } from '@react-navigation/native';
+import {auth} from '../../config/firebase';
+import {sendEmailVerification, onAuthStateChanged} from 'firebase/auth';
 
-const VerifyEmailScreen = ({ navigation }) => {
+const VerifyEmailScreen = ({onSuccess}) => {
   const [email, setEmail] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -35,13 +30,13 @@ const VerifyEmailScreen = ({ navigation }) => {
   const successOpacity = useSharedValue(0);
 
   const formAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+    transform: [{scale: scale.value}],
     opacity: opacity.value,
   }));
 
   const successAnimatedStyle = useAnimatedStyle(() => ({
     opacity: successOpacity.value,
-    transform: [{ scale: successOpacity.value }],
+    transform: [{scale: successOpacity.value}],
   }));
 
   useEffect(() => {
@@ -60,44 +55,19 @@ const VerifyEmailScreen = ({ navigation }) => {
     }
   }, [canResend]);
 
-
-//   useEffect(() => {
-//     const interval = setInterval(async () => {
-//       await auth.currentUser.reload(); // Refresh user authentication state
-//       if (auth.currentUser.emailVerified) {
-//         clearInterval(interval);
-//         // navigation.dispatch(
-//         //   CommonActions.reset({
-//         //     index: 0,
-//         //     routes: [{ name: 'Home' }],
-//         //   })
-//         // );
-//         console.log("Email verified");
-//         navigation.navigate('Home');
-//       }
-//     }, 5000); 
-  
-//     return () => clearInterval(interval); // Cleanup on unmount
-//   }, []);
-
-useEffect(() => {
+  useEffect(() => {
     const interval = setInterval(async () => {
       await auth.currentUser.reload();
-      console.log("Email Verified:", auth.currentUser.emailVerified);
-  
+      console.log('Email Verified:', auth.currentUser.emailVerified);
+
       if (auth.currentUser.emailVerified) {
+        onSuccess();
         clearInterval(interval);
-        navigation.navigate('Home')
       }
     }, 5000);
-  
+
     return () => clearInterval(interval);
   }, []);
-  
-  
-  
-  
-  
 
   const handleResendEmail = async () => {
     setIsLoading(true);
@@ -107,7 +77,7 @@ useEffect(() => {
       setCanResend(false);
       setTimer(30); // Reset timer to 30 seconds
     } catch (error) {
-      console.log("Error sending verification email:", error);
+      console.log('Error sending verification email:', error);
       Alert.alert('Error', 'Failed to send verification email.');
     } finally {
       setIsLoading(false);
@@ -123,21 +93,20 @@ useEffect(() => {
           {!isSuccess ? (
             <Animated.View style={[styles.formContent, formAnimatedStyle]}>
               <View style={styles.headerContainer}>
-                <Icon name="mail-outline" size={48} color="#007AFF" style={styles.headerIcon} />
+                <Icon
+                  name="mail-outline"
+                  size={48}
+                  color="#007AFF"
+                  style={styles.headerIcon}
+                />
                 <Text style={styles.title}>Verify Your Email</Text>
                 <Text style={styles.subtitle}>
-                  A verification link has been sent to your email. Please check your inbox and follow the instructions to verify your account.
+                  A verification link has been sent to your email. Please check
+                  your inbox and follow the instructions to verify your account.
                 </Text>
               </View>
 
-              <TouchableOpacity 
-                style={styles.button}
-                onPress={() => navigation.navigate('Login')}
-                activeOpacity={0.7}>
-                <Text style={styles.buttonText}>Back to Login</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.resendButton}
                 onPress={handleResendEmail}
                 disabled={!canResend}
@@ -146,13 +115,16 @@ useEffect(() => {
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
                   <Text style={styles.resendButtonText}>
-                    {canResend ? 'Resend Verification Email' : `Wait ${timer}s to resend`}
+                    {canResend
+                      ? 'Resend Verification Email'
+                      : `Wait ${timer}s to resend`}
                   </Text>
                 )}
               </TouchableOpacity>
             </Animated.View>
           ) : (
-            <Animated.View style={[styles.successContainer, successAnimatedStyle]}>
+            <Animated.View
+              style={[styles.successContainer, successAnimatedStyle]}>
               <Icon name="checkmark-circle-outline" size={80} color="#4CAF50" />
               <Text style={styles.successTitle}>Check Your Email</Text>
               <Text style={styles.successText}>
@@ -211,7 +183,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 32,
     shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: {width: 0, height: 4},
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
@@ -257,4 +229,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default VerifyEmailScreen; 
+export default VerifyEmailScreen;

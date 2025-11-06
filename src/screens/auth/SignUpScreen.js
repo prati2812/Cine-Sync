@@ -2,7 +2,6 @@ import React, {useState} from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
@@ -16,7 +15,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import Icon from 'react-native-vector-icons/Ionicons';
 import {auth} from '../../config/firebase';
 import {
   createUserWithEmailAndPassword,

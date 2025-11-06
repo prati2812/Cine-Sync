@@ -2,7 +2,6 @@ import React, {useEffect, useState} from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
@@ -16,7 +15,6 @@ import {
   ScrollView,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import Icon from 'react-native-vector-icons/Ionicons';
 import {signInWithEmailAndPassword} from 'firebase/auth';
 import {auth} from '../../config/firebase';
 import colors from '../../theme/Colors';
@@ -33,7 +31,7 @@ const LoginScreen = ({navigation}) => {
 
     // Basic validation
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter both email and password', [
+      Alert.alert('Error', 'Please enter email and password', [
         {text: 'OK'},
       ]);
       return;
