@@ -28,6 +28,7 @@ import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
 import CreateRoomModal from '../../components/CreateRoomModal';
 import WaitingScreen from './WaitingScreen';
+import colors from '../../theme/Colors';
 
 const HomeScreen = () => {
   const [rooms, setRooms] = useState([]);
@@ -532,50 +533,39 @@ const HomeScreen = () => {
   
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar
-    backgroundColor="#121212"
-    barStyle="light-content"
-  />
+      <StatusBar backgroundColor={colors.STATUSBAR_BG_COLOR} barStyle="light-content" />
       <View style={styles.header}>
         <Logo size="small" />
-        <View style={styles.headerButtons}>
-        </View>
+        <View style={styles.headerButtons}></View>
       </View>
 
       <View style={styles.roomsSection}>
         {rooms.length > 0 && renderFilterButtons()}
-        
+
         {getFilteredRooms().length > 0 ? (
           <FlatList
             data={getFilteredRooms()}
-            renderItem={({ item }) => renderRoom({ item })}
-            keyExtractor={(item) => item.roomId}
+            renderItem={({item}) => renderRoom({item})}
+            keyExtractor={item => item.roomId}
             contentContainerStyle={styles.roomsListContent}
             showsVerticalScrollIndicator={false}
           />
         ) : (
           <View style={styles.emptySearchContainer}>
             <Text style={styles.emptySearchText}>
-              {searchQuery 
-                ? renderEmptyState()
-                : renderEmptyState()}
+              {searchQuery ? renderEmptyState() : renderEmptyState()}
             </Text>
           </View>
         )}
       </View>
 
-      {
-        filterType !== 'invited' && (
-          <TouchableOpacity 
-        style={styles.createRoomButton}
-        onPress={() => navigation.navigate('CreateRoom')}>
-           <Text style={styles.createButtonIcon}>+</Text>
-         </TouchableOpacity>
-        )
-      }
-
-      
-
+      {filterType !== 'invited' && (
+        <TouchableOpacity
+          style={styles.createRoomButton}
+          onPress={() => navigation.navigate('CreateRoom')}>
+          <Text style={styles.createButtonIcon}>+</Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 };

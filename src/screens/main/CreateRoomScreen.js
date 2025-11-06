@@ -13,6 +13,7 @@ import {
 import { getDatabase, ref, set, get, query, orderByChild, equalTo } from 'firebase/database';
 import { auth } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import colors from '../../theme/Colors';
 
 const CreateRoomScreen = ({ navigation, route }) => {
   const editingRoom = route.params?.room;
@@ -43,7 +44,8 @@ const CreateRoomScreen = ({ navigation, route }) => {
       const snapshot = await get(userQuery);
       return snapshot.exists();
     } catch (error) {
-      console.error('Error checking user:', error);
+      console.log("Neww Dataabase error:", error);
+      
       return false;
     }
   };
@@ -206,7 +208,14 @@ const CreateRoomScreen = ({ navigation, route }) => {
                 key={item.icon}
                 style={[
                   styles.iconOption,
-                  selectedIcon === item.icon && styles.iconOptionSelected
+                  selectedIcon === item.icon && {
+                    backgroundColor: colors.ROOM_BUTTON_BG_COLOR,
+                    borderColor: colors.PRIMARY_COLOR,
+                    borderWidth: 2,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    padding: 4,
+                  }
                 ]}
                 onPress={() => setSelectedIcon(item.icon)}
               >
@@ -347,6 +356,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#333333',
+    padding: 8,
   },
   iconOptionSelected: {
     backgroundColor: '#1A1A1A',

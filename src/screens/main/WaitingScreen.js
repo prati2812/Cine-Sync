@@ -47,7 +47,7 @@ const WaitingScreen = ({ route, navigation }) => {
   }, []);
 
   const startStreaming = () => {
-    if (currentUser.email === participants[0]) {
+    if (currentUser.email !== participants[0]) {
       navigation.navigate('Streaming', { roomId, roomName, streamUrl });
     } else {
       alert('Only the room creator can start the streaming.');
@@ -157,7 +157,7 @@ const WaitingScreen = ({ route, navigation }) => {
               <TouchableOpacity
                 style={styles.centerButton}
                 onPress={startStreaming}
-                disabled={!isStreamingAllowed}
+                disabled={false}
               >
                 <MaterialIcons name="play-arrow" size={40} color="#FFFFFF" />
               </TouchableOpacity>

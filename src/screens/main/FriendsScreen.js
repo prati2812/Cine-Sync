@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,56 @@ import {
   FlatList,
   StatusBar,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Animated,
+  Easing
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Logo from '../../components/Logo1';
 import { getDatabase, ref,set,remove, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
 import { auth } from '../../config/firebase';
+
+const EmptyStateAnimation = ({ icon, title, subtitle }) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.cubic),
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        friction: 8,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  return (
+    <View style={styles.emptyStateContainer}>
+      <Animated.View
+        style={{
+          opacity: fadeAnim,
+          transform: [{ scale: scaleAnim }],
+          alignItems: 'center',
+        }}
+      >
+        <MaterialIcons name={icon} size={64} color="#666666" />
+        <Animated.Text style={[styles.emptyStateText, { opacity: fadeAnim }]}>
+          {title}
+        </Animated.Text>
+        <Animated.Text style={[styles.emptyStateSubText, { opacity: fadeAnim }]}>
+          {subtitle}
+        </Animated.Text>
+      </Animated.View>
+    </View>
+  );
+};
 
 const FriendsScreen = ({ navigation }) => {
   const [searchEmail, setSearchEmail] = useState('');
@@ -22,10 +66,12 @@ const FriendsScreen = ({ navigation }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
+  const [sentRequests, setSentRequests] = useState([]);
 
 
   useEffect(() => {
     getFriendRequests();
+    getFriendSentRequests();
     const unsubscribe = getFriends();
     return () => {
       if (unsubscribe) {
@@ -91,11 +137,82 @@ const FriendsScreen = ({ navigation }) => {
           </View>
         </View>
       </View>
+      <View style={styles.friendActions}>
+        <TouchableOpacity 
+          style={styles.messageButton}
+          onPress={() => navigation.navigate('Chat', { 
+            username: item?.username || 'New Chat',
+            userId: item?.userId,
+            avatar: item?.avatar
+          })}
+        >
+          <MaterialIcons name="chat" size={20} color="#007AFF" />
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.removeFriendButton}
+          onPress={() => {
+            Alert.alert(
+              'Remove Friend',
+              'Are you sure you want to remove this friend?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Remove', style: 'destructive', 
+                  onPress: () => {
+                   removeFriend(item?.userId);
+                  }
+                } 
+              ]
+            );
+          }}
+        >
+          <MaterialIcons name="person-remove" size={20} color="#FF3B30" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const cancelFriendRequest = async (userId) => {
+    const db = getDatabase();
+    const user = await auth.currentUser;
+    const friendRequestRef = ref(db, `friend_requests/${user?.uid}/${userId}`);
+    const userFriendRequestRef = ref(db, `user_friend_requests/${user?.uid}/${userId}`);
+    await remove(friendRequestRef);
+    await remove(userFriendRequestRef);
+    console.log("Friend request cancelled successfully.");
+  }
+
+  const renderSentRequest = ({ item }) => (
+    <View style={styles.requestCard}>
+      <View style={styles.requestInfo}>
+        <View style={[styles.avatarContainer, { backgroundColor: generateAvatarColor(item.email) }]}>
+          <Text style={styles.avatarText}>
+            {item?.username[0].toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.requestTextContainer}>
+          <Text style={styles.requestEmail}>{item?.username}</Text>
+          <Text style={styles.pendingText}>Pending</Text>
+        </View>
+      </View>
       <TouchableOpacity 
-        style={styles.messageButton}
-        onPress={() => navigation.navigate('Chat', { username: item?.username || 'New Chat' })}
+        style={styles.cancelRequestButton}
+        onPress={() => {
+          Alert.alert(
+            'Cancel Request',
+            'Are you sure you want to cancel this friend request?',
+            [
+              { text: 'No', style: 'cancel' },
+              { text: 'Yes', style: 'destructive', 
+                onPress: () => {
+                  cancelFriendRequest(item?.userId);
+                }
+              }
+            ]
+          );
+        }}
       >
-        <MaterialIcons name="chat" size={20} color="#007AFF" />
+        <MaterialIcons name="close" size={20} color="#FF3B30" />
+        <Text style={styles.cancelButtonText}>Cancel</Text>
       </TouchableOpacity>
     </View>
   );
@@ -132,6 +249,29 @@ const FriendsScreen = ({ navigation }) => {
       setFriendRequests(userDetails);
     });
     
+    return () => unsubscribe();
+  }
+
+  const getFriendSentRequests = async () => {
+    const db = getDatabase();
+    const user = auth.currentUser;
+    const friendSentRequestRef = ref(db, `user_friend_requests/${user?.uid}`);
+    const unsubscribe = onValue(friendSentRequestRef, async (snapshot) => {
+      const friendSentRequests = snapshot.val();
+      if(!friendSentRequests){
+        setSentRequests([]);
+        return;
+      }
+
+      let userDetails = [];
+      for(let request in friendSentRequests){
+        let friendUserRequestId = request;
+        let friendUserDetails = await getUserFriendDetails(friendUserRequestId);
+        userDetails.push(friendUserDetails);
+      }
+      console.log("Friend Details", userDetails);
+      setSentRequests(userDetails);
+    });
     return () => unsubscribe();
   }
 
@@ -201,18 +341,13 @@ const FriendsScreen = ({ navigation }) => {
           
           await set(friendRef1, true);  
           await set(friendRef2, true);  
+
+          const userFriendSentRequestRef = ref(db, `user_friend_requests/${userId}/${user.uid}`);
+          await remove(userFriendSentRequestRef);
           
           console.log("Friend request accepted and friends updated successfully.");
         }
       });
-  
-      // const friendRef1 = ref(db, `friends/${user.uid}/${userId}`);
-      // const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
-  
-      // await set(friendRef1, true);  
-      // await set(friendRef2, true);  
-  
-      // console.log("Friend request accepted and friends updated successfully.");
     } catch (error) {
       console.error("Error accepting friend request:", error.message);
     }
@@ -248,6 +383,15 @@ const FriendsScreen = ({ navigation }) => {
     return snapshot.val();
   }
 
+  const removeFriend = async (userId) => {
+    const db = getDatabase();
+    const user = await auth.currentUser;
+    const friendRef = ref(db, `friends/${user.uid}/${userId}`);
+    const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
+    await remove(friendRef);
+    await remove(friendRef2);
+    console.log("Friend removed successfully.");
+  }
   
 
   const checkUserExists = async (email) => {
@@ -307,7 +451,9 @@ const FriendsScreen = ({ navigation }) => {
                     console.log("user", user.uid);
                     if(user.uid){
                       const friendRequestRef = ref(db, `friend_requests/${userExists?.userId}/${user?.uid}`);
+                      const userFriendRequestRef = ref(db, `user_friend_requests/${user?.uid}/${userExists?.userId}`);
                       set(friendRequestRef , true);
+                      set(userFriendRequestRef, true);
                       setSearchEmail('');
                       setIsLoading(false);
                     }  
@@ -354,24 +500,64 @@ const FriendsScreen = ({ navigation }) => {
               Requests ({friendRequests.length})
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.tab, activeTab === 'sent' && styles.activeTab]}
+            onPress={() => setActiveTab('sent')}
+          >
+            <Text style={[styles.tabText, activeTab === 'sent' && styles.activeTabText]}>
+              Sent ({sentRequests.length})
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {activeTab === 'friends' ? (
-          <FlatList
-            data={friendsList}
-            renderItem={renderFriend}
-            keyExtractor={(item) => item.userId}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.friendsList}
-          />
+          friendsList.length > 0 ? (
+            <FlatList
+              data={friendsList}
+              renderItem={renderFriend}
+              keyExtractor={(item) => item.userId}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.friendsList}
+            />
+          ) : (
+            <EmptyStateAnimation
+              icon="people"
+              title="No friends yet"
+              subtitle="Search for friends using their email to connect"
+            />
+          )
+        ) : activeTab === 'requests' ? (
+          friendRequests.length > 0 ? (
+            <FlatList
+              data={friendRequests}
+              renderItem={renderFriendRequest}
+              keyExtractor={(item) => item.userId}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.friendsList}
+            />
+          ) : (
+            <EmptyStateAnimation
+              icon="person-add"
+              title="No friend requests"
+              subtitle="When someone adds you, they'll appear here"
+            />
+          )
         ) : (
-          <FlatList
-            data={friendRequests}
-            renderItem={renderFriendRequest}
-            keyExtractor={(item) => item.userId}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.friendsList}
-          />
+          sentRequests.length > 0 ? (
+            <FlatList
+              data={sentRequests}
+              renderItem={renderSentRequest}
+              keyExtractor={(item) => item.userId}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.friendsList}
+            />
+          ) : (
+            <EmptyStateAnimation
+              icon="send"
+              title="No sent requests"
+              subtitle="Friend requests you've sent will appear here"
+            />
+          )
         )}
       </View>
     </SafeAreaView>
@@ -381,107 +567,146 @@ const FriendsScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: '#0A0A0A',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 16,
-    paddingRight: 24,
+    paddingHorizontal: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
   },
   content: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   searchSection: {
-    marginBottom: 24,
+    marginVertical: 20,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    height: 44,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+    height: 50,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   searchInput: {
     flex: 1,
     color: '#FFFFFF',
-    marginLeft: 8,
-    fontSize: 15,
+    marginLeft: 12,
+    fontSize: 16,
+    fontWeight: '400',
   },
   addButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    paddingVertical: 12,
+    backgroundColor: '#2563EB',
+    borderRadius: 16,
+    paddingVertical: 14,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 8,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   addButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },
-  section: {
+  tabContainer: {
+    flexDirection: 'row',
     marginBottom: 24,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    padding: 4,
+    borderRadius: 16,
   },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    marginHorizontal: 4,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  activeTab: {
+    backgroundColor: '#2563EB',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  tabText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  activeTabText: {
     color: '#FFFFFF',
-    marginBottom: 16,
   },
   requestCard: {
-    backgroundColor: '#1E1E1E',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   requestInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   avatarContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#007AFF',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 5,
   },
   avatarText: {
     color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
   },
   requestEmail: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 4,
   },
   requestActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 12,
   },
   acceptButton: {
     flex: 1,
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingVertical: 8,
+    backgroundColor: '#2563EB',
+    borderRadius: 12,
+    paddingVertical: 12,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   acceptButtonText: {
     color: '#FFFFFF',
@@ -489,38 +714,41 @@ const styles = StyleSheet.create({
   },
   declineButton: {
     flex: 1,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(255,59,48,0.1)',
+    borderRadius: 12,
+    paddingVertical: 12,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,59,48,0.3)',
   },
   declineButtonText: {
     color: '#FF3B30',
     fontWeight: '600',
   },
   friendCard: {
-    backgroundColor: '#1E1E1E',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   friendInfo: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
   },
   friendEmail: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '500',
-    marginBottom: 4,
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 6,
   },
   statusContainer: {
     flexDirection: 'row',
@@ -530,57 +758,82 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 6,
+    marginRight: 8,
   },
   statusText: {
-    color: '#888888',
+    color: 'rgba(255,255,255,0.6)',
     fontSize: 14,
+    fontWeight: '500',
+  },
+  friendActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   messageButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#2A2A2A',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(37,99,235,0.1)',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.3)',
   },
-  requestsList: {
-    paddingRight: 24,
+  removeFriendButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,59,48,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,59,48,0.3)',
+  },
+  pendingText: {
+    color: '#F59E0B',
+    fontSize: 14,
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  cancelRequestButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,59,48,0.1)',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,59,48,0.3)',
+  },
+  cancelButtonText: {
+    color: '#FF3B30',
+    fontWeight: '600',
+    fontSize: 15,
   },
   friendsList: {
     paddingBottom: 24,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#2A2A2A',
+  emptyStateContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 32,
   },
-  tabContainer: {
-    flexDirection: 'row',
-    marginBottom: 20,
-    paddingHorizontal: 4,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 12,
-    marginHorizontal: 4,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-  },
-  activeTab: {
-    backgroundColor: '#007AFF',
-  },
-  tabText: {
-    color: '#888888',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  activeTabText: {
+  emptyStateText: {
     color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '600',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  emptyStateSubText: {
+    color: '#666666',
+    fontSize: 15,
+    textAlign: 'center',
+    marginTop: 12,
+    lineHeight: 22,
   },
 });
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,70 +12,162 @@ import {
   Animated,
   Platform,
   KeyboardAvoidingView,
+  Modal,
+  PermissionsAndroid,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from '@react-native-community/blur';
+import { getDatabase, ref, push, onValue, off, serverTimestamp, set, get } from 'firebase/database';
+import { auth } from '../../config/firebase';
+import {
+  RTCPeerConnection,
+  RTCIceCandidate,
+  RTCSessionDescription,
+  mediaDevices,
+} from 'react-native-webrtc';
+
+const configuration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
 
 const ChatScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
   const [message, setMessage] = useState('');
   const [showAttachments, setShowAttachments] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  
-  // Dummy messages data
-  const messages = [
-    { id: '1', text: 'Hey, how are you?', sender: 'them', timestamp: '10:30 AM' },
-    { id: '2', text: 'I\'m good! Just working on some new features. How about you?', sender: 'me', timestamp: '10:31 AM' },
-    { id: '3', type: 'voice', duration: '0:30', sender: 'them', timestamp: '10:32 AM' },
-    { id: '4', text: 'Oh nice! Let me know if you need any help getting started!', sender: 'me', timestamp: '10:33 AM' },
-    { id: '5', text: 'Thanks! I appreciate that.', sender: 'them', timestamp: '10:34 AM' },
-    { id: '6', text: 'By the way, have you checked out the latest updates?', sender: 'me', timestamp: '10:35 AM' },
-    { id: '7', text: 'Not yet. Are they live now?', sender: 'them', timestamp: '10:36 AM' },
-    { id: '8', text: 'Yes, they went live this morning!', sender: 'me', timestamp: '10:37 AM' },
-    { id: '9', text: 'Awesome! I will check them out soon.', sender: 'them', timestamp: '10:38 AM' },
-    { id: '10', type: 'image', url: 'https://example.com/image1.jpg', sender: 'me', timestamp: '10:39 AM' },
-    { id: '11', text: 'That looks great!', sender: 'them', timestamp: '10:40 AM' },
-    { id: '12', text: 'Glad you like it!', sender: 'me', timestamp: '10:41 AM' },
-    { id: '13', type: 'voice', duration: '1:15', sender: 'them', timestamp: '10:42 AM' },
-    { id: '14', text: 'Got your voice note. Will listen to it shortly.', sender: 'me', timestamp: '10:43 AM' },
-    { id: '15', text: 'No rush! Take your time.', sender: 'them', timestamp: '10:44 AM' },
-    { id: '16', text: 'Thanks! How has your day been so far?', sender: 'me', timestamp: '10:45 AM' },
-    { id: '17', text: 'Pretty good, just busy with some work.', sender: 'them', timestamp: '10:46 AM' },
-    { id: '18', text: 'Same here. Lots of things to do.', sender: 'me', timestamp: '10:47 AM' },
-    { id: '19', type: 'image', url: 'https://example.com/image2.jpg', sender: 'them', timestamp: '10:48 AM' },
-    { id: '20', text: 'Wow! Where did you take this photo?', sender: 'me', timestamp: '10:49 AM' },
-    { id: '21', text: 'Just outside my house. The sky looked amazing.', sender: 'them', timestamp: '10:50 AM' },
-    { id: '22', text: 'It really does! Beautiful shot.', sender: 'me', timestamp: '10:51 AM' },
-    { id: '23', type: 'video', url: 'https://example.com/video1.mp4', sender: 'them', timestamp: '10:52 AM' },
-    { id: '24', text: 'Nice video! What is it about?', sender: 'me', timestamp: '10:53 AM' },
-    { id: '25', text: 'Just a small clip from my recent trip.', sender: 'them', timestamp: '10:54 AM' },
-    { id: '26', text: 'That looks like a great place to visit!', sender: 'me', timestamp: '10:55 AM' },
-    { id: '27', text: 'You should definitely go there sometime.', sender: 'them', timestamp: '10:56 AM' },
-    { id: '28', text: 'I will add it to my list!', sender: 'me', timestamp: '10:57 AM' },
-    { id: '29', type: 'voice', duration: '0:45', sender: 'them', timestamp: '10:58 AM' },
-    { id: '30', text: 'Heard your voice note. Sounds good!', sender: 'me', timestamp: '10:59 AM' },
-    { id: '31', text: 'Great! Let me know if you have any questions.', sender: 'them', timestamp: '11:00 AM' },
-    { id: '32', text: 'Will do! Thanks!', sender: 'me', timestamp: '11:01 AM' },
-    { id: '33', text: 'Are you free for a quick call later?', sender: 'them', timestamp: '11:02 AM' },
-    { id: '34', text: 'Sure! What time works for you?', sender: 'me', timestamp: '11:03 AM' },
-    { id: '35', text: 'Maybe around 2 PM?', sender: 'them', timestamp: '11:04 AM' },
-    { id: '36', text: 'Sounds good. See you then!', sender: 'me', timestamp: '11:05 AM' },
-    { id: '37', text: 'Hey, do you have the latest report?', sender: 'them', timestamp: '11:06 AM' },
-    { id: '38', text: 'Yes! Sending it now.', sender: 'me', timestamp: '11:07 AM' },
-    { id: '39', type: 'document', url: 'https://example.com/report.pdf', sender: 'me', timestamp: '11:08 AM' },
-    { id: '40', text: 'Got it! Thanks!', sender: 'them', timestamp: '11:09 AM' },
-    { id: '41', text: 'No problem!', sender: 'me', timestamp: '11:10 AM' },
-    { id: '42', text: 'What do you think about the latest update?', sender: 'them', timestamp: '11:11 AM' },
-    { id: '43', text: 'It looks great! Really improved the UX.', sender: 'me', timestamp: '11:12 AM' },
-    { id: '44', text: 'Glad to hear that!', sender: 'them', timestamp: '11:13 AM' },
-    { id: '45', text: 'Keep up the great work!', sender: 'me', timestamp: '11:14 AM' }
-  ];
-  
+  const [messages, setMessages] = useState([]);
+  const [chatId, setChatId] = useState(null);
+  const flatListRef = useRef(null);
+  const [isInCall, setIsInCall] = useState(false);
+  const [isCalling, setIsCalling] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const peerConnection = useRef(null);
+  const [callError, setCallError] = useState(null);
+  const [callTimeout, setCallTimeout] = useState(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isCallMuted, setIsCallMuted] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
+  const durationInterval = useRef(null);
+
+  useEffect(() => {
+    initializeChat();
+    setupUserPresence();
+    return () => {
+      // Cleanup listeners
+      if (chatId) {
+        const db = getDatabase();
+        const chatRef = ref(db, `chats/${chatId}/messages`);
+        off(chatRef);
+      }
+    };
+  }, []);
+
+  const initializeChat = async () => {
+    const db = getDatabase();
+    const currentUser = auth.currentUser;
+    const otherUserId = route.params?.userId;
+
+    if (!currentUser || !otherUserId) return;
+
+    // Check if chat already exists between these users
+    const userChatsRef = ref(db, `user_chats/${currentUser.uid}`);
+    onValue(userChatsRef, (snapshot) => {
+      const chats = snapshot.val();
+      if (chats) {
+        // Find chat with other user
+        const existingChatId = Object.keys(chats).find(
+          (key) => chats[key].otherUserId === otherUserId
+        );
+
+        if (existingChatId) {
+          setChatId(existingChatId);
+          listenToMessages(existingChatId);
+        } else {
+          // Create new chat
+          createNewChat(currentUser.uid, otherUserId);
+        }
+      } else {
+        // Create new chat
+        createNewChat(currentUser.uid, otherUserId);
+      }
+    });
+  };
+
+  const createNewChat = async (currentUserId, otherUserId) => {
+    const db = getDatabase();
+    const newChatRef = push(ref(db, 'chats'));
+    const chatId = newChatRef.key;
+
+    // Set up chat participants
+    await Promise.all([
+      set(ref(db, `chats/${chatId}/participants/${currentUserId}`), true),
+      set(ref(db, `chats/${chatId}/participants/${otherUserId}`), true),
+      set(ref(db, `user_chats/${currentUserId}/${chatId}`), {
+        otherUserId,
+        lastMessage: '',
+        lastMessageTimestamp: serverTimestamp(),
+      }),
+      set(ref(db, `user_chats/${otherUserId}/${chatId}`), {
+        otherUserId: currentUserId,
+        lastMessage: '',
+        lastMessageTimestamp: serverTimestamp(),
+      }),
+    ]);
+
+    setChatId(chatId);
+    listenToMessages(chatId);
+  };
+
+  const listenToMessages = (chatId) => {
+    const db = getDatabase();
+    const messagesRef = ref(db, `chats/${chatId}/messages`);
+    
+    onValue(messagesRef, (snapshot) => {
+      const messagesData = snapshot.val();
+      if (messagesData) {
+        const messagesList = Object.entries(messagesData).map(([id, data]) => ({
+          id,
+          ...data,
+        }));
+        // Sort messages by timestamp
+        messagesList.sort((a, b) => a.timestamp - b.timestamp);
+        setMessages(messagesList);
+        
+        // Scroll to bottom
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    });
+  };
+
+  const sendMessage = async () => {
+    if (!message.trim() || !chatId) return;
+    
+    const db = getDatabase();
+    const currentUser = auth.currentUser;
+    const messageData = {
+      text: message.trim(),
+      senderId: currentUser.uid,
+      timestamp: serverTimestamp(),
+      type: 'text',
+    };
+
+    // Add message to chat
+    const newMessageRef = push(ref(db, `chats/${chatId}/messages`));
+    await set(newMessageRef, messageData);
+    
+    setMessage(''); // Clear input
+  };
 
   const renderMessage = ({ item }) => {
-    const isMyMessage = item.sender === 'me';
+    const isMyMessage = item.senderId === auth.currentUser?.uid;
 
     if (item.type === 'voice') {
       return (
@@ -89,7 +181,9 @@ const ChatScreen = ({ route, navigation }) => {
           </TouchableOpacity>
           <View style={styles.voiceWaveform} />
           <Text style={styles.voiceDuration}>{item.duration}</Text>
-          <Text style={styles.timestamp}>{item.timestamp}</Text>
+          <Text style={styles.timestamp}>
+            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
         </View>
       );
     }
@@ -100,7 +194,9 @@ const ChatScreen = ({ route, navigation }) => {
         isMyMessage ? styles.myMessage : styles.theirMessage
       ]}>
         <Text style={styles.messageText}>{item.text}</Text>
-        <Text style={styles.timestamp}>{item.timestamp}</Text>
+        <Text style={styles.timestamp}>
+          {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </Text>
       </View>
     );
   };
@@ -126,6 +222,484 @@ const ChatScreen = ({ route, navigation }) => {
     const scrollY = event.nativeEvent.contentOffset.y;
     setIsScrolled(scrollY > 10);
   };
+
+  // Initialize WebRTC
+  const setupWebRTC = async () => {
+    try {
+      console.log('Creating peer connection...');  // Debug log
+      peerConnection.current = new RTCPeerConnection(configuration);
+
+      // Get local stream
+      console.log('Getting user media...');  // Debug log
+      const stream = await mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
+      
+      console.log('Setting local stream...');  // Debug log
+      setLocalStream(stream);
+
+      // Add stream to peer connection
+      stream.getTracks().forEach((track) => {
+        console.log('Adding track to peer connection...');  // Debug log
+        peerConnection.current.addTrack(track, stream);
+      });
+
+      // Handle remote stream
+      peerConnection.current.ontrack = (event) => {
+        console.log('Received remote track...');  // Debug log
+        setRemoteStream(event.streams[0]);
+      };
+
+      // Handle ICE candidates
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('Sending ICE candidate...');  // Debug log
+          const db = getDatabase();
+          push(ref(db, `calls/${chatId}/candidates/${auth.currentUser.uid}`), {
+            candidate: event.candidate.toJSON(),
+            timestamp: serverTimestamp(),
+          });
+        }
+      };
+
+      // Add connection state change handler
+      peerConnection.current.onconnectionstatechange = () => {
+        console.log('Connection state:', peerConnection.current.connectionState);  // Debug log
+      };
+
+    } catch (error) {
+      console.error('WebRTC setup error:', error);  // Debug log
+      throw error;
+    }
+  };
+
+  // Modify the checkCallSecurity function
+  const checkCallSecurity = async () => {
+    try {
+      const db = getDatabase();
+      const currentUser = auth.currentUser;
+      
+      // Check if user is authenticated
+      if (!currentUser) {
+        throw new Error('You must be logged in to make calls');
+      }
+
+      // Check if we have a valid chatId and other user ID
+      if (!chatId || !route.params?.userId) {
+        throw new Error('Invalid chat or user');
+      }
+
+      // Check for ongoing call
+      const activeCallRef = ref(db, `calls/${chatId}`);
+      const activeCallSnapshot = await get(activeCallRef);
+      if (activeCallSnapshot.exists()) {
+        const callData = activeCallSnapshot.val();
+        // Only throw error if there's an active call that hasn't ended
+        if (callData && !callData.ended) {
+          throw new Error('There is already an active call in this chat');
+        }
+      }
+
+      // Check call permissions
+      try {
+        const stream = await mediaDevices.getUserMedia({ audio: true });
+        // Stop the test stream immediately
+        stream.getTracks().forEach(track => track.stop());
+      } catch (error) {
+        throw new Error('Microphone permission denied');
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Security check failed:', error.message);  // Debug log
+      setCallError(error.message);
+      return false;
+    }
+  };
+
+  // Add this function to monitor user presence
+  const setupUserPresence = () => {
+    if (!auth.currentUser) return;
+    
+    const db = getDatabase();
+    const userStatusRef = ref(db, `users/${auth.currentUser.uid}/status`);
+    
+    // Set user as online
+    set(userStatusRef, 'online');
+    
+    // Set up disconnect hook
+    const connectedRef = ref(db, '.info/connected');
+    onValue(connectedRef, (snapshot) => {
+      if (snapshot.val() === true) {
+        // When user disconnects, update the status
+        set(userStatusRef, 'offline');
+      }
+    });
+  };
+
+  // Modify the startCall function
+  const startCall = async () => {
+    try {
+      console.log('Starting call...');  // Debug log
+      
+      // Check permissions first
+      const hasPermissions = await checkCallSecurity();
+      if (!hasPermissions) {
+        console.log('Permission denied');  // Debug log
+        return;
+      }
+
+      // Check if user is authenticated
+      if (!auth.currentUser) {
+        setCallError('You must be logged in to make calls');
+        console.log('User not authenticated');  // Debug log
+        return;
+      }
+
+      // Check if chat is initialized
+      if (!chatId) {
+        setCallError('Chat not initialized');
+        console.log('No chatId available');  // Debug log
+        return;
+      }
+
+      setIsCalling(true);
+      console.log('Setting up WebRTC...');  // Debug log
+      
+      try {
+        await setupWebRTC();
+      } catch (error) {
+        console.error('WebRTC setup error:', error);  // Debug log
+        setCallError('Failed to setup call: ' + error.message);
+        setIsCalling(false);
+        return;
+      }
+
+      // Set call timeout (30 seconds)
+      const timeout = setTimeout(() => {
+        if (!isInCall) {
+          console.log('Call timeout');  // Debug log
+          endCall();
+          setCallError('Call timeout - no answer');
+        }
+      }, 30000);
+      setCallTimeout(timeout);
+
+      try {
+        // Create and set local description
+        console.log('Creating offer...');  // Debug log
+        const offer = await peerConnection.current.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: false,
+          voiceActivityDetection: true,
+        });
+        
+        console.log('Setting local description...');  // Debug log
+        await peerConnection.current.setLocalDescription(offer);
+
+        // Send offer to Firebase
+        const db = getDatabase();
+        const encryptedOffer = {
+          ...offer,
+          timestamp: serverTimestamp(),
+          from: auth.currentUser.uid,
+          secure: true,
+          version: '1.0',
+        };
+
+        console.log('Sending offer to Firebase...');  // Debug log
+        await set(ref(db, `calls/${chatId}/offer`), encryptedOffer);
+
+        // Set up call monitoring
+        setupCallMonitoring();
+
+      } catch (error) {
+        console.error('Offer creation/sending error:', error);  // Debug log
+        setCallError('Failed to initiate call: ' + error.message);
+        endCall();
+      }
+
+    } catch (error) {
+      console.error('Call start error:', error);  // Debug log
+      setCallError(error.message);
+      setIsCalling(false);
+    }
+  };
+
+  // Add call monitoring function
+  const setupCallMonitoring = () => {
+    // Monitor connection state
+    peerConnection.current.onconnectionstatechange = () => {
+      const state = peerConnection.current.connectionState;
+      if (state === 'failed' || state === 'disconnected') {
+        setCallError('Call connection lost');
+        endCall();
+      }
+    };
+
+    // Monitor ICE connection state
+    peerConnection.current.oniceconnectionstatechange = () => {
+      const state = peerConnection.current.iceConnectionState;
+      if (state === 'failed') {
+        setCallError('ICE connection failed');
+        endCall();
+      }
+    };
+
+    // Start call duration timer when connected
+    if (isInCall) {
+      durationInterval.current = setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
+    }
+  };
+
+  // Modify the answerCall function
+  const answerCall = async () => {
+    try {
+      const securityCheck = await checkCallSecurity();
+      if (!securityCheck) return;
+
+      await setupWebRTC();
+
+      const db = getDatabase();
+      const snapshot = await get(ref(db, `calls/${chatId}/offer`));
+      const data = snapshot.val();
+      
+      // Verify offer security
+      if (!data?.secure || !data?.version) {
+        throw new Error('Invalid call offer');
+      }
+
+      if (data?.offer) {
+        const remoteDesc = new RTCSessionDescription(data.offer);
+        await peerConnection.current.setRemoteDescription(remoteDesc);
+
+        const answer = await peerConnection.current.createAnswer({
+          voiceActivityDetection: true,
+        });
+        await peerConnection.current.setLocalDescription(answer);
+
+        // Send encrypted answer
+        const encryptedAnswer = {
+          answer,
+          timestamp: serverTimestamp(),
+          from: auth.currentUser.uid,
+          secure: true,
+          version: '1.0',
+        };
+
+        await set(ref(db, `calls/${chatId}/answer`), encryptedAnswer);
+      }
+
+      setIsInCall(true);
+      setupCallMonitoring();
+
+    } catch (error) {
+      setCallError(error.message);
+      endCall();
+    }
+  };
+
+  // Modify the endCall function
+  const endCall = () => {
+    try {
+      // Clear timeouts and intervals
+      if (callTimeout) {
+        clearTimeout(callTimeout);
+        setCallTimeout(null);
+      }
+      if (durationInterval.current) {
+        clearInterval(durationInterval.current);
+        durationInterval.current = null;
+      }
+
+      // Stop all tracks
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          track.stop();
+          localStream.removeTrack(track);
+        });
+      }
+
+      // Close and cleanup peer connection
+      if (peerConnection.current) {
+        peerConnection.current.onicecandidate = null;
+        peerConnection.current.ontrack = null;
+        peerConnection.current.onconnectionstatechange = null;
+        peerConnection.current.oniceconnectionstatechange = null;
+        peerConnection.current.close();
+        peerConnection.current = null;
+      }
+
+      setLocalStream(null);
+      setRemoteStream(null);
+      setIsInCall(false);
+      setIsCalling(false);
+      setCallDuration(0);
+      setIsCallMuted(false);
+      setIsSpeakerOn(false);
+
+      // Clean up Firebase call data with security check
+      const db = getDatabase();
+      const currentUser = auth.currentUser;
+      if (currentUser && chatId) {
+        set(ref(db, `calls/${chatId}`), {
+          ended: {
+            by: currentUser.uid,
+            timestamp: serverTimestamp()
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error('Error ending call:', error);
+    }
+  };
+
+  // Add these new call control functions
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !track.enabled;
+      });
+      setIsCallMuted(!isCallMuted);
+    }
+  };
+
+  const toggleSpeaker = () => {
+    if (remoteStream) {
+      // Toggle audio output (implementation depends on device capabilities)
+      setIsSpeakerOn(!isSpeakerOn);
+    }
+  };
+
+  // Modify the renderCallModal to include new features
+  const renderCallModal = () => (
+    <Modal
+      visible={isCalling || isInCall}
+      animationType="slide"
+      transparent={true}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.callCard}>
+          <Image 
+            style={styles.callAvatar}
+            source={{ uri: route.params?.avatar || 'https://via.placeholder.com/100' }}
+          />
+          <Text style={styles.callName}>{route.params?.username}</Text>
+          <Text style={styles.callStatus}>
+            {isInCall ? `On Call ${formatDuration(callDuration)}` : (isCalling ? 'Calling...' : 'Incoming Call')}
+          </Text>
+          
+          {callError && (
+            <Text style={styles.errorText}>{callError}</Text>
+          )}
+          
+          <View style={styles.callActions}>
+            {isInCall && (
+              <>
+                <TouchableOpacity 
+                  style={[styles.callButton, styles.controlButton]} 
+                  onPress={toggleMute}
+                >
+                  <MaterialIcons 
+                    name={isCallMuted ? "mic-off" : "mic"} 
+                    size={24} 
+                    color="#fff" 
+                  />
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={[styles.callButton, styles.controlButton]} 
+                  onPress={toggleSpeaker}
+                >
+                  <MaterialIcons 
+                    name={isSpeakerOn ? "volume-up" : "volume-down"} 
+                    size={24} 
+                    color="#fff" 
+                  />
+                </TouchableOpacity>
+              </>
+            )}
+            
+            {!isInCall && !isCalling && (
+              <>
+                <TouchableOpacity 
+                  style={[styles.callButton, styles.answerButton]} 
+                  onPress={answerCall}
+                >
+                  <MaterialIcons name="call" size={30} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.callButton, styles.declineButton]} 
+                  onPress={endCall}
+                >
+                  <MaterialIcons name="call-end" size={30} color="#fff" />
+                </TouchableOpacity>
+              </>
+            )}
+            
+            {(isInCall || isCalling) && (
+              <TouchableOpacity 
+                style={[styles.callButton, styles.declineButton]} 
+                onPress={endCall}
+              >
+                <MaterialIcons name="call-end" size={30} color="#fff" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Add this utility function
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Add these new styles
+  const additionalStyles = {
+    errorText: {
+      color: '#FF3B30',
+      fontSize: 14,
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    controlButton: {
+      backgroundColor: '#666666',
+      width: 50,
+      height: 50,
+      borderRadius: 25,
+    },
+  };
+
+  // Add the additional styles to your StyleSheet
+  Object.assign(styles, additionalStyles);
+
+  // Modify the header right buttons to include call button
+  const headerRight = (
+    <View style={styles.headerRight}>
+      <TouchableOpacity 
+        style={styles.headerButton}
+        onPress={() => {
+          console.log('Call button pressed');  // Debug log
+          console.log('ChatId:', chatId);  // Debug log
+          console.log('User:', auth.currentUser?.uid);  // Debug log
+          startCall();
+        }}
+      >
+        <MaterialIcons name="call" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.headerButton}>
+        <MaterialIcons name="more-horiz" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -163,17 +737,7 @@ const ChatScreen = ({ route, navigation }) => {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.headerRight}>
-            <TouchableOpacity style={styles.headerButton}>
-              <MaterialIcons name="videocam" size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerButton}>
-              <MaterialIcons name="call" size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerButton}>
-              <MaterialIcons name="more-horiz" size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
+          {headerRight}
         </View>
       </Animated.View>
 
@@ -190,6 +754,7 @@ const ChatScreen = ({ route, navigation }) => {
           inverted={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          ref={flatListRef}
         />
 
         {showAttachments && renderAttachmentButtons()}
@@ -217,11 +782,17 @@ const ChatScreen = ({ route, navigation }) => {
             <MaterialIcons name="emoji-emotions" size={24} color="#666666" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.micButton}>
-            <MaterialIcons name="mic" size={24} color="#666666" />
+          <TouchableOpacity 
+            style={[styles.sendButton, { opacity: message.trim().length > 0 ? 1 : 0.5 }]}
+            onPress={sendMessage}
+            disabled={message.trim().length === 0}
+          >
+            <MaterialIcons name="send" size={24} color="#007AFF" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {renderCallModal()}
     </SafeAreaView>
   );
 };
@@ -412,9 +983,63 @@ const styles = StyleSheet.create({
   emojiButton: {
     padding: 8,
   },
-  micButton: {
+  sendButton: {
     padding: 8,
-  }
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  callCard: {
+    backgroundColor: '#1A1A1A',
+    padding: 20,
+    borderRadius: 20,
+    alignItems: 'center',
+    width: '80%',
+  },
+  callAvatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    marginBottom: 20,
+  },
+  callName: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  callStatus: {
+    color: '#999999',
+    fontSize: 16,
+    marginBottom: 30,
+  },
+  callActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 30,
+  },
+  callButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  answerButton: {
+    backgroundColor: '#4CAF50',
+  },
+  declineButton: {
+    backgroundColor: '#FF3B30',
+  },
 });
 
 export default ChatScreen; 
