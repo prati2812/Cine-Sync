@@ -14,10 +14,13 @@ import { getDatabase, ref, set, get, query, orderByChild, equalTo } from 'fireba
 import {auth } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import colors from '../../../theme/Colors';
+import { useSelector } from 'react-redux';
 
 const CreateRoomScreen = ({ navigation, route }) => {
   const editingRoom = route.params?.room;
   const isEditing = !!editingRoom;
+
+  const loggedInUser = useSelector(state => state.user.user);
 
   const [roomName, setRoomName] = useState(editingRoom?.name || '');
   const [inviteEmails, setInviteEmails] = useState(editingRoom?.participants || []);
@@ -130,7 +133,8 @@ const CreateRoomScreen = ({ navigation, route }) => {
         name: roomName,
         creator: isEditing ? editingRoom.creator : {
           uid: user.uid,
-          email: user.email
+          email: user.email,
+          userName: loggedInUser?.username || 'Anonymous'
         },
         streamUrl: streamUrl,
         participants: [...inviteEmails],
@@ -138,6 +142,9 @@ const CreateRoomScreen = ({ navigation, route }) => {
         createdAt: isEditing ? editingRoom.createdAt : new Date().toISOString(),
         status: 'active'
       };
+
+      console.log("Newwww Dataaa", roomData, loggedInUser);
+      
       
       await set(roomRef, roomData);
       
