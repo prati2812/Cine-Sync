@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, ScrollView } from 'react-native';
 import { signOut, onAuthStateChanged } from 'firebase/auth';
 import { getDatabase, ref, onValue } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Logo from '../../components/Logo1';
+import Logo from '../../../components/Logo1';
 
 
 const UserProfileScreen = ({ navigation }) => {

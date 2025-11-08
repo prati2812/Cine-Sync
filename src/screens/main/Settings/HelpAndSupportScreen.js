@@ -9,7 +9,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Logo from '../../components/Logo1';
+import Logo from '../../../components/Logo1';
 
 const HelpAndSupportScreen = ({ navigation }) => {
   const [expandedSection, setExpandedSection] = useState(null);

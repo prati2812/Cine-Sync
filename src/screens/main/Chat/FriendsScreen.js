@@ -14,9 +14,9 @@ import {
   Easing
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Logo from '../../components/Logo1';
+import Logo from '../../../components/Logo1';
 import { getDatabase, ref,set,remove, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 
 const EmptyStateAnimation = ({ icon, title, subtitle }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;

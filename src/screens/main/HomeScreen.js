@@ -27,7 +27,7 @@ import Animated, {
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
 import CreateRoomModal from '../../components/CreateRoomModal';
-import WaitingScreen from './WaitingScreen';
+import WaitingScreen from './Streaming/WaitingScreen';
 import colors from '../../theme/Colors';
 
 const HomeScreen = () => {

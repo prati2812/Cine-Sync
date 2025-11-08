@@ -6,16 +6,16 @@ import LoginScreen from './src/screens/auth/LoginScreen';
 import SignUpScreen from './src/screens/auth/SignUpScreen';
 import ForgetPasswordScreen from './src/screens/auth/ForgetPasswordScreen';
 import HomeScreen from './src/screens/main/HomeScreen';
-import StreamingScreen from './src/screens/main/StreamingScreen';
-import UserProfileScreen from './src/screens/main/UserProfileScreen';
+import StreamingScreen from './src/screens/main/Streaming/StreamingScreen';
+import UserProfileScreen from './src/screens/main/Settings/UserProfileScreen';
 import { auth } from './src/config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import Config from 'react-native-config';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import WaitingScreen from './src/screens/main/WaitingScreen';
+import WaitingScreen from './src/screens/main/Streaming/WaitingScreen';
 import { AppState } from 'react-native';
 import { getDatabase, ref, set, update, onValue, onDisconnect, serverTimestamp } from 'firebase/database';
-import FriendsScreen from './src/screens/main/FriendsScreen';
+import FriendsScreen from './src/screens/main/Chat/FriendsScreen';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Animated, { 
   useAnimatedStyle, 
@@ -24,11 +24,11 @@ import Animated, {
   interpolate
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/Ionicons';
-import SettingsScreen from './src/screens/main/SettingsScreen';
-import ChatScreen from './src/screens/main/ChatScreen';
-import CreateRoomScreen from './src/screens/main/CreateRoomScreen';
-import HelpAndSupportScreen from './src/screens/main/HelpAndSupportScreen';
-import SetupPINScreen from './src/screens/main/SetupPINScreen';
+import SettingsScreen from './src/screens/main/Settings/SettingsScreen';
+import ChatScreen from './src/screens/main/Chat/ChatScreen';
+import CreateRoomScreen from './src/screens/main/Streaming/CreateRoomScreen';
+import HelpAndSupportScreen from './src/screens/main/Settings/HelpAndSupportScreen';
+import SetupPINScreen from './src/screens/main/Settings/SetupPINScreen';
 import PINVerificationScreen from './src/screens/auth/PINVerificationScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import VerifyEmailScreen from './src/screens/auth/VerifyEmailScreen';

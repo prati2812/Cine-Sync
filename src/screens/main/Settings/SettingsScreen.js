@@ -12,7 +12,7 @@ import {
   Image,
   Dimensions
 } from 'react-native';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 import { 
   updateProfile, 
   updatePassword, 

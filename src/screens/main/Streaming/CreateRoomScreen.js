@@ -11,9 +11,9 @@ import {
   Alert
 } from 'react-native';
 import { getDatabase, ref, set, get, query, orderByChild, equalTo } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import {auth } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import colors from '../../theme/Colors';
+import colors from '../../../theme/Colors';
 
 const CreateRoomScreen = ({ navigation, route }) => {
   const editingRoom = route.params?.room;

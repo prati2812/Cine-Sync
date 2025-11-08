@@ -13,7 +13,7 @@ import YoutubePlayer from 'react-native-youtube-iframe';
 import Orientation from 'react-native-orientation-locker';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { getDatabase, ref, onValue, set } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 import Animated, { 
   withSpring, 
   useAnimatedStyle, 

@@ -20,7 +20,7 @@ import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from '@react-native-community/blur';
 import { getDatabase, ref, push, onValue, off, serverTimestamp, set, get } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 import {
   RTCPeerConnection,
   RTCIceCandidate,

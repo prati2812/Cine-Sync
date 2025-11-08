@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, SafeAreaView, Animated, ScrollView } from 'react-native';
 import { getDatabase, ref, onValue } from 'firebase/database';
-import { auth } from '../../config/firebase';
+import { auth } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 
 const WaitingScreen = ({ route, navigation }) => {
