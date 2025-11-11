@@ -22,6 +22,7 @@ import ChatScreen from '../screens/main/Chat/ChatScreen';
 import CreateRoomScreen from '../screens/main/Streaming/CreateRoomScreen';
 import HelpAndSupportScreen from '../screens/main/Settings/HelpAndSupportScreen';
 import SetupPINScreen from '../screens/main/Settings/SetupPINScreen';
+import StreamInfoScreen from '../screens/main/Streaming/StreamInfoScreen';
 import MainTabs from './MainTabs';
 
 const Stack = createNativeStackNavigator();
@@ -125,6 +126,7 @@ const AppNavigator = () => {
               <Stack.Screen name="MainTabs" component={MainTabs} />
               <Stack.Screen name="WaitingScreen" component={WaitingScreen} />
               <Stack.Screen name="Streaming" component={StreamingScreen} />
+              <Stack.Screen name="StreamInfo" component={StreamInfoScreen} />
               <Stack.Screen name="Settings" component={SettingsScreen} />
               <Stack.Screen name="Chat" component={ChatScreen} />
               <Stack.Screen name="CreateRoom" component={CreateRoomScreen} />

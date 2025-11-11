@@ -170,11 +170,23 @@ const HomeScreen = () => {
           [
             {
               text: 'Join Room',
-              onPress: () => navigation.navigate('WaitingScreen', {
-                roomId: item.roomId,
-                roomName: item.name,
-                streamUrl: item.streamUrl,
-              })
+              onPress: () => {
+                console.log("Newww Dataa", item?.participants?.length);
+                if(item?.participants?.length === 0 || item?.participants === undefined){
+                  navigation.navigate('StreamInfo', {
+                    roomId: item.roomId,
+                    roomName: item.name,
+                    streamUrl: item.streamUrl,
+                  });
+                 
+                }else{
+                  navigation.navigate('WaitingScreen', {
+                    roomId: item.roomId,
+                    roomName: item.name,
+                    streamUrl: item.streamUrl,
+                  });
+                }
+              }
             },
             {
               text: 'Edit Room',
@@ -368,7 +380,7 @@ const HomeScreen = () => {
         ) : (
           <View style={styles.emptySearchContainer}>
             <Text style={styles.emptySearchText}>
-             { renderEmptyState()}
+             {searchQuery ? renderEmptyState() : renderEmptyState()}
             </Text>
           </View>
         )}
