@@ -178,17 +178,6 @@ const StreamInfoScreen = ({route, navigation}) => {
     setCurrentTime(value);
   };
 
-  const takeScreenshot = async () => {
-    try {
-      const uri = await viewShotRef.current.capture();
-      console.log('Screenshot URI:', uri);
-      // You can now save this URI to the device's media library
-      // using libraries like @react-native-community/cameraroll or Expo's MediaLibrary
-    } catch (error) {
-      console.error('Error taking screenshot:', error);
-    }
-  };
-
   const renderEmptyState = () => (
     <Pressable style={styles.emptyStateContainer} onPress={openNoteBottomSheet}>
       <Animated.View style={[styles.emptyStateIconContainer, animatedStyle]}>
@@ -196,7 +185,7 @@ const StreamInfoScreen = ({route, navigation}) => {
       </Animated.View>
       <Text style={styles.emptyStateTitle}>Nothing on the Storyboard</Text>
       <Text style={styles.emptyStateDescription}>
-        Spot something interesting? Pause the scene and jot it down.
+        Spot something interesting ? jot it down.
       </Text>
     </Pressable>
   );
@@ -325,7 +314,7 @@ const StreamInfoScreen = ({route, navigation}) => {
         backgroundColor={colors.STATUSBAR_BG_COLOR}
         barStyle="light-content"
       />
-      <Pressable
+      <View
         style={{
           flex: 1,
         }}>
@@ -477,6 +466,8 @@ const StreamInfoScreen = ({route, navigation}) => {
           <View
             style={{
               position: 'absolute',
+              height: screenHeight - videoHeight - 60,
+              width: screenWidth,
               marginTop: screenHeight / 3.9 + 15,
             }}>
             <View style={{paddingHorizontal: 16, maxWidth: screenWidth}}>
@@ -486,6 +477,7 @@ const StreamInfoScreen = ({route, navigation}) => {
                     color: colors.TITLE_COLOR,
                     fontSize: 20,
                     fontWeight: 'bold',
+                    marginTop: 5,
                   }}>
                   {videoInfo.title}
                 </Text>
@@ -514,18 +506,20 @@ const StreamInfoScreen = ({route, navigation}) => {
             <View
               style={{
                 marginTop: 20,
-                height: screenHeight,
                 width: screenWidth,
+                flex: 1,
               }}>
-
-              <View style={{
-                marginHorizontal: 16,
-              }}>  
-
+              <View
+                style={{
+                  marginHorizontal: 16,
+                  flex: 1,
+                }}>
                 <FlatList
                   data={notes}
                   keyExtractor={(item, index) => index.toString()}
                   ListHeaderComponent={renderNotesHeader}
+                  showsVerticalScrollIndicator={false}
+                  stickyHeaderIndices={[0]}
                   renderItem={({item}) => (
                     <View
                       style={{
@@ -555,14 +549,12 @@ const StreamInfoScreen = ({route, navigation}) => {
                       )}
                     </View>
                   )}
-                 /> 
-
-                </View>   
-
+                />
+              </View>
             </View>
           </View>
         </View>
-      </Pressable>
+      </View>
 
       <Modal
         visible={isModalVisible}
