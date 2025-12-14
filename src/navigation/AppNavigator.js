@@ -24,6 +24,7 @@ import HelpAndSupportScreen from '../screens/main/Settings/HelpAndSupportScreen'
 import SetupPINScreen from '../screens/main/Settings/SetupPINScreen';
 import StreamInfoScreen from '../screens/main/Streaming/StreamInfoScreen';
 import MainTabs from './MainTabs';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 
 const Stack = createNativeStackNavigator();
 
@@ -118,30 +119,38 @@ const AppNavigator = () => {
     return <VerifyEmailScreen onSuccess={() => setIsEmailVerified(true)} />;
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {user ? (
-            <>
-              <Stack.Screen name="MainTabs" component={MainTabs} />
-              <Stack.Screen name="WaitingScreen" component={WaitingScreen} />
-              <Stack.Screen name="Streaming" component={StreamingScreen} />
-              <Stack.Screen name="StreamInfo" component={StreamInfoScreen} />
-              <Stack.Screen name="Settings" component={SettingsScreen} />
-              <Stack.Screen name="Chat" component={ChatScreen} />
-              <Stack.Screen name="CreateRoom" component={CreateRoomScreen} />
-              <Stack.Screen name="HelpAndSupport" component={HelpAndSupportScreen} />
-              <Stack.Screen name="SetupPIN" component={SetupPINScreen} />
-            </>
-          ) : (
-            <>
-              <Stack.Screen name="Login" component={LoginScreen} />
-              <Stack.Screen name="SignUp" component={SignUpScreen} />
-              <Stack.Screen name="ForgetPassword" component={ForgetPasswordScreen} />
-            </>
-          )}
-        </Stack.Navigator>
-      </NavigationContainer>
+    <GestureHandlerRootView style={{flex: 1}}>
+      <BottomSheetModalProvider>
+        <NavigationContainer>
+          <Stack.Navigator screenOptions={{headerShown: false}}>
+            {user ? (
+              <>
+                <Stack.Screen name="MainTabs" component={MainTabs} />
+                <Stack.Screen name="WaitingScreen" component={WaitingScreen} />
+                <Stack.Screen name="Streaming" component={StreamingScreen} />
+                <Stack.Screen name="StreamInfo" component={StreamInfoScreen} />
+                <Stack.Screen name="Settings" component={SettingsScreen} />
+                <Stack.Screen name="Chat" component={ChatScreen} />
+                <Stack.Screen name="CreateRoom" component={CreateRoomScreen} />
+                <Stack.Screen
+                  name="HelpAndSupport"
+                  component={HelpAndSupportScreen}
+                />
+                <Stack.Screen name="SetupPIN" component={SetupPINScreen} />
+              </>
+            ) : (
+              <>
+                <Stack.Screen name="Login" component={LoginScreen} />
+                <Stack.Screen name="SignUp" component={SignUpScreen} />
+                <Stack.Screen
+                  name="ForgetPassword"
+                  component={ForgetPasswordScreen}
+                />
+              </>
+            )}
+          </Stack.Navigator>
+        </NavigationContainer>
+      </BottomSheetModalProvider>
     </GestureHandlerRootView>
   );
 };
