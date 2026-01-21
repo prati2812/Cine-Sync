@@ -26,11 +26,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import {formatTime, getYoutubeVideoId} from '../../../functions';
-import {getDatabase, ref, onValue, set} from 'firebase/database';
+import {getDatabase, ref, onValue, set, get, query, orderByChild, equalTo, push, off} from 'firebase/database';
 import {auth} from '../../../config/firebase';
 import Slider from '@react-native-community/slider';
 import ViewShot from 'react-native-view-shot';
-import BottomSheet from '@gorhom/bottom-sheet';
+import RNFS from 'react-native-fs';
 
 const StreamInfoScreen = ({route, navigation}) => {
   const {roomId, roomName, streamUrl} = route.params;
@@ -53,6 +53,10 @@ const StreamInfoScreen = ({route, navigation}) => {
   const [isCapturing, setIsCapturing] = useState(false);
 
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isNoteVisible, setIsNoteVisible] = useState(false);
+  const [noteModalData , setNoteModalData] = useState(null);
+
+  const db = getDatabase();
 
   const emptyStateScale = useSharedValue(1);
 
@@ -91,6 +95,29 @@ const StreamInfoScreen = ({route, navigation}) => {
       }
     });
   }, [roomId]);
+
+
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+  
+    const notesRef = ref(db, `notes/${user.uid}/${roomId}`);
+  
+    const unsubscribe = onValue(notesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const notesArray = Object.values(data);
+  
+        setNotes(notesArray);
+        console.log('Realtime Notes:', notesArray);
+      } else {
+        setNotes([]);
+      }
+    });
+  
+    return () => off(notesRef);
+  }, [roomId]);
+  
 
   useEffect(() => {
     let timeoutId;
@@ -205,33 +232,59 @@ const StreamInfoScreen = ({route, navigation}) => {
     }
   };
 
+  const convertUriToBase64 = async (uri) => {
+    try {
+      const base64 = await RNFS.readFile(uri, 'base64');
+      return `data:image/jpeg;base64,${base64}`;
+    } catch (error) {
+      console.error('Base64 conversion failed:', error);
+      return null;
+    }
+  };
+
   const videoHeight = screenWidth * (9 / 16);
 
-  const saveNote = () => {
-    if (!noteText.trim() && !screenshotUri) {
-      Alert.alert(
-        'Add something',
-        'Please write a note or capture a screenshot.',
-      );
-      return;
+  const saveNote = async () => {
+    try{
+      if (!noteText.trim() && !screenshotUri) {
+        Alert.alert(
+          'Add something',
+          'Please write a note or capture a screenshot.',
+        );
+        return;
+      }
+  
+       const user = auth.currentUser;
+  
+      const notesRef = ref(db , `notes/${user.uid}/${roomId}`);
+  
+      const newNotesRef = push(notesRef);
+
+      const base64Screenshot = screenshotUri ? await convertUriToBase64(screenshotUri) : null;
+
+      console.log('Base64 Screenshot:', base64Screenshot);
+      
+  
+  
+      const newNote = {
+        note: noteText.trim(),
+        isScreenshotIncluded: screenshotUri ? true : false,
+        screenshotUrl: base64Screenshot || '',
+        date: new Date().toISOString(),
+        id: newNotesRef.key,
+      };
+  
+      await set(newNotesRef, newNote);
+    
+      setNoteText('');
+      setScreenshotUri('');
+      setIsModalVisible(false);
+      setPlaying(true);
+  
+      console.log('Saved Notes:', newNote, user);
+    }catch(error){
+      console.log('Error saving note:', error);
     }
-
-    const newNote = {
-      note: noteText.trim(),
-      isScreenshotIncluded: screenshotUri ? true : false,
-      screenshotUrl: screenshotUri || '',
-      date: new Date().toISOString(),
-    };
-
-    setNotes(prev => [...prev, newNote]);
-
-    // Reset fields
-    setNoteText('');
-    setScreenshotUri('');
-    setIsModalVisible(false);
-    setPlaying(true);
-
-    console.log('Saved Notes:', newNote);
   };
 
   const renderNotesHeader = () => {
@@ -299,10 +352,23 @@ const StreamInfoScreen = ({route, navigation}) => {
       </View>
     );
   };
+
+  const handleDeleteNote = async() => {
+     
+    try{
+      const user = auth.currentUser;
+      if(!user || !noteModalData) return;
+
+      const noteRef = ref(db , `notes/${user.uid}/${roomId}/${noteModalData.id}`);
+
+      await set(noteRef , null);
+
+      setIsNoteVisible(false);
+    }catch(error){
+      console.log('Error deleting note:', error);
+    }
+  }
   
-
-
-
 
   return (
     <SafeAreaView
@@ -521,33 +587,42 @@ const StreamInfoScreen = ({route, navigation}) => {
                   showsVerticalScrollIndicator={false}
                   stickyHeaderIndices={[0]}
                   renderItem={({item}) => (
-                    <View
+                    <TouchableOpacity
                       style={{
                         backgroundColor: 'rgba(255,255,255,0.05)',
                         padding: 16,
                         borderRadius: 12,
-                        marginBottom: 12,
+                        flexDirection: 'row',
+                        gap: 10,
+                        alignItems: "center",
+                        marginBottom: 15,
+                      }}
+                      onPress={() => {
+                        setIsNoteVisible(true);
+                        setNoteModalData(item);
                       }}>
-                      <Text
-                        style={{
-                          color: 'white',
-                          fontSize: 16,
-                          marginBottom: item.isScreenshotIncluded ? 12 : 0,
-                        }}>
-                        {item.note}
-                      </Text>
                       {item.isScreenshotIncluded && (
                         <Image
-                          source={{uri: 'file://' + item.screenshotUrl}}
+                          source={{uri: item.screenshotUrl}}
                           style={{
-                            width: '100%',
-                            height: 200,
+                            aspectRatio: 1,
+                            height: 60,
                             borderRadius: 12,
                           }}
                           resizeMode="cover"
                         />
                       )}
-                    </View>
+                      <Text
+                        style={{
+                          color: 'white',
+                          fontSize: 16,
+                          textAlign: "flex-start",
+                          flex:1,
+                        }}
+                        numberOfLines={3}>
+                        {item.note}
+                      </Text>
+                    </TouchableOpacity>
                   )}
                 />
               </View>
@@ -644,30 +719,32 @@ const StreamInfoScreen = ({route, navigation}) => {
             />
 
             {/* Capture Screenshot */}
-            <TouchableOpacity
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.07)',
-                padding: 14,
-                borderRadius: 16,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.08)',
-              }}
-              onPress={captureScreenshot}
-              activeOpacity={0.8}>
-              <Icon name="camera-alt" size={22} color="white" />
-              <Text
+            {!screenshotUri && (
+              <TouchableOpacity
                 style={{
-                  color: 'white',
-                  marginLeft: 10,
-                  fontSize: 16,
-                  fontWeight: '500',
-                }}>
-                Capture Screenshot
-              </Text>
-            </TouchableOpacity>
+                  backgroundColor: 'rgba(255,255,255,0.07)',
+                  padding: 14,
+                  borderRadius: 16,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.08)',
+                }}
+                onPress={captureScreenshot}
+                activeOpacity={0.8}>
+                <Icon name="camera-alt" size={22} color="white" />
+                <Text
+                  style={{
+                    color: 'white',
+                    marginLeft: 10,
+                    fontSize: 16,
+                    fontWeight: '500',
+                  }}>
+                  Capture Screenshot
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Screenshot Preview */}
             {screenshotUri && (
@@ -714,6 +791,131 @@ const StreamInfoScreen = ({route, navigation}) => {
                   letterSpacing: 0.5,
                 }}>
                 Save Note
+              </Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={isNoteVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setIsNoteVisible(false);
+        }}>
+        {/* BACKDROP */}
+        <Pressable
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+          }}
+          onPress={() => {
+            setIsNoteVisible(false);
+          }}>
+          {/* BOTTOM SHEET */}
+          <Pressable
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+
+              backgroundColor: 'rgba(20,20,20,0.85)',
+              paddingHorizontal: 22,
+              paddingTop: 18,
+              paddingBottom: 30,
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+
+              // GLASS EFFECT
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.06)',
+              shadowColor: '#000',
+              shadowOpacity: 0.4,
+              shadowRadius: 16,
+              elevation: 15,
+            }}
+            onPress={e => e.stopPropagation()}>
+            {/* Handle Bar */}
+            <View
+              style={{
+                width: 45,
+                height: 5,
+                backgroundColor: 'rgba(255,255,255,0.25)',
+                borderRadius: 3,
+                alignSelf: 'center',
+                marginBottom: 18,
+              }}
+            />
+
+            {/* Input */}
+            <TextInput
+              placeholder="Write something..."
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={{
+                backgroundColor: 'rgba(40,40,40,0.85)',
+                color: 'white',
+                padding: 16,
+                borderRadius: 16,
+                fontSize: 16,
+                lineHeight: 22,
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.08)',
+                marginBottom: 16,
+                maxHeight: 150,
+              }}
+              multiline
+              value={noteModalData?.note}
+              onChangeText={setNoteText}
+              editable={false}
+            />
+
+            {/* Screenshot Preview */}
+            {noteModalData?.screenshotUrl && (
+              <View
+                style={{
+                  marginTop: 20,
+                  borderRadius: 16,
+                  overflow: 'hidden',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.08)',
+                  height: 200,
+                  width: '100%',
+                  backgroundColor: '#000',
+                }}>
+                <Image
+                  source={{uri: noteModalData?.screenshotUrl }}
+                  style={{width: '100%', height: '100%'}}
+                  resizeMode="cover"
+                />
+              </View>
+            )}
+
+            {/* SAVE BUTTON */}
+            <TouchableOpacity
+              style={{
+                marginTop: 24,
+                backgroundColor: colors.DELETE_RED_COLOR,
+                paddingVertical: 15,
+                borderRadius: 18,
+                alignItems: 'center',
+                justifyContent: 'center',
+                shadowColor: colors.DELETE_RED_COLOR,
+                shadowOpacity: 0.3,
+                shadowRadius: 10,
+                elevation: 8,
+              }}
+              onPress={handleDeleteNote}
+              activeOpacity={0.85}>
+              <Text
+                style={{
+                  color: 'white',
+                  fontSize: 17,
+                  fontWeight: '600',
+                  letterSpacing: 0.5,
+                }}>
+                  Delete
               </Text>
             </TouchableOpacity>
           </Pressable>
