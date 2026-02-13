@@ -13,27 +13,15 @@ import {
   Platform,
   KeyboardAvoidingView,
   Modal,
-  PermissionsAndroid,
+  Dimensions,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BlurView } from '@react-native-community/blur';
-import { getDatabase, ref, push, onValue, off, serverTimestamp, set, get } from 'firebase/database';
+import { getDatabase, ref, push, onValue, off, serverTimestamp, set } from 'firebase/database';
 import { auth } from '../../../config/firebase';
-import {
-  RTCPeerConnection,
-  RTCIceCandidate,
-  RTCSessionDescription,
-  mediaDevices,
-} from 'react-native-webrtc';
+import { useAudioCall } from '../../../webRTC/useAudioCall';
 
-const configuration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
-};
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const ChatScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
@@ -43,23 +31,40 @@ const ChatScreen = ({ route, navigation }) => {
   const [messages, setMessages] = useState([]);
   const [chatId, setChatId] = useState(null);
   const flatListRef = useRef(null);
-  const [isInCall, setIsInCall] = useState(false);
-  const [isCalling, setIsCalling] = useState(false);
-  const [localStream, setLocalStream] = useState(null);
-  const [remoteStream, setRemoteStream] = useState(null);
-  const peerConnection = useRef(null);
-  const [callError, setCallError] = useState(null);
-  const [callTimeout, setCallTimeout] = useState(null);
-  const [callDuration, setCallDuration] = useState(0);
-  const [isCallMuted, setIsCallMuted] = useState(false);
-  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
-  const durationInterval = useRef(null);
+
+  // Animations for call UI
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const ringAnim = useRef(new Animated.Value(0)).current;
+
+  // Use the audio/video call hook
+  const {
+    callState,
+    callType,
+    callDuration,
+    isMuted,
+    isSpeaker,
+    isCameraOff,
+    callError,
+    localStream,
+    remoteStream,
+    startCall,
+    answerCall,
+    declineCall,
+    endCall,
+    listenIncoming,
+    toggleMute,
+    toggleSpeaker,
+    toggleCamera,
+    switchCamera,
+    formatDuration,
+  } = useAudioCall(chatId);
+
+  // ─── Initialize chat ─────────────────────────────────────
 
   useEffect(() => {
     initializeChat();
     setupUserPresence();
     return () => {
-      // Cleanup listeners
       if (chatId) {
         const db = getDatabase();
         const chatRef = ref(db, `chats/${chatId}/messages`);
@@ -68,6 +73,59 @@ const ChatScreen = ({ route, navigation }) => {
     };
   }, []);
 
+  // Listen for incoming calls ONLY after chatId is ready
+  useEffect(() => {
+    if (!chatId) return;
+    const unsubscribe = listenIncoming();
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [chatId, listenIncoming]);
+
+  // Pulse animation for call states
+  useEffect(() => {
+    if (callState === 'calling' || callState === 'incoming') {
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.15,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulse.start();
+
+      const ring = Animated.loop(
+        Animated.sequence([
+          Animated.timing(ringAnim, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(ringAnim, {
+            toValue: 0,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      ring.start();
+
+      return () => {
+        pulse.stop();
+        ring.stop();
+        pulseAnim.setValue(1);
+        ringAnim.setValue(0);
+      };
+    }
+  }, [callState]);
+
   const initializeChat = async () => {
     const db = getDatabase();
     const currentUser = auth.currentUser;
@@ -75,12 +133,10 @@ const ChatScreen = ({ route, navigation }) => {
 
     if (!currentUser || !otherUserId) return;
 
-    // Check if chat already exists between these users
     const userChatsRef = ref(db, `user_chats/${currentUser.uid}`);
     onValue(userChatsRef, (snapshot) => {
       const chats = snapshot.val();
       if (chats) {
-        // Find chat with other user
         const existingChatId = Object.keys(chats).find(
           (key) => chats[key].otherUserId === otherUserId
         );
@@ -89,11 +145,9 @@ const ChatScreen = ({ route, navigation }) => {
           setChatId(existingChatId);
           listenToMessages(existingChatId);
         } else {
-          // Create new chat
           createNewChat(currentUser.uid, otherUserId);
         }
       } else {
-        // Create new chat
         createNewChat(currentUser.uid, otherUserId);
       }
     });
@@ -102,32 +156,31 @@ const ChatScreen = ({ route, navigation }) => {
   const createNewChat = async (currentUserId, otherUserId) => {
     const db = getDatabase();
     const newChatRef = push(ref(db, 'chats'));
-    const chatId = newChatRef.key;
+    const newChatId = newChatRef.key;
 
-    // Set up chat participants
     await Promise.all([
-      set(ref(db, `chats/${chatId}/participants/${currentUserId}`), true),
-      set(ref(db, `chats/${chatId}/participants/${otherUserId}`), true),
-      set(ref(db, `user_chats/${currentUserId}/${chatId}`), {
+      set(ref(db, `chats/${newChatId}/participants/${currentUserId}`), true),
+      set(ref(db, `chats/${newChatId}/participants/${otherUserId}`), true),
+      set(ref(db, `user_chats/${currentUserId}/${newChatId}`), {
         otherUserId,
         lastMessage: '',
         lastMessageTimestamp: serverTimestamp(),
       }),
-      set(ref(db, `user_chats/${otherUserId}/${chatId}`), {
+      set(ref(db, `user_chats/${otherUserId}/${newChatId}`), {
         otherUserId: currentUserId,
         lastMessage: '',
         lastMessageTimestamp: serverTimestamp(),
       }),
     ]);
 
-    setChatId(chatId);
-    listenToMessages(chatId);
+    setChatId(newChatId);
+    listenToMessages(newChatId);
   };
 
-  const listenToMessages = (chatId) => {
+  const listenToMessages = (activeChatId) => {
     const db = getDatabase();
-    const messagesRef = ref(db, `chats/${chatId}/messages`);
-    
+    const messagesRef = ref(db, `chats/${activeChatId}/messages`);
+
     onValue(messagesRef, (snapshot) => {
       const messagesData = snapshot.val();
       if (messagesData) {
@@ -135,11 +188,9 @@ const ChatScreen = ({ route, navigation }) => {
           id,
           ...data,
         }));
-        // Sort messages by timestamp
         messagesList.sort((a, b) => a.timestamp - b.timestamp);
         setMessages(messagesList);
-        
-        // Scroll to bottom
+
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
@@ -149,7 +200,7 @@ const ChatScreen = ({ route, navigation }) => {
 
   const sendMessage = async () => {
     if (!message.trim() || !chatId) return;
-    
+
     const db = getDatabase();
     const currentUser = auth.currentUser;
     const messageData = {
@@ -159,12 +210,30 @@ const ChatScreen = ({ route, navigation }) => {
       type: 'text',
     };
 
-    // Add message to chat
     const newMessageRef = push(ref(db, `chats/${chatId}/messages`));
     await set(newMessageRef, messageData);
-    
-    setMessage(''); // Clear input
+    setMessage('');
   };
+
+  const setupUserPresence = () => {
+    if (!auth.currentUser) return;
+
+    const db = getDatabase();
+    const userStatusRef = ref(db, `users/${auth.currentUser.uid}/status`);
+
+    set(userStatusRef, 'online');
+
+    const connectedRef = ref(db, '.info/connected');
+    onValue(connectedRef, (snapshot) => {
+      if (snapshot.val() === false) {
+        set(userStatusRef, 'offline');
+      } else {
+        set(userStatusRef, 'online');
+      }
+    });
+  };
+
+  // ─── Message rendering ───────────────────────────────────
 
   const renderMessage = ({ item }) => {
     const isMyMessage = item.senderId === auth.currentUser?.uid;
@@ -174,7 +243,7 @@ const ChatScreen = ({ route, navigation }) => {
         <View style={[
           styles.messageContainer,
           isMyMessage ? styles.myMessage : styles.theirMessage,
-          styles.voiceContainer
+          styles.voiceContainer,
         ]}>
           <TouchableOpacity style={styles.voicePlayButton}>
             <MaterialIcons name="play-arrow" size={24} color="#FFFFFF" />
@@ -191,7 +260,7 @@ const ChatScreen = ({ route, navigation }) => {
     return (
       <View style={[
         styles.messageContainer,
-        isMyMessage ? styles.myMessage : styles.theirMessage
+        isMyMessage ? styles.myMessage : styles.theirMessage,
       ]}>
         <Text style={styles.messageText}>{item.text}</Text>
         <Text style={styles.timestamp}>
@@ -223,477 +292,315 @@ const ChatScreen = ({ route, navigation }) => {
     setIsScrolled(scrollY > 10);
   };
 
-  // Initialize WebRTC
-  const setupWebRTC = async () => {
-    try {
-      console.log('Creating peer connection...');  // Debug log
-      peerConnection.current = new RTCPeerConnection(configuration);
+  // ─── Call Modal UI ────────────────────────────────────────
 
-      // Get local stream
-      console.log('Getting user media...');  // Debug log
-      const stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-      
-      console.log('Setting local stream...');  // Debug log
-      setLocalStream(stream);
+  const renderCallModal = () => {
+    const isVisible = callState !== 'idle';
+    const username = route.params?.username || 'Unknown';
+    const avatarUri = route.params?.avatar || 'https://via.placeholder.com/120';
+    const isVideo = callType === 'video';
 
-      // Add stream to peer connection
-      stream.getTracks().forEach((track) => {
-        console.log('Adding track to peer connection...');  // Debug log
-        peerConnection.current.addTrack(track, stream);
-      });
-
-      // Handle remote stream
-      peerConnection.current.ontrack = (event) => {
-        console.log('Received remote track...');  // Debug log
-        setRemoteStream(event.streams[0]);
-      };
-
-      // Handle ICE candidates
-      peerConnection.current.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('Sending ICE candidate...');  // Debug log
-          const db = getDatabase();
-          push(ref(db, `calls/${chatId}/candidates/${auth.currentUser.uid}`), {
-            candidate: event.candidate.toJSON(),
-            timestamp: serverTimestamp(),
-          });
-        }
-      };
-
-      // Add connection state change handler
-      peerConnection.current.onconnectionstatechange = () => {
-        console.log('Connection state:', peerConnection.current.connectionState);  // Debug log
-      };
-
-    } catch (error) {
-      console.error('WebRTC setup error:', error);  // Debug log
-      throw error;
-    }
-  };
-
-  // Modify the checkCallSecurity function
-  const checkCallSecurity = async () => {
-    try {
-      const db = getDatabase();
-      const currentUser = auth.currentUser;
-      
-      // Check if user is authenticated
-      if (!currentUser) {
-        throw new Error('You must be logged in to make calls');
-      }
-
-      // Check if we have a valid chatId and other user ID
-      if (!chatId || !route.params?.userId) {
-        throw new Error('Invalid chat or user');
-      }
-
-      // Check for ongoing call
-      const activeCallRef = ref(db, `calls/${chatId}`);
-      const activeCallSnapshot = await get(activeCallRef);
-      if (activeCallSnapshot.exists()) {
-        const callData = activeCallSnapshot.val();
-        // Only throw error if there's an active call that hasn't ended
-        if (callData && !callData.ended) {
-          throw new Error('There is already an active call in this chat');
-        }
-      }
-
-      // Check call permissions
-      try {
-        const stream = await mediaDevices.getUserMedia({ audio: true });
-        // Stop the test stream immediately
-        stream.getTracks().forEach(track => track.stop());
-      } catch (error) {
-        throw new Error('Microphone permission denied');
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Security check failed:', error.message);  // Debug log
-      setCallError(error.message);
-      return false;
-    }
-  };
-
-  // Add this function to monitor user presence
-  const setupUserPresence = () => {
-    if (!auth.currentUser) return;
-    
-    const db = getDatabase();
-    const userStatusRef = ref(db, `users/${auth.currentUser.uid}/status`);
-    
-    // Set user as online
-    set(userStatusRef, 'online');
-    
-    // Set up disconnect hook
-    const connectedRef = ref(db, '.info/connected');
-    onValue(connectedRef, (snapshot) => {
-      if (snapshot.val() === true) {
-        // When user disconnects, update the status
-        set(userStatusRef, 'offline');
-      }
+    const ringScale = ringAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 1.6],
     });
-  };
+    const ringOpacity = ringAnim.interpolate({
+      inputRange: [0, 0.5, 1],
+      outputRange: [0.4, 0.15, 0],
+    });
 
-  // Modify the startCall function
-  const startCall = async () => {
-    try {
-      console.log('Starting call...');  // Debug log
-      
-      // Check permissions first
-      const hasPermissions = await checkCallSecurity();
-      if (!hasPermissions) {
-        console.log('Permission denied');  // Debug log
-        return;
-      }
+    return (
+      <Modal
+        visible={isVisible}
+        animationType="fade"
+        transparent={false}
+        statusBarTranslucent
+      >
+        <View style={callStyles.container}>
+          {/* ── Video backgrounds when in video call ── */}
+          {isVideo && callState === 'connected' ? (
+            <>
+              {/* Remote video — full screen */}
+              {remoteStream ? (
+                <RTCView
+                  streamURL={remoteStream.toURL()}
+                  style={callStyles.remoteVideo}
+                  objectFit="cover"
+                  mirror={false}
+                />
+              ) : (
+                <View style={callStyles.remoteVideoPlaceholder}>
+                  <MaterialIcons name="videocam-off" size={48} color="rgba(255,255,255,0.3)" />
+                  <Text style={callStyles.videoPlaceholderText}>Waiting for video...</Text>
+                </View>
+              )}
 
-      // Check if user is authenticated
-      if (!auth.currentUser) {
-        setCallError('You must be logged in to make calls');
-        console.log('User not authenticated');  // Debug log
-        return;
-      }
-
-      // Check if chat is initialized
-      if (!chatId) {
-        setCallError('Chat not initialized');
-        console.log('No chatId available');  // Debug log
-        return;
-      }
-
-      setIsCalling(true);
-      console.log('Setting up WebRTC...');  // Debug log
-      
-      try {
-        await setupWebRTC();
-      } catch (error) {
-        console.error('WebRTC setup error:', error);  // Debug log
-        setCallError('Failed to setup call: ' + error.message);
-        setIsCalling(false);
-        return;
-      }
-
-      // Set call timeout (30 seconds)
-      const timeout = setTimeout(() => {
-        if (!isInCall) {
-          console.log('Call timeout');  // Debug log
-          endCall();
-          setCallError('Call timeout - no answer');
-        }
-      }, 30000);
-      setCallTimeout(timeout);
-
-      try {
-        // Create and set local description
-        console.log('Creating offer...');  // Debug log
-        const offer = await peerConnection.current.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: false,
-          voiceActivityDetection: true,
-        });
-        
-        console.log('Setting local description...');  // Debug log
-        await peerConnection.current.setLocalDescription(offer);
-
-        // Send offer to Firebase
-        const db = getDatabase();
-        const encryptedOffer = {
-          ...offer,
-          timestamp: serverTimestamp(),
-          from: auth.currentUser.uid,
-          secure: true,
-          version: '1.0',
-        };
-
-        console.log('Sending offer to Firebase...');  // Debug log
-        await set(ref(db, `calls/${chatId}/offer`), encryptedOffer);
-
-        // Set up call monitoring
-        setupCallMonitoring();
-
-      } catch (error) {
-        console.error('Offer creation/sending error:', error);  // Debug log
-        setCallError('Failed to initiate call: ' + error.message);
-        endCall();
-      }
-
-    } catch (error) {
-      console.error('Call start error:', error);  // Debug log
-      setCallError(error.message);
-      setIsCalling(false);
-    }
-  };
-
-  // Add call monitoring function
-  const setupCallMonitoring = () => {
-    // Monitor connection state
-    peerConnection.current.onconnectionstatechange = () => {
-      const state = peerConnection.current.connectionState;
-      if (state === 'failed' || state === 'disconnected') {
-        setCallError('Call connection lost');
-        endCall();
-      }
-    };
-
-    // Monitor ICE connection state
-    peerConnection.current.oniceconnectionstatechange = () => {
-      const state = peerConnection.current.iceConnectionState;
-      if (state === 'failed') {
-        setCallError('ICE connection failed');
-        endCall();
-      }
-    };
-
-    // Start call duration timer when connected
-    if (isInCall) {
-      durationInterval.current = setInterval(() => {
-        setCallDuration(prev => prev + 1);
-      }, 1000);
-    }
-  };
-
-  // Modify the answerCall function
-  const answerCall = async () => {
-    try {
-      const securityCheck = await checkCallSecurity();
-      if (!securityCheck) return;
-
-      await setupWebRTC();
-
-      const db = getDatabase();
-      const snapshot = await get(ref(db, `calls/${chatId}/offer`));
-      const data = snapshot.val();
-      
-      // Verify offer security
-      if (!data?.secure || !data?.version) {
-        throw new Error('Invalid call offer');
-      }
-
-      if (data?.offer) {
-        const remoteDesc = new RTCSessionDescription(data.offer);
-        await peerConnection.current.setRemoteDescription(remoteDesc);
-
-        const answer = await peerConnection.current.createAnswer({
-          voiceActivityDetection: true,
-        });
-        await peerConnection.current.setLocalDescription(answer);
-
-        // Send encrypted answer
-        const encryptedAnswer = {
-          answer,
-          timestamp: serverTimestamp(),
-          from: auth.currentUser.uid,
-          secure: true,
-          version: '1.0',
-        };
-
-        await set(ref(db, `calls/${chatId}/answer`), encryptedAnswer);
-      }
-
-      setIsInCall(true);
-      setupCallMonitoring();
-
-    } catch (error) {
-      setCallError(error.message);
-      endCall();
-    }
-  };
-
-  // Modify the endCall function
-  const endCall = () => {
-    try {
-      // Clear timeouts and intervals
-      if (callTimeout) {
-        clearTimeout(callTimeout);
-        setCallTimeout(null);
-      }
-      if (durationInterval.current) {
-        clearInterval(durationInterval.current);
-        durationInterval.current = null;
-      }
-
-      // Stop all tracks
-      if (localStream) {
-        localStream.getTracks().forEach(track => {
-          track.stop();
-          localStream.removeTrack(track);
-        });
-      }
-
-      // Close and cleanup peer connection
-      if (peerConnection.current) {
-        peerConnection.current.onicecandidate = null;
-        peerConnection.current.ontrack = null;
-        peerConnection.current.onconnectionstatechange = null;
-        peerConnection.current.oniceconnectionstatechange = null;
-        peerConnection.current.close();
-        peerConnection.current = null;
-      }
-
-      setLocalStream(null);
-      setRemoteStream(null);
-      setIsInCall(false);
-      setIsCalling(false);
-      setCallDuration(0);
-      setIsCallMuted(false);
-      setIsSpeakerOn(false);
-
-      // Clean up Firebase call data with security check
-      const db = getDatabase();
-      const currentUser = auth.currentUser;
-      if (currentUser && chatId) {
-        set(ref(db, `calls/${chatId}`), {
-          ended: {
-            by: currentUser.uid,
-            timestamp: serverTimestamp()
-          }
-        });
-      }
-
-    } catch (error) {
-      console.error('Error ending call:', error);
-    }
-  };
-
-  // Add these new call control functions
-  const toggleMute = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsCallMuted(!isCallMuted);
-    }
-  };
-
-  const toggleSpeaker = () => {
-    if (remoteStream) {
-      // Toggle audio output (implementation depends on device capabilities)
-      setIsSpeakerOn(!isSpeakerOn);
-    }
-  };
-
-  // Modify the renderCallModal to include new features
-  const renderCallModal = () => (
-    <Modal
-      visible={isCalling || isInCall}
-      animationType="slide"
-      transparent={true}
-    >
-      <View style={styles.modalContainer}>
-        <View style={styles.callCard}>
-          <Image 
-            style={styles.callAvatar}
-            source={{ uri: route.params?.avatar || 'https://via.placeholder.com/100' }}
-          />
-          <Text style={styles.callName}>{route.params?.username}</Text>
-          <Text style={styles.callStatus}>
-            {isInCall ? `On Call ${formatDuration(callDuration)}` : (isCalling ? 'Calling...' : 'Incoming Call')}
-          </Text>
-          
-          {callError && (
-            <Text style={styles.errorText}>{callError}</Text>
+              {/* Local video — small PiP */}
+              {localStream && !isCameraOff && (
+                <View style={[callStyles.localVideoWrapper, { top: insets.top + 60 }]}>
+                  <RTCView
+                    streamURL={localStream.toURL()}
+                    style={callStyles.localVideo}
+                    objectFit="cover"
+                    mirror={true}
+                    zOrder={1}
+                  />
+                  <TouchableOpacity
+                    style={callStyles.switchCameraBtn}
+                    onPress={switchCamera}
+                  >
+                    <MaterialIcons name="flip-camera-ios" size={18} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Non-video background gradients */}
+              <View style={callStyles.bgGradientTop} />
+              <View style={callStyles.bgGradientBottom} />
+            </>
           )}
-          
-          <View style={styles.callActions}>
-            {isInCall && (
-              <>
-                <TouchableOpacity 
-                  style={[styles.callButton, styles.controlButton]} 
-                  onPress={toggleMute}
-                >
-                  <MaterialIcons 
-                    name={isCallMuted ? "mic-off" : "mic"} 
-                    size={24} 
-                    color="#fff" 
-                  />
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.callButton, styles.controlButton]} 
-                  onPress={toggleSpeaker}
-                >
-                  <MaterialIcons 
-                    name={isSpeakerOn ? "volume-up" : "volume-down"} 
-                    size={24} 
-                    color="#fff" 
-                  />
-                </TouchableOpacity>
-              </>
+
+          {/* ── Top bar ── */}
+          <View style={[callStyles.topBar, { paddingTop: insets.top + 10 }]}>
+            <View style={callStyles.encryptionBadge}>
+              <MaterialIcons name="lock" size={12} color="#4CAF50" />
+              <Text style={callStyles.encryptionText}>End-to-end encrypted</Text>
+            </View>
+            {isVideo && callState === 'connected' && (
+              <View style={callStyles.callTypeBadge}>
+                <MaterialIcons name="videocam" size={14} color="#6C63FF" />
+                <Text style={callStyles.callTypeText}>Video Call</Text>
+              </View>
             )}
-            
-            {!isInCall && !isCalling && (
-              <>
-                <TouchableOpacity 
-                  style={[styles.callButton, styles.answerButton]} 
-                  onPress={answerCall}
-                >
-                  <MaterialIcons name="call" size={30} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.callButton, styles.declineButton]} 
-                  onPress={endCall}
-                >
-                  <MaterialIcons name="call-end" size={30} color="#fff" />
-                </TouchableOpacity>
-              </>
-            )}
-            
-            {(isInCall || isCalling) && (
-              <TouchableOpacity 
-                style={[styles.callButton, styles.declineButton]} 
-                onPress={endCall}
+          </View>
+
+          {/* ── Center content (show avatar for audio, & for video when not connected) ── */}
+          {(!isVideo || callState !== 'connected') && (
+            <View style={callStyles.centerContent}>
+              {(callState === 'calling' || callState === 'incoming') && (
+                <>
+                  <Animated.View
+                    style={[
+                      callStyles.pulseRing,
+                      {
+                        transform: [{ scale: ringScale }],
+                        opacity: ringOpacity,
+                      },
+                    ]}
+                  />
+                  <Animated.View
+                    style={[
+                      callStyles.pulseRingOuter,
+                      {
+                        transform: [{ scale: Animated.multiply(ringScale, 1.2) }],
+                        opacity: Animated.multiply(ringOpacity, 0.5),
+                      },
+                    ]}
+                  />
+                </>
+              )}
+
+              <Animated.View
+                style={[
+                  callStyles.avatarWrapper,
+                  callState === 'connected' && callStyles.avatarConnectedGlow,
+                  {
+                    transform: [{ scale: callState !== 'connected' ? pulseAnim : 1 }],
+                  },
+                ]}
               >
-                <MaterialIcons name="call-end" size={30} color="#fff" />
-              </TouchableOpacity>
+                <Image
+                  style={callStyles.avatar}
+                  source={{ uri: avatarUri }}
+                />
+              </Animated.View>
+
+              <Text style={callStyles.callerName}>{username}</Text>
+
+              <Text style={callStyles.callStatusText}>
+                {callState === 'calling' && (isVideo ? 'Video Calling...' : 'Calling...')}
+                {callState === 'incoming' && (isVideo ? 'Incoming Video Call' : 'Incoming Voice Call')}
+                {callState === 'connected' && formatDuration(callDuration)}
+              </Text>
+
+              {callError && (
+                <View style={callStyles.errorBadge}>
+                  <MaterialIcons name="error-outline" size={16} color="#FF6B6B" />
+                  <Text style={callStyles.errorText}>{callError}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Video connected overlay info */}
+          {isVideo && callState === 'connected' && (
+            <View style={callStyles.videoOverlayInfo}>
+              <Text style={callStyles.videoCallerName}>{username}</Text>
+              <Text style={callStyles.videoDuration}>{formatDuration(callDuration)}</Text>
+              {callError && (
+                <View style={callStyles.errorBadge}>
+                  <MaterialIcons name="error-outline" size={16} color="#FF6B6B" />
+                  <Text style={callStyles.errorText}>{callError}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* ── Bottom action buttons ── */}
+          <View style={[callStyles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
+            {/* Outgoing Call */}
+            {callState === 'calling' && (
+              <View style={callStyles.actionsRow}>
+                <TouchableOpacity
+                  style={callStyles.endCallBtn}
+                  onPress={() => endCall('cancelled')}
+                  activeOpacity={0.7}
+                >
+                  <View style={callStyles.endCallIcon}>
+                    <MaterialIcons name="call-end" size={32} color="#FFFFFF" />
+                  </View>
+                  <Text style={callStyles.actionLabel}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Incoming Call */}
+            {callState === 'incoming' && (
+              <View style={callStyles.actionsRow}>
+                <TouchableOpacity
+                  style={callStyles.actionBtn}
+                  onPress={declineCall}
+                  activeOpacity={0.7}
+                >
+                  <View style={[callStyles.circleBtn, callStyles.declineBtn]}>
+                    <MaterialIcons name="call-end" size={30} color="#FFFFFF" />
+                  </View>
+                  <Text style={callStyles.actionLabel}>Decline</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={callStyles.actionBtn}
+                  onPress={answerCall}
+                  activeOpacity={0.7}
+                >
+                  <View style={[callStyles.circleBtn, callStyles.acceptBtn]}>
+                    <MaterialIcons name={isVideo ? 'videocam' : 'call'} size={30} color="#FFFFFF" />
+                  </View>
+                  <Text style={callStyles.actionLabel}>Accept</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Connected (In Call) */}
+            {callState === 'connected' && (
+              <View style={callStyles.actionsRow}>
+                <TouchableOpacity
+                  style={callStyles.actionBtn}
+                  onPress={toggleMute}
+                  activeOpacity={0.7}
+                >
+                  <View style={[
+                    callStyles.circleBtn,
+                    callStyles.controlBtn,
+                    isMuted && callStyles.controlBtnActive,
+                  ]}>
+                    <MaterialIcons
+                      name={isMuted ? 'mic-off' : 'mic'}
+                      size={24}
+                      color="#FFFFFF"
+                    />
+                  </View>
+                  <Text style={callStyles.actionLabel}>
+                    {isMuted ? 'Unmute' : 'Mute'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Camera toggle — only for video calls */}
+                {isVideo && (
+                  <TouchableOpacity
+                    style={callStyles.actionBtn}
+                    onPress={toggleCamera}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[
+                      callStyles.circleBtn,
+                      callStyles.controlBtn,
+                      isCameraOff && callStyles.controlBtnActive,
+                    ]}>
+                      <MaterialIcons
+                        name={isCameraOff ? 'videocam-off' : 'videocam'}
+                        size={24}
+                        color="#FFFFFF"
+                      />
+                    </View>
+                    <Text style={callStyles.actionLabel}>
+                      {isCameraOff ? 'Cam On' : 'Cam Off'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={callStyles.actionBtn}
+                  onPress={() => endCall('ended')}
+                  activeOpacity={0.7}
+                >
+                  <View style={[callStyles.circleBtn, callStyles.declineBtn, { width: 68, height: 68, borderRadius: 34 }]}>
+                    <MaterialIcons name="call-end" size={32} color="#FFFFFF" />
+                  </View>
+                  <Text style={callStyles.actionLabel}>End</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={callStyles.actionBtn}
+                  onPress={toggleSpeaker}
+                  activeOpacity={0.7}
+                >
+                  <View style={[
+                    callStyles.circleBtn,
+                    callStyles.controlBtn,
+                    isSpeaker && callStyles.controlBtnActive,
+                  ]}>
+                    <MaterialIcons
+                      name={isSpeaker ? 'volume-up' : 'volume-down'}
+                      size={24}
+                      color="#FFFFFF"
+                    />
+                  </View>
+                  <Text style={callStyles.actionLabel}>
+                    {isSpeaker ? 'Speaker' : 'Phone'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </View>
-      </View>
-    </Modal>
-  );
-
-  // Add this utility function
-  const formatDuration = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+      </Modal>
+    );
   };
 
-  // Add these new styles
-  const additionalStyles = {
-    errorText: {
-      color: '#FF3B30',
-      fontSize: 14,
-      marginBottom: 20,
-      textAlign: 'center',
-    },
-    controlButton: {
-      backgroundColor: '#666666',
-      width: 50,
-      height: 50,
-      borderRadius: 25,
-    },
-  };
+  // ─── Header ───────────────────────────────────────────────
 
-  // Add the additional styles to your StyleSheet
-  Object.assign(styles, additionalStyles);
-
-  // Modify the header right buttons to include call button
   const headerRight = (
     <View style={styles.headerRight}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.headerButton}
         onPress={() => {
-          console.log('Call button pressed');  // Debug log
-          console.log('ChatId:', chatId);  // Debug log
-          console.log('User:', auth.currentUser?.uid);  // Debug log
-          startCall();
+          console.log('Voice call pressed, chatId:', chatId);
+          startCall('audio');
         }}
       >
         <MaterialIcons name="call" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.headerButton}
+        onPress={() => {
+          console.log('Video call pressed, chatId:', chatId);
+          startCall('video');
+        }}
+      >
+        <MaterialIcons name="videocam" size={22} color="#FFFFFF" />
       </TouchableOpacity>
       <TouchableOpacity style={styles.headerButton}>
         <MaterialIcons name="more-horiz" size={22} color="#FFFFFF" />
@@ -701,29 +608,31 @@ const ChatScreen = ({ route, navigation }) => {
     </View>
   );
 
+  // ─── Render ───────────────────────────────────────────────
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="transparent" barStyle="light-content" translucent />
-      
+
       <Animated.View style={[
         styles.header,
         { paddingTop: insets.top },
-        isScrolled && styles.headerScrolled
+        isScrolled && styles.headerScrolled,
       ]}>
         <View style={styles.headerContent}>
           <View style={styles.headerLeft}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.backButton}
               onPress={() => navigation.goBack()}
             >
               <MaterialIcons name="arrow-back-ios" size={22} color="#FFFFFF" />
             </TouchableOpacity>
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.headerProfile}
               onPress={() => navigation.navigate('Profile', { userId: route.params?.userId })}
             >
-              <Image 
+              <Image
                 style={styles.avatar}
                 source={{ uri: route.params?.avatar || 'https://via.placeholder.com/40' }}
               />
@@ -741,7 +650,7 @@ const ChatScreen = ({ route, navigation }) => {
         </View>
       </Animated.View>
 
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={styles.content}
         behavior={Platform.OS === 'ios' ? 'padding' : null}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}
@@ -760,13 +669,13 @@ const ChatScreen = ({ route, navigation }) => {
         {showAttachments && renderAttachmentButtons()}
 
         <View style={styles.inputContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.addButton}
             onPress={() => setShowAttachments(!showAttachments)}
           >
             <MaterialIcons name="add" size={24} color="#007AFF" />
           </TouchableOpacity>
-          
+
           <View style={styles.inputWrapper}>
             <TextInput
               style={styles.input}
@@ -782,7 +691,7 @@ const ChatScreen = ({ route, navigation }) => {
             <MaterialIcons name="emoji-emotions" size={24} color="#666666" />
           </TouchableOpacity>
 
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[styles.sendButton, { opacity: message.trim().length > 0 ? 1 : 0.5 }]}
             onPress={sendMessage}
             disabled={message.trim().length === 0}
@@ -796,6 +705,8 @@ const ChatScreen = ({ route, navigation }) => {
     </SafeAreaView>
   );
 };
+
+// ─── Chat Screen Styles ─────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: {
@@ -820,10 +731,7 @@ const styles = StyleSheet.create({
   },
   headerScrolled: {
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
@@ -992,54 +900,316 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContainer: {
+});
+
+// ─── Call Modal Styles ──────────────────────────────────────
+
+const callStyles = StyleSheet.create({
+  container: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    backgroundColor: '#0A0A0F',
+  },
+  bgGradientTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '40%',
+    backgroundColor: 'transparent',
+    borderBottomLeftRadius: 300,
+    borderBottomRightRadius: 300,
+    opacity: 0.4,
+    shadowColor: '#6C63FF',
+    shadowOffset: { width: 0, height: 80 },
+    shadowOpacity: 0.3,
+    shadowRadius: 120,
+  },
+  bgGradientBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '30%',
+    backgroundColor: 'rgba(20, 20, 30, 0.8)',
+  },
+
+  // Video
+  remoteVideo: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+  },
+  remoteVideoPlaceholder: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#1A1A2E',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  callCard: {
-    backgroundColor: '#1A1A1A',
-    padding: 20,
-    borderRadius: 20,
+  videoPlaceholderText: {
+    color: 'rgba(255,255,255,0.3)',
+    fontSize: 14,
+    marginTop: 12,
+  },
+  localVideoWrapper: {
+    position: 'absolute',
+    right: 16,
+    width: 120,
+    height: 170,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'rgba(108, 99, 255, 0.6)',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  localVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  switchCameraBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
     alignItems: 'center',
-    width: '80%',
   },
-  callAvatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 20,
-  },
-  callName: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  callStatus: {
-    color: '#999999',
-    fontSize: 16,
-    marginBottom: 30,
-  },
-  callActions: {
+
+  // Top bar
+  topBar: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 30,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    gap: 12,
+    zIndex: 10,
   },
-  callButton: {
+  encryptionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(76, 175, 80, 0.12)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  encryptionText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
+  callTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(108, 99, 255, 0.12)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  callTypeText: {
+    color: '#6C63FF',
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
+
+  // Center content
+  centerContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 40,
+    zIndex: 5,
+  },
+  pulseRing: {
+    position: 'absolute',
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 2,
+    borderColor: '#6C63FF',
+  },
+  pulseRingOuter: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 1.5,
+    borderColor: '#6C63FF',
+  },
+  avatarWrapper: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    overflow: 'hidden',
+    borderWidth: 3,
+    borderColor: 'rgba(108, 99, 255, 0.5)',
+    marginBottom: 24,
+  },
+  avatarConnectedGlow: {
+    borderColor: '#4CAF50',
+    shadowColor: '#4CAF50',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  avatar: {
+    width: '100%',
+    height: '100%',
+  },
+  callerName: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  callStatusText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 16,
+    fontWeight: '400',
+    letterSpacing: 0.3,
+  },
+
+  // Video overlay info (shown when video is connected)
+  videoOverlayInfo: {
+    position: 'absolute',
+    top: '12%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  videoCallerName: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  videoDuration: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 15,
+    fontWeight: '500',
+    marginTop: 4,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+
+  errorBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 59, 48, 0.12)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 16,
+    gap: 8,
+  },
+  errorText: {
+    color: '#FF6B6B',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+
+  // Bottom bar
+  bottomBar: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    gap: 28,
+  },
+
+  // Action buttons
+  actionBtn: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  circleBtn: {
     width: 60,
     height: 60,
     borderRadius: 30,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  answerButton: {
-    backgroundColor: '#4CAF50',
-  },
-  declineButton: {
+  declineBtn: {
     backgroundColor: '#FF3B30',
+    shadowColor: '#FF3B30',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  acceptBtn: {
+    backgroundColor: '#34C759',
+    shadowColor: '#34C759',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  controlBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  controlBtnActive: {
+    backgroundColor: '#6C63FF',
+    shadowColor: '#6C63FF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  actionLabel: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+
+  // End call (for calling state)
+  endCallBtn: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  endCallIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#FF3B30',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 10,
   },
 });
 
-export default ChatScreen; 
+export default ChatScreen;
