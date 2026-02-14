@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDatabase, ref, push, onValue, off, serverTimestamp, set } from 'firebase/database';
 import { auth } from '../../../config/firebase';
 import { useAudioCall } from '../../../webRTC/useAudioCall';
+import { RTCView } from 'react-native-webrtc';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
