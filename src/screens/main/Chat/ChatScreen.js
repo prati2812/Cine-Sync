@@ -21,8 +21,11 @@ import { getDatabase, ref, push, onValue, off, serverTimestamp, set } from 'fire
 import { auth } from '../../../config/firebase';
 import { useAudioCall } from '../../../webRTC/useAudioCall';
 import { RTCView } from 'react-native-webrtc';
+import colors from '../../../theme/Colors';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+
 
 const ChatScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
@@ -36,6 +39,8 @@ const ChatScreen = ({ route, navigation }) => {
   // Animations for call UI
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const ringAnim = useRef(new Animated.Value(0)).current;
+  const attachAnim = useRef(new Animated.Value(0)).current;
+  const headerOpacity = useRef(new Animated.Value(1)).current;
 
   // Use the audio/video call hook
   const {
@@ -74,7 +79,6 @@ const ChatScreen = ({ route, navigation }) => {
     };
   }, []);
 
-  // Listen for incoming calls ONLY after chatId is ready
   useEffect(() => {
     if (!chatId) return;
     const unsubscribe = listenIncoming();
@@ -88,32 +92,16 @@ const ChatScreen = ({ route, navigation }) => {
     if (callState === 'calling' || callState === 'incoming') {
       const pulse = Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.15,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
+          Animated.timing(pulseAnim, { toValue: 1.12, duration: 900, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 900, useNativeDriver: true }),
         ])
       );
       pulse.start();
 
       const ring = Animated.loop(
         Animated.sequence([
-          Animated.timing(ringAnim, {
-            toValue: 1,
-            duration: 1500,
-            useNativeDriver: true,
-          }),
-          Animated.timing(ringAnim, {
-            toValue: 0,
-            duration: 1500,
-            useNativeDriver: true,
-          }),
+          Animated.timing(ringAnim, { toValue: 1, duration: 1400, useNativeDriver: true }),
+          Animated.timing(ringAnim, { toValue: 0, duration: 1400, useNativeDriver: true }),
         ])
       );
       ring.start();
@@ -126,6 +114,16 @@ const ChatScreen = ({ route, navigation }) => {
       };
     }
   }, [callState]);
+
+  // Attachment panel animation
+  useEffect(() => {
+    Animated.spring(attachAnim, {
+      toValue: showAttachments ? 1 : 0,
+      tension: 65,
+      friction: 10,
+      useNativeDriver: true,
+    }).start();
+  }, [showAttachments]);
 
   const initializeChat = async () => {
     const db = getDatabase();
@@ -141,7 +139,6 @@ const ChatScreen = ({ route, navigation }) => {
         const existingChatId = Object.keys(chats).find(
           (key) => chats[key].otherUserId === otherUserId
         );
-
         if (existingChatId) {
           setChatId(existingChatId);
           listenToMessages(existingChatId);
@@ -218,10 +215,8 @@ const ChatScreen = ({ route, navigation }) => {
 
   const setupUserPresence = () => {
     if (!auth.currentUser) return;
-
     const db = getDatabase();
     const userStatusRef = ref(db, `users/${auth.currentUser.uid}/status`);
-
     set(userStatusRef, 'online');
 
     const connectedRef = ref(db, '.info/connected');
@@ -236,7 +231,7 @@ const ChatScreen = ({ route, navigation }) => {
 
   // ─── Message rendering ───────────────────────────────────
 
-  const renderMessage = ({ item }) => {
+  const renderMessage = ({ item, index }) => {
     const isMyMessage = item.senderId === auth.currentUser?.uid;
 
     if (item.type === 'voice') {
@@ -247,9 +242,19 @@ const ChatScreen = ({ route, navigation }) => {
           styles.voiceContainer,
         ]}>
           <TouchableOpacity style={styles.voicePlayButton}>
-            <MaterialIcons name="play-arrow" size={24} color="#FFFFFF" />
+            <MaterialIcons name="play-arrow" size={22} color="#FFFFFF" />
           </TouchableOpacity>
-          <View style={styles.voiceWaveform} />
+          <View style={styles.voiceWaveform}>
+            {[...Array(18)].map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.waveBar,
+                  { height: 4 + Math.sin(i * 0.8) * 10 + 8 },
+                ]}
+              />
+            ))}
+          </View>
           <Text style={styles.voiceDuration}>{item.duration}</Text>
           <Text style={styles.timestamp}>
             {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -264,34 +269,59 @@ const ChatScreen = ({ route, navigation }) => {
         isMyMessage ? styles.myMessage : styles.theirMessage,
       ]}>
         <Text style={styles.messageText}>{item.text}</Text>
-        <Text style={styles.timestamp}>
-          {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </Text>
+        <View style={styles.messageFooter}>
+          <Text style={styles.timestamp}>
+            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+          {isMyMessage && (
+            <MaterialIcons name="done-all" size={13} color="rgba(0, 122, 255, 0.8)" style={{ marginLeft: 4 }} />
+          )}
+        </View>
       </View>
     );
   };
 
-  const renderAttachmentButtons = () => (
-    <View style={styles.attachmentButtons}>
-      <TouchableOpacity style={[styles.attachmentButton, { backgroundColor: '#FF2D55' }]}>
-        <MaterialIcons name="camera-alt" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.attachmentButton, { backgroundColor: '#5856D6' }]}>
-        <MaterialIcons name="photo" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.attachmentButton, { backgroundColor: '#FF9500' }]}>
-        <MaterialIcons name="insert-drive-file" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.attachmentButton, { backgroundColor: '#4CD964' }]}>
-        <MaterialIcons name="location-on" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-    </View>
-  );
+  const renderAttachmentButtons = () => {
+    const attachments = [
+      { icon: 'camera-alt', color: colors.PRIMARY_COLOR, label: 'Camera' },
+      { icon: 'photo', color: '#AF52DE', label: 'Gallery' },
+      { icon: 'insert-drive-file', color: colors.FILM_GOLD, label: 'File' },
+      { icon: 'location-on', color: colors.ACCEPT_GREEN, label: 'Location' },
+    ];
+
+    return (
+      <Animated.View style={[
+        styles.attachmentPanel,
+        {
+          opacity: attachAnim,
+          transform: [{ translateY: attachAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }],
+        },
+      ]}>
+        {attachments.map((att, i) => (
+          <TouchableOpacity key={i} style={styles.attachmentItem} activeOpacity={0.7}>
+            <View style={[styles.attachmentButton, { backgroundColor: att.color + '22', borderColor: att.color + '44' }]}>
+              <MaterialIcons name={att.icon} size={22} color={att.color} />
+            </View>
+            <Text style={styles.attachmentLabel}>{att.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </Animated.View>
+    );
+  };
 
   const handleScroll = (event) => {
     const scrollY = event.nativeEvent.contentOffset.y;
     setIsScrolled(scrollY > 10);
   };
+
+  // ─── Render date separator ────────────────────────────────
+  const renderDateSeparator = () => (
+    <View style={styles.dateSeparator}>
+      <View style={styles.dateLine} />
+      <Text style={styles.dateText}>Today</Text>
+      <View style={styles.dateLine} />
+    </View>
+  );
 
   // ─── Call Modal UI ────────────────────────────────────────
 
@@ -301,14 +331,10 @@ const ChatScreen = ({ route, navigation }) => {
     const avatarUri = route.params?.avatar || 'https://via.placeholder.com/120';
     const isVideo = callType === 'video';
 
-    const ringScale = ringAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [1, 1.6],
-    });
-    const ringOpacity = ringAnim.interpolate({
-      inputRange: [0, 0.5, 1],
-      outputRange: [0.4, 0.15, 0],
-    });
+    const ringScale = ringAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] });
+    const ringOpacity = ringAnim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0.5, 0.15, 0] });
+    const ring2Scale = ringAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.2] });
+    const ring2Opacity = ringAnim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.25, 0.05, 0] });
 
     return (
       <Modal
@@ -318,10 +344,10 @@ const ChatScreen = ({ route, navigation }) => {
         statusBarTranslucent
       >
         <View style={callStyles.container}>
-          {/* ── Video backgrounds when in video call ── */}
+
+          {/* ── Cinematic Background ── */}
           {isVideo && callState === 'connected' ? (
             <>
-              {/* Remote video — full screen */}
               {remoteStream ? (
                 <RTCView
                   streamURL={remoteStream.toURL()}
@@ -331,118 +357,150 @@ const ChatScreen = ({ route, navigation }) => {
                 />
               ) : (
                 <View style={callStyles.remoteVideoPlaceholder}>
-                  <MaterialIcons name="videocam-off" size={48} color="rgba(255,255,255,0.3)" />
-                  <Text style={callStyles.videoPlaceholderText}>Waiting for video...</Text>
+                  <MaterialIcons name="videocam-off" size={56} color="rgba(255,255,255,0.15)" />
+                  <Text style={callStyles.videoPlaceholderText}>Connecting video...</Text>
                 </View>
               )}
-
-              {/* Local video — small PiP */}
               {localStream && !isCameraOff && (
-                <View style={[callStyles.localVideoWrapper, { top: insets.top + 60 }]}>
+                <View style={[callStyles.localVideoWrapper, { top: insets.top + 100 }]}>
                   <RTCView
                     streamURL={localStream.toURL()}
                     style={callStyles.localVideo}
                     objectFit="cover"
                     mirror={true}
-                    zOrder={1}
+                    zOrder={2}
                   />
-                  <TouchableOpacity
-                    style={callStyles.switchCameraBtn}
-                    onPress={switchCamera}
-                  >
-                    <MaterialIcons name="flip-camera-ios" size={18} color="#fff" />
+                  <TouchableOpacity style={callStyles.switchCameraBtn} onPress={switchCamera} activeOpacity={0.7}>
+                    <MaterialIcons name="flip-camera-ios" size={14} color="#fff" />
                   </TouchableOpacity>
                 </View>
               )}
             </>
           ) : (
-            <>
-              {/* Non-video background gradients */}
-              <View style={callStyles.bgGradientTop} />
-              <View style={callStyles.bgGradientBottom} />
-            </>
+            /* Audio call / non-connected background */
+            <View style={callStyles.audioBg}>
+              <Image
+                source={{ uri: avatarUri }}
+                style={callStyles.blurredBgImage}
+                blurRadius={Platform.OS === 'ios' ? 30 : 10}
+              />
+              <View style={callStyles.bgOverlay} />
+
+              {/* Radial glow around center */}
+              <View style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                width: 350,
+                height: 350,
+                borderRadius: 175,
+                marginLeft: -175,
+                marginTop: -175,
+                backgroundColor: colors.PRIMARY_COLOR,
+                opacity: 0.08,
+                shadowColor: colors.PRIMARY_COLOR,
+                shadowOffset: { width: 0, height: 0 },
+                shadowOpacity: 1,
+                shadowRadius: 100,
+                elevation: 20,
+              }} />
+
+            </View>
           )}
 
           {/* ── Top bar ── */}
-          <View style={[callStyles.topBar, { paddingTop: insets.top + 10 }]}>
+          <View style={[callStyles.topBar, { paddingTop: insets.top + 12 }]}>
             <View style={callStyles.encryptionBadge}>
-              <MaterialIcons name="lock" size={12} color="#4CAF50" />
+              <MaterialIcons name="lock" size={11} color={colors.ACCEPT_GREEN} />
               <Text style={callStyles.encryptionText}>End-to-end encrypted</Text>
             </View>
             {isVideo && callState === 'connected' && (
               <View style={callStyles.callTypeBadge}>
-                <MaterialIcons name="videocam" size={14} color="#6C63FF" />
+                <MaterialIcons name="videocam" size={13} color={colors.PRIMARY_COLOR} />
                 <Text style={callStyles.callTypeText}>Video Call</Text>
               </View>
             )}
           </View>
 
-          {/* ── Center content (show avatar for audio, & for video when not connected) ── */}
+          {/* ── Center content (audio or non-connected video) ── */}
           {(!isVideo || callState !== 'connected') && (
             <View style={callStyles.centerContent}>
+
+              {/* Ripple rings */}
               {(callState === 'calling' || callState === 'incoming') && (
                 <>
-                  <Animated.View
-                    style={[
-                      callStyles.pulseRing,
-                      {
-                        transform: [{ scale: ringScale }],
-                        opacity: ringOpacity,
-                      },
-                    ]}
-                  />
-                  <Animated.View
-                    style={[
-                      callStyles.pulseRingOuter,
-                      {
-                        transform: [{ scale: Animated.multiply(ringScale, 1.2) }],
-                        opacity: Animated.multiply(ringOpacity, 0.5),
-                      },
-                    ]}
-                  />
+
                 </>
               )}
 
-              <Animated.View
-                style={[
-                  callStyles.avatarWrapper,
-                  callState === 'connected' && callStyles.avatarConnectedGlow,
-                  {
-                    transform: [{ scale: callState !== 'connected' ? pulseAnim : 1 }],
-                  },
-                ]}
-              >
-                <Image
-                  style={callStyles.avatar}
-                  source={{ uri: avatarUri }}
-                />
+              {/* Avatar with cinematic frame */}
+              <Animated.View style={[
+                callStyles.avatarFrame,
+                callState === 'connected' && callStyles.avatarConnected,
+                { transform: [{ scale: callState !== 'connected' ? pulseAnim : 1 }] },
+              ]}>
+
+                <View style={[callStyles.cornerMark, callStyles.cornerTL]} />
+                <View style={[callStyles.cornerMark, callStyles.cornerTR]} />
+                <View style={[callStyles.cornerMark, callStyles.cornerBL]} />
+                <View style={[callStyles.cornerMark, callStyles.cornerBR]} />
+                <Image style={{
+                  width: 122,
+                  height: 122,
+                  borderRadius: 61,
+                  backgroundColor: colors.CARD_COLOR,
+                }} source={{ uri: "https://picsum.photos/id/237/200/300" }} />
               </Animated.View>
 
               <Text style={callStyles.callerName}>{username}</Text>
 
-              <Text style={callStyles.callStatusText}>
-                {callState === 'calling' && (isVideo ? 'Video Calling...' : 'Calling...')}
-                {callState === 'incoming' && (isVideo ? 'Incoming Video Call' : 'Incoming Voice Call')}
-                {callState === 'connected' && formatDuration(callDuration)}
-              </Text>
+              <View style={callStyles.statusRow}>
+                {callState === 'calling' && (
+                  <View style={callStyles.statusPill}>
+                    <Animated.View style={[callStyles.statusDot, { opacity: pulseAnim.interpolate({ inputRange: [1, 1.12], outputRange: [0.5, 1] }) }]} />
+                    <Text style={callStyles.callStatusText}>{isVideo ? 'Video Calling...' : 'Ringing...'}</Text>
+                  </View>
+                )}
+                {callState === 'incoming' && (
+                  <View style={[callStyles.statusPill, { borderColor: colors.ACCEPT_GREEN + '66', backgroundColor: colors.ACCEPT_GREEN + '15' }]}>
+                    <View style={[callStyles.statusDot, { backgroundColor: colors.ACCEPT_GREEN }]} />
+                    <Text style={[callStyles.callStatusText, { color: colors.ACCEPT_GREEN }]}>
+                      {isVideo ? 'Incoming Video Call' : 'Incoming Voice Call'}
+                    </Text>
+                  </View>
+                )}
+                {callState === 'connected' && (
+                  <View style={[callStyles.statusPill, { borderColor: colors.ACCEPT_GREEN + '66', backgroundColor: colors.ACCEPT_GREEN + '15' }]}>
+                    <View style={[callStyles.statusDot, { backgroundColor: colors.ACCEPT_GREEN }]} />
+                    <Text style={[callStyles.callStatusText, { color: colors.ACCEPT_GREEN }]}>
+                      {formatDuration(callDuration)}
+                    </Text>
+                  </View>
+                )}
+              </View>
 
               {callError && (
                 <View style={callStyles.errorBadge}>
-                  <MaterialIcons name="error-outline" size={16} color="#FF6B6B" />
+                  <MaterialIcons name="error-outline" size={15} color={colors.DELETE_RED_COLOR} />
                   <Text style={callStyles.errorText}>{callError}</Text>
                 </View>
               )}
             </View>
           )}
 
-          {/* Video connected overlay info */}
+          {/* Video overlay info */}
           {isVideo && callState === 'connected' && (
-            <View style={callStyles.videoOverlayInfo}>
+            <View style={[callStyles.videoOverlayInfo, { top: insets.top + 70 }]}>
               <Text style={callStyles.videoCallerName}>{username}</Text>
-              <Text style={callStyles.videoDuration}>{formatDuration(callDuration)}</Text>
+              <View style={[callStyles.statusPill, { borderColor: colors.ACCEPT_GREEN + '66', backgroundColor: 'rgba(0,200,83,0.15)' }]}>
+                <View style={[callStyles.statusDot, { backgroundColor: colors.ACCEPT_GREEN }]} />
+                <Text style={[callStyles.callStatusText, { color: colors.ACCEPT_GREEN }]}>
+                  {formatDuration(callDuration)}
+                </Text>
+              </View>
               {callError && (
                 <View style={callStyles.errorBadge}>
-                  <MaterialIcons name="error-outline" size={16} color="#FF6B6B" />
+                  <MaterialIcons name="error-outline" size={15} color={colors.DELETE_RED_COLOR} />
                   <Text style={callStyles.errorText}>{callError}</Text>
                 </View>
               )}
@@ -450,17 +508,17 @@ const ChatScreen = ({ route, navigation }) => {
           )}
 
           {/* ── Bottom action buttons ── */}
-          <View style={[callStyles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
+          <View style={[callStyles.bottomBar, { paddingBottom: insets.bottom + 24 }]}>
+
+            {/* Gradient divider */}
+            <View style={callStyles.bottomDivider} />
+
             {/* Outgoing Call */}
             {callState === 'calling' && (
               <View style={callStyles.actionsRow}>
-                <TouchableOpacity
-                  style={callStyles.endCallBtn}
-                  onPress={() => endCall('cancelled')}
-                  activeOpacity={0.7}
-                >
-                  <View style={callStyles.endCallIcon}>
-                    <MaterialIcons name="call-end" size={32} color="#FFFFFF" />
+                <TouchableOpacity style={callStyles.actionBtn} onPress={() => endCall('cancelled')} activeOpacity={0.8}>
+                  <View style={[callStyles.circleBtn, callStyles.declineBtn]}>
+                    <MaterialIcons name="call-end" size={30} color="#FFFFFF" />
                   </View>
                   <Text style={callStyles.actionLabel}>Cancel</Text>
                 </TouchableOpacity>
@@ -470,26 +528,18 @@ const ChatScreen = ({ route, navigation }) => {
             {/* Incoming Call */}
             {callState === 'incoming' && (
               <View style={callStyles.actionsRow}>
-                <TouchableOpacity
-                  style={callStyles.actionBtn}
-                  onPress={declineCall}
-                  activeOpacity={0.7}
-                >
+                <TouchableOpacity style={callStyles.actionBtn} onPress={declineCall} activeOpacity={0.8}>
                   <View style={[callStyles.circleBtn, callStyles.declineBtn]}>
-                    <MaterialIcons name="call-end" size={30} color="#FFFFFF" />
+                    <MaterialIcons name="call-end" size={28} color="#FFFFFF" />
                   </View>
                   <Text style={callStyles.actionLabel}>Decline</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={callStyles.actionBtn}
-                  onPress={answerCall}
-                  activeOpacity={0.7}
-                >
+                <TouchableOpacity style={callStyles.actionBtn} onPress={answerCall} activeOpacity={0.8}>
                   <View style={[callStyles.circleBtn, callStyles.acceptBtn]}>
-                    <MaterialIcons name={isVideo ? 'videocam' : 'call'} size={30} color="#FFFFFF" />
+                    <MaterialIcons name={isVideo ? 'videocam' : 'call'} size={28} color="#FFFFFF" />
                   </View>
-                  <Text style={callStyles.actionLabel}>Accept</Text>
+                  <Text style={[callStyles.actionLabel, { color: colors.ACCEPT_GREEN }]}>Accept</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -497,81 +547,34 @@ const ChatScreen = ({ route, navigation }) => {
             {/* Connected (In Call) */}
             {callState === 'connected' && (
               <View style={callStyles.actionsRow}>
-                <TouchableOpacity
-                  style={callStyles.actionBtn}
-                  onPress={toggleMute}
-                  activeOpacity={0.7}
-                >
-                  <View style={[
-                    callStyles.circleBtn,
-                    callStyles.controlBtn,
-                    isMuted && callStyles.controlBtnActive,
-                  ]}>
-                    <MaterialIcons
-                      name={isMuted ? 'mic-off' : 'mic'}
-                      size={24}
-                      color="#FFFFFF"
-                    />
+                <TouchableOpacity style={callStyles.actionBtn} onPress={toggleMute} activeOpacity={0.8}>
+                  <View style={[callStyles.circleBtn, callStyles.controlBtn, isMuted && callStyles.controlBtnActive]}>
+                    <MaterialIcons name={isMuted ? 'mic-off' : 'mic'} size={22} color="#FFFFFF" />
                   </View>
-                  <Text style={callStyles.actionLabel}>
-                    {isMuted ? 'Unmute' : 'Mute'}
-                  </Text>
+                  <Text style={callStyles.actionLabel}>{isMuted ? 'Unmute' : 'Mute'}</Text>
                 </TouchableOpacity>
 
-                {/* Camera toggle — only for video calls */}
                 {isVideo && (
-                  <TouchableOpacity
-                    style={callStyles.actionBtn}
-                    onPress={toggleCamera}
-                    activeOpacity={0.7}
-                  >
-                    <View style={[
-                      callStyles.circleBtn,
-                      callStyles.controlBtn,
-                      isCameraOff && callStyles.controlBtnActive,
-                    ]}>
-                      <MaterialIcons
-                        name={isCameraOff ? 'videocam-off' : 'videocam'}
-                        size={24}
-                        color="#FFFFFF"
-                      />
+                  <TouchableOpacity style={callStyles.actionBtn} onPress={toggleCamera} activeOpacity={0.8}>
+                    <View style={[callStyles.circleBtn, callStyles.controlBtn, isCameraOff && callStyles.controlBtnActive]}>
+                      <MaterialIcons name={isCameraOff ? 'videocam-off' : 'videocam'} size={22} color="#FFFFFF" />
                     </View>
-                    <Text style={callStyles.actionLabel}>
-                      {isCameraOff ? 'Cam On' : 'Cam Off'}
-                    </Text>
+                    <Text style={callStyles.actionLabel}>{isCameraOff ? 'Cam On' : 'Cam Off'}</Text>
                   </TouchableOpacity>
                 )}
 
-                <TouchableOpacity
-                  style={callStyles.actionBtn}
-                  onPress={() => endCall('ended')}
-                  activeOpacity={0.7}
-                >
-                  <View style={[callStyles.circleBtn, callStyles.declineBtn, { width: 68, height: 68, borderRadius: 34 }]}>
-                    <MaterialIcons name="call-end" size={32} color="#FFFFFF" />
+                <TouchableOpacity style={callStyles.actionBtn} onPress={() => endCall('ended')} activeOpacity={0.8}>
+                  <View style={[callStyles.circleBtn, callStyles.declineBtn, callStyles.endCallLarge]}>
+                    <MaterialIcons name="call-end" size={30} color="#FFFFFF" />
                   </View>
                   <Text style={callStyles.actionLabel}>End</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={callStyles.actionBtn}
-                  onPress={toggleSpeaker}
-                  activeOpacity={0.7}
-                >
-                  <View style={[
-                    callStyles.circleBtn,
-                    callStyles.controlBtn,
-                    isSpeaker && callStyles.controlBtnActive,
-                  ]}>
-                    <MaterialIcons
-                      name={isSpeaker ? 'volume-up' : 'volume-down'}
-                      size={24}
-                      color="#FFFFFF"
-                    />
+                <TouchableOpacity style={callStyles.actionBtn} onPress={toggleSpeaker} activeOpacity={0.8}>
+                  <View style={[callStyles.circleBtn, callStyles.controlBtn, isSpeaker && callStyles.controlBtnActive]}>
+                    <MaterialIcons name={isSpeaker ? 'volume-up' : 'volume-down'} size={22} color="#FFFFFF" />
                   </View>
-                  <Text style={callStyles.actionLabel}>
-                    {isSpeaker ? 'Speaker' : 'Phone'}
-                  </Text>
+                  <Text style={callStyles.actionLabel}>{isSpeaker ? 'Speaker' : 'Earpiece'}</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -583,71 +586,65 @@ const ChatScreen = ({ route, navigation }) => {
 
   // ─── Header ───────────────────────────────────────────────
 
-  const headerRight = (
-    <View style={styles.headerRight}>
-      <TouchableOpacity
-        style={styles.headerButton}
-        onPress={() => {
-          console.log('Voice call pressed, chatId:', chatId);
-          startCall('audio');
-        }}
-      >
-        <MaterialIcons name="call" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.headerButton}
-        onPress={() => {
-          console.log('Video call pressed, chatId:', chatId);
-          startCall('video');
-        }}
-      >
-        <MaterialIcons name="videocam" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.headerButton}>
-        <MaterialIcons name="more-horiz" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
-    </View>
-  );
-
-  // ─── Render ───────────────────────────────────────────────
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="transparent" barStyle="light-content" translucent />
 
+      {/* ── Header ── */}
       <Animated.View style={[
         styles.header,
         { paddingTop: insets.top },
         isScrolled && styles.headerScrolled,
       ]}>
+
+
         <View style={styles.headerContent}>
           <View style={styles.headerLeft}>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
-              <MaterialIcons name="arrow-back-ios" size={22} color="#FFFFFF" />
+            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+              <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR} />
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.headerProfile}
               onPress={() => navigation.navigate('Profile', { userId: route.params?.userId })}
+              activeOpacity={0.8}
             >
-              <Image
-                style={styles.avatar}
-                source={{ uri: route.params?.avatar || 'https://via.placeholder.com/40' }}
-              />
+              <View style={styles.avatarWrapper}>
+                <Image
+                  style={styles.headerAvatar}
+                  source={{ uri: route.params?.avatar || 'https://via.placeholder.com/40' }}
+                />
+                <View style={styles.onlineBadge} />
+              </View>
               <View style={styles.headerInfo}>
                 <Text style={styles.headerName}>{route.params?.username || 'Chat'}</Text>
                 <View style={styles.onlineContainer}>
                   <View style={styles.onlineDot} />
-                  <Text style={styles.headerStatus}>Online</Text>
+                  <Text style={styles.headerStatus}>Online now</Text>
                 </View>
               </View>
             </TouchableOpacity>
           </View>
 
-          {headerRight}
+          <View style={styles.headerRight}>
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => startCall('audio')}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="call" size={19} color={colors.TITLE_COLOR} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => startCall('video')}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="videocam" size={20} color={colors.TITLE_COLOR} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerActionBtn} activeOpacity={0.7}>
+              <MaterialIcons name="more-horiz" size={20} color={colors.TITLE_COLOR} />
+            </TouchableOpacity>
+          </View>
         </View>
       </Animated.View>
 
@@ -660,44 +657,52 @@ const ChatScreen = ({ route, navigation }) => {
           data={messages}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
-          contentContainerStyle={styles.messagesList}
+          contentContainerStyle={[styles.messagesList, { paddingTop: insets.top + 72 }]}
+          ListHeaderComponent={renderDateSeparator}
           inverted={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           ref={flatListRef}
+          showsVerticalScrollIndicator={false}
         />
 
         {showAttachments && renderAttachmentButtons()}
 
+        {/* ── Input Bar ── */}
         <View style={styles.inputContainer}>
           <TouchableOpacity
-            style={styles.addButton}
+            style={[styles.addButton, showAttachments && styles.addButtonActive]}
             onPress={() => setShowAttachments(!showAttachments)}
+            activeOpacity={0.7}
           >
-            <MaterialIcons name="add" size={24} color="#007AFF" />
+            <MaterialIcons
+              name={showAttachments ? 'close' : 'add'}
+              size={22}
+              color={showAttachments ? colors.PRIMARY_COLOR : colors.SUB_TITLE_COLOR}
+            />
           </TouchableOpacity>
 
-          <View style={styles.inputWrapper}>
+          <View style={[styles.inputWrapper, message.length > 0 && styles.inputWrapperActive]}>
             <TextInput
               style={styles.input}
-              placeholder="Type a message..."
-              placeholderTextColor="#666666"
+              placeholder="Message..."
+              placeholderTextColor={colors.MUTED_COLOR}
               value={message}
               onChangeText={setMessage}
               multiline
             />
+            <TouchableOpacity style={styles.emojiButton} activeOpacity={0.7}>
+              <MaterialIcons name="emoji-emotions" size={20} color={colors.MUTED_COLOR} />
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={styles.emojiButton}>
-            <MaterialIcons name="emoji-emotions" size={24} color="#666666" />
-          </TouchableOpacity>
-
           <TouchableOpacity
-            style={[styles.sendButton, { opacity: message.trim().length > 0 ? 1 : 0.5 }]}
+            style={[styles.sendButton, message.trim().length > 0 && styles.sendButtonActive]}
             onPress={sendMessage}
             disabled={message.trim().length === 0}
+            activeOpacity={0.8}
           >
-            <MaterialIcons name="send" size={24} color="#007AFF" />
+            <MaterialIcons name="send" size={20} color={message.trim().length > 0 ? '#FFFFFF' : colors.MUTED_COLOR} />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -712,30 +717,35 @@ const ChatScreen = ({ route, navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
+
+  // Header
   header: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 100,
-    backgroundColor: 'rgba(26, 26, 26, 0.98)',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE,
+  },
+
+  headerScrolled: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 12,
+    backgroundColor: colors.SURFACE_COLOR,
   },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  headerScrolled: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -743,28 +753,47 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   backButton: {
-    padding: 8,
-    marginRight: 4,
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 2,
   },
   headerProfile: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
   },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#2A2A2A',
+  avatarWrapper: {
+    position: 'relative',
+  },
+  headerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.CARD_COLOR,
+    borderWidth: 1.5,
+    borderColor: colors.BORDER_ACTIVE,
+  },
+  onlineBadge: {
+    position: 'absolute',
+    bottom: 1,
+    right: 1,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: colors.ACCEPT_GREEN,
+    borderWidth: 2,
+    borderColor: colors.SURFACE_COLOR,
   },
   headerInfo: {
-    marginLeft: 12,
+    marginLeft: 11,
     flex: 1,
   },
   headerName: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '600',
+    color: colors.TITLE_COLOR,
+    fontSize: 16,
+    fontWeight: '700',
     letterSpacing: 0.2,
   },
   onlineContainer: {
@@ -773,133 +802,236 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   onlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4CAF50',
-    marginRight: 6,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.ACCEPT_GREEN,
+    marginRight: 5,
   },
   headerStatus: {
-    color: '#999999',
-    fontSize: 13,
+    color: colors.ACCEPT_GREEN,
+    fontSize: 11.5,
+    fontWeight: '500',
     letterSpacing: 0.1,
   },
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
-  headerButton: {
-    padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 20,
+  headerActionBtn: {
     width: 36,
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 18,
+    backgroundColor: colors.CARD_COLOR,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
   },
+  headerActionBtnPrimary: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderColor: colors.PRIMARY_COLOR,
+  },
+
+  // Content
   content: {
     flex: 1,
   },
   messagesList: {
-    padding: 16,
-    marginTop: 60,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
   },
+
+  // Date separator
+  dateSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 16,
+  },
+  dateLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.BORDER_SUBTLE,
+  },
+  dateText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginHorizontal: 12,
+  },
+
+  // Messages
   messageContainer: {
-    maxWidth: '80%',
-    marginVertical: 4,
-    padding: 12,
-    borderRadius: 20,
+    maxWidth: '78%',
+    marginVertical: 3,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 18,
   },
   myMessage: {
     alignSelf: 'flex-end',
-    backgroundColor: '#007AFF',
-    borderTopRightRadius: 4,
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderBottomRightRadius: 5,
   },
   theirMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#2A2A2A',
-    borderTopLeftRadius: 4,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderBottomLeftRadius: 5,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
   },
   messageText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    color: colors.TITLE_COLOR,
+    fontSize: 15.5,
+    lineHeight: 21,
+    fontWeight: '400',
+  },
+  messageFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 4,
   },
   timestamp: {
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: 12,
-    marginTop: 4,
-    alignSelf: 'flex-end',
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 11,
+    fontWeight: '400',
   },
+
+  // Voice message
   voiceContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 8,
   },
   voicePlayButton: {
-    padding: 4,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   voiceWaveform: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
     height: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 15,
-    marginHorizontal: 8,
+  },
+  waveBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.5)',
   },
   voiceDuration: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginRight: 8,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '500',
   },
-  attachmentButtons: {
+
+  // Attachment panel
+  attachmentPanel: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    padding: 16,
-    backgroundColor: '#1A1A1A',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    backgroundColor: colors.SURFACE_COLOR,
     borderTopWidth: 1,
-    borderTopColor: '#2A2A2A',
+    borderTopColor: colors.BORDER_SUBTLE,
+  },
+  attachmentItem: {
+    alignItems: 'center',
+    gap: 6,
   },
   attachmentButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
   },
+  attachmentLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+
+  // Input area
   inputContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
+    alignItems: 'flex-end',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: colors.SURFACE_COLOR,
     borderTopWidth: 1,
-    borderTopColor: '#2A2A2A',
+    borderTopColor: colors.BORDER_SUBTLE,
+    gap: 8,
   },
   addButton: {
-    padding: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.CARD_COLOR,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  addButtonActive: {
+    borderColor: colors.PRIMARY_COLOR,
+    backgroundColor: colors.PRIMARY_GLOW,
   },
   inputWrapper: {
     flex: 1,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 20,
-    marginHorizontal: 8,
-    paddingHorizontal: 16,
-    maxHeight: 100,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    backgroundColor: colors.CARD_COLOR,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    maxHeight: 110,
+  },
+  inputWrapperActive: {
+    borderColor: colors.PRIMARY_COLOR + '60',
   },
   input: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    flex: 1,
+    color: colors.TITLE_COLOR,
+    fontSize: 15,
     paddingVertical: 8,
+    lineHeight: 20,
   },
   emojiButton: {
-    padding: 8,
+    padding: 6,
+    paddingBottom: 8,
   },
   sendButton: {
-    padding: 8,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderRadius: 20,
-    width: 40,
-    height: 40,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.CARD_COLOR,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  sendButtonActive: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderColor: colors.PRIMARY_COLOR,
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
   },
 });
 
@@ -908,30 +1040,78 @@ const styles = StyleSheet.create({
 const callStyles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0A0F',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
-  bgGradientTop: {
+
+  // Audio call cinematic background
+  audioBg: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: '40%',
-    backgroundColor: 'transparent',
-    borderBottomLeftRadius: 300,
-    borderBottomRightRadius: 300,
-    opacity: 0.4,
-    shadowColor: '#6C63FF',
-    shadowOffset: { width: 0, height: 80 },
-    shadowOpacity: 0.3,
-    shadowRadius: 120,
-  },
-  bgGradientBottom: {
-    position: 'absolute',
     bottom: 0,
+    backgroundColor: '#05050A',
+    overflow: 'hidden',
+  },
+  blurredBgImage: {
+    position: 'absolute',
+    top: -50,
+    left: -50,
+    right: -50,
+    bottom: -50,
+    opacity: 0.35,
+    resizeMode: 'cover',
+  },
+  bgOverlay: {
+    position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
-    height: '30%',
-    backgroundColor: 'rgba(20, 20, 30, 0.8)',
+    bottom: 0,
+    backgroundColor: 'rgba(5, 5, 15, 0.75)',
+  },
+  bgGlow: {
+    position: 'absolute',
+    top: '30%',
+    left: '50%',
+    width: 400,
+    height: 400,
+    borderRadius: 200,
+    marginLeft: -200,
+    marginTop: -200,
+    backgroundColor: colors.PRIMARY_COLOR,
+    opacity: 0.08,
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 100,
+    elevation: 20,
+  },
+  // Film strip decorations
+  filmStrip: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 40,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 10,
+  },
+  filmStripTop: {
+    top: 0,
+  },
+  filmStripBottom: {
+    bottom: 0,
+  },
+  filmHole: {
+    width: 22,
+    height: 18,
+    borderRadius: 3,
+    backgroundColor: '#05050A',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
   },
 
   // Video
@@ -945,33 +1125,34 @@ const callStyles = StyleSheet.create({
   },
   remoteVideoPlaceholder: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#1A1A2E',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#0A0A16',
     justifyContent: 'center',
     alignItems: 'center',
   },
   videoPlaceholderText: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: 14,
-    marginTop: 12,
+    color: 'rgba(255,255,255,0.25)',
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 14,
+    letterSpacing: 0.3,
   },
   localVideoWrapper: {
     position: 'absolute',
     right: 16,
-    width: 120,
-    height: 170,
+    width: 100,
+    height: 150,
     borderRadius: 16,
     overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: 'rgba(108, 99, 255, 0.6)',
-    elevation: 10,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: '#000',
+    elevation: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    zIndex: 100,
   },
   localVideo: {
     width: '100%',
@@ -979,12 +1160,12 @@ const callStyles = StyleSheet.create({
   },
   switchCameraBtn: {
     position: 'absolute',
-    top: 8,
+    bottom: 8,
     right: 8,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -995,162 +1176,245 @@ const callStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
-    gap: 12,
+    gap: 10,
     zIndex: 10,
   },
   encryptionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(76, 175, 80, 0.12)',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+    backgroundColor: 'rgba(0, 200, 83, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     borderRadius: 20,
-    gap: 6,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.2)',
   },
   encryptionText: {
-    color: '#4CAF50',
-    fontSize: 12,
+    color: colors.ACCEPT_GREEN,
+    fontSize: 11,
     fontWeight: '500',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   callTypeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(108, 99, 255, 0.12)',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
+    backgroundColor: colors.PRIMARY_GLOW,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     borderRadius: 20,
-    gap: 6,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: colors.BORDER_ACTIVE,
   },
   callTypeText: {
-    color: '#6C63FF',
-    fontSize: 12,
+    color: colors.PRIMARY_COLOR,
+    fontSize: 11,
     fontWeight: '500',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 
-  // Center content
+  // Center
   centerContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingBottom: 40,
+    paddingBottom: 30,
     zIndex: 5,
   },
   pulseRing: {
     position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 2,
-    borderColor: '#6C63FF',
+    top: "32%",
+    width: 180,
+    height: 180,
+    borderRadius: 180 / 2,
+    borderWidth: 1.5,
+    borderColor: colors.PRIMARY_COLOR,
   },
   pulseRingOuter: {
     position: 'absolute',
+    top: "32%",
     width: 180,
     height: 180,
-    borderRadius: 90,
-    borderWidth: 1.5,
-    borderColor: '#6C63FF',
-  },
-  avatarWrapper: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    overflow: 'hidden',
-    borderWidth: 3,
-    borderColor: 'rgba(108, 99, 255, 0.5)',
-    marginBottom: 24,
-  },
-  avatarConnectedGlow: {
-    borderColor: '#4CAF50',
-    shadowColor: '#4CAF50',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  avatar: {
-    width: '100%',
-    height: '100%',
-  },
-  callerName: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  callStatusText: {
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: 16,
-    fontWeight: '400',
-    letterSpacing: 0.3,
+    borderRadius: 180 / 2,
+    borderWidth: 1,
+    borderColor: colors.PRIMARY_COLOR,
   },
 
-  // Video overlay info (shown when video is connected)
+  // Avatar with cinematic frame
+  avatarFrame: {
+    width: 126,
+    height: 126,
+    borderRadius: 63,
+    position: 'relative',
+    marginBottom: 26,
+    borderWidth: 2,
+    borderColor: colors.PRIMARY_COLOR + '70',
+    overflow: 'visible',
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+  },
+  avatarConnected: {
+    borderColor: colors.ACCEPT_GREEN,
+    shadowColor: colors.ACCEPT_GREEN,
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+  },
+  avatar: {
+    width: 122,
+    height: 122,
+    borderRadius: 61,
+    backgroundColor: colors.CARD_COLOR,
+  },
+  // Cinema-style corner marks
+  cornerMark: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    borderColor: colors.PRIMARY_COLOR,
+    zIndex: 10,
+  },
+  cornerTL: {
+    top: -6,
+    left: -6,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderTopLeftRadius: 3,
+  },
+  cornerTR: {
+    top: -6,
+    right: -6,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+    borderTopRightRadius: 3,
+  },
+  cornerBL: {
+    bottom: -6,
+    left: -6,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+    borderBottomLeftRadius: 3,
+  },
+  cornerBR: {
+    bottom: -6,
+    right: -6,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    borderBottomRightRadius: 3,
+  },
+
+  callerName: {
+    color: colors.TITLE_COLOR,
+    fontSize: 26,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    marginBottom: 12,
+  },
+  statusRow: {
+    alignItems: 'center',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(8, 8, 16, 0.5)',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 7,
+    borderWidth: 1.5,
+    borderColor: colors.BORDER_ACTIVE,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.PRIMARY_COLOR,
+  },
+  callStatusText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    fontVariant: ['tabular-nums'],
+  },
+  errorBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 59, 48, 0.1)',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    marginTop: 14,
+    gap: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 59, 48, 0.25)',
+  },
+  errorText: {
+    color: colors.DELETE_RED_COLOR,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+
+  // Video overlay
   videoOverlayInfo: {
     position: 'absolute',
-    top: '12%',
     left: 0,
     right: 0,
     alignItems: 'center',
+    gap: 8,
     zIndex: 10,
   },
   videoCallerName: {
     color: '#FFFFFF',
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowColor: 'rgba(0,0,0,0.8)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  videoDuration: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 15,
-    fontWeight: '500',
-    marginTop: 4,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-
-  errorBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 59, 48, 0.12)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginTop: 16,
-    gap: 8,
-  },
-  errorText: {
-    color: '#FF6B6B',
-    fontSize: 14,
-    fontWeight: '500',
+    textShadowRadius: 6,
+    marginBottom: 4,
   },
 
   // Bottom bar
   bottomBar: {
+    marginHorizontal: 12,
+    marginBottom: 12,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 16,
     zIndex: 10,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    backgroundColor: 'rgba(15, 15, 26, 0.95)',
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  bottomDivider: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.BORDER_SUBTLE,
+    alignSelf: 'center',
+    marginBottom: 20,
   },
   actionsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'flex-start',
-    gap: 28,
+    gap: 24,
   },
-
-  // Action buttons
   actionBtn: {
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
+    minWidth: 64,
   },
   circleBtn: {
     width: 60,
@@ -1160,56 +1424,46 @@ const callStyles = StyleSheet.create({
     alignItems: 'center',
   },
   declineBtn: {
-    backgroundColor: '#FF3B30',
-    shadowColor: '#FF3B30',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 8,
+    backgroundColor: colors.DELETE_RED_COLOR,
+    shadowColor: colors.DELETE_RED_COLOR,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 14,
+    elevation: 10,
   },
   acceptBtn: {
-    backgroundColor: '#34C759',
-    shadowColor: '#34C759',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 8,
+    backgroundColor: colors.ACCEPT_GREEN,
+    shadowColor: colors.ACCEPT_GREEN,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 14,
+    elevation: 10,
   },
   controlBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
   },
   controlBtnActive: {
-    backgroundColor: '#6C63FF',
-    shadowColor: '#6C63FF',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FFFFFF',
+    shadowColor: '#FFFFFF',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
-    elevation: 6,
+    elevation: 8,
+  },
+  endCallLarge: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
   },
   actionLabel: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11.5,
     fontWeight: '500',
     letterSpacing: 0.2,
-  },
-
-  // End call (for calling state)
-  endCallBtn: {
-    alignItems: 'center',
-    gap: 10,
-  },
-  endCallIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#FF3B30',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#FF3B30',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    elevation: 10,
+    textAlign: 'center',
   },
 });
 
