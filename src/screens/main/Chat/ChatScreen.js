@@ -669,7 +669,7 @@ const ChatScreen = ({ route, navigation }) => {
         {showAttachments && renderAttachmentButtons()}
 
         {/* ── Input Bar ── */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, { alignItems: "center" }]}>
           <TouchableOpacity
             style={[styles.addButton, showAttachments && styles.addButtonActive]}
             onPress={() => setShowAttachments(!showAttachments)}
@@ -975,9 +975,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.CARD_COLOR,
@@ -1027,11 +1027,6 @@ const styles = StyleSheet.create({
   sendButtonActive: {
     backgroundColor: colors.PRIMARY_COLOR,
     borderColor: colors.PRIMARY_COLOR,
-    shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    elevation: 8,
   },
 });
 
