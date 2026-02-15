@@ -25,7 +25,31 @@ import colors from '../../../theme/Colors';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+const isSameDay = (d1, d2) => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
 
+const getDateLabel = (date) => {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (isSameDay(date, today)) {
+    return 'Today';
+  } else if (isSameDay(date, yesterday)) {
+    return 'Yesterday';
+  } else {
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  }
+};
 
 const ChatScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
@@ -234,48 +258,71 @@ const ChatScreen = ({ route, navigation }) => {
   const renderMessage = ({ item, index }) => {
     const isMyMessage = item.senderId === auth.currentUser?.uid;
 
+    const dateSeparator = (() => {
+      const currentMessageDate = new Date(item.timestamp);
+      const previousMessage = index > 0 ? messages[index - 1] : null;
+      const previousMessageDate = previousMessage ? new Date(previousMessage.timestamp) : null;
+
+      if (!previousMessageDate || !isSameDay(currentMessageDate, previousMessageDate)) {
+        return (
+          <View style={styles.dateSeparator}>
+            <View style={styles.dateLine} />
+            <Text style={styles.dateText}>{getDateLabel(currentMessageDate)}</Text>
+            <View style={styles.dateLine} />
+          </View>
+        );
+      }
+      return null;
+    })();
+
     if (item.type === 'voice') {
       return (
-        <View style={[
-          styles.messageContainer,
-          isMyMessage ? styles.myMessage : styles.theirMessage,
-          styles.voiceContainer,
-        ]}>
-          <TouchableOpacity style={styles.voicePlayButton}>
-            <MaterialIcons name="play-arrow" size={22} color="#FFFFFF" />
-          </TouchableOpacity>
-          <View style={styles.voiceWaveform}>
-            {[...Array(18)].map((_, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.waveBar,
-                  { height: 4 + Math.sin(i * 0.8) * 10 + 8 },
-                ]}
-              />
-            ))}
+        <View>
+          {dateSeparator}
+          <View style={[
+            styles.messageContainer,
+            isMyMessage ? styles.myMessage : styles.theirMessage,
+            styles.voiceContainer,
+          ]}>
+            <TouchableOpacity style={styles.voicePlayButton}>
+              <MaterialIcons name="play-arrow" size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+            <View style={styles.voiceWaveform}>
+              {[...Array(18)].map((_, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.waveBar,
+                    { height: 4 + Math.sin(i * 0.8) * 10 + 8 },
+                  ]}
+                />
+              ))}
+            </View>
+            <Text style={styles.voiceDuration}>{item.duration}</Text>
+            <Text style={styles.timestamp}>
+              {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
           </View>
-          <Text style={styles.voiceDuration}>{item.duration}</Text>
-          <Text style={styles.timestamp}>
-            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
         </View>
       );
     }
 
     return (
-      <View style={[
-        styles.messageContainer,
-        isMyMessage ? styles.myMessage : styles.theirMessage,
-      ]}>
-        <Text style={styles.messageText}>{item.text}</Text>
-        <View style={styles.messageFooter}>
-          <Text style={styles.timestamp}>
-            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-          {isMyMessage && (
-            <MaterialIcons name="done-all" size={13} color="rgba(0, 122, 255, 0.8)" style={{ marginLeft: 4 }} />
-          )}
+      <View>
+        {dateSeparator}
+        <View style={[
+          styles.messageContainer,
+          isMyMessage ? styles.myMessage : styles.theirMessage,
+        ]}>
+          <Text style={styles.messageText}>{item.text}</Text>
+          <View style={styles.messageFooter}>
+            <Text style={styles.timestamp}>
+              {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+            {isMyMessage && (
+              <MaterialIcons name="done-all" size={13} color="rgba(0, 122, 255, 0.8)" style={{ marginLeft: 4 }} />
+            )}
+          </View>
         </View>
       </View>
     );
@@ -314,14 +361,7 @@ const ChatScreen = ({ route, navigation }) => {
     setIsScrolled(scrollY > 10);
   };
 
-  // ─── Render date separator ────────────────────────────────
-  const renderDateSeparator = () => (
-    <View style={styles.dateSeparator}>
-      <View style={styles.dateLine} />
-      <Text style={styles.dateText}>Today</Text>
-      <View style={styles.dateLine} />
-    </View>
-  );
+
 
   // ─── Call Modal UI ────────────────────────────────────────
 
@@ -658,7 +698,6 @@ const ChatScreen = ({ route, navigation }) => {
           renderItem={renderMessage}
           keyExtractor={item => item.id}
           contentContainerStyle={[styles.messagesList, { paddingTop: insets.top + 72 }]}
-          ListHeaderComponent={renderDateSeparator}
           inverted={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
