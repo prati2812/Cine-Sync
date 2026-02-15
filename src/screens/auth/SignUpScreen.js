@@ -1,41 +1,72 @@
-import React, { useState } from 'react';
+import React, {useState} from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   Alert,
+  StatusBar,
+  TouchableWithoutFeedback,
+  Keyboard,
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import Icon from 'react-native-vector-icons/Ionicons';
-import { auth } from '../../config/firebase';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import {auth} from '../../config/firebase';
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+} from 'firebase/auth';
+import {getDatabase, ref, set} from 'firebase/database';
+import colors from '../../theme/Colors';
+import CustomInput from '../../components/UI/CustomInput';
 
-const SignUpScreen = ({ navigation }) => {
+const SignUpScreen = ({navigation}) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSignUp = async () => {
+    console.log('Creating user account...', auth, email, password);
+    setIsLoading(true);
     if (!username || !email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
+      setIsLoading(false);
       return;
     }
 
     try {
       // Create user with email and password
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      
-    
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
+
+      await sendEmailVerification(userCredential.user);
+
+      const db = getDatabase();
+
+      // Create user data object
+      const userData = {
+        username: username,
+        email: email,
+        userId: userCredential.user.uid,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Store user data in Realtime Database
+      await set(ref(db, 'users/' + userCredential.user.uid), userData);
+
       console.log('User account created & signed in!');
-      
-      // No need to navigate manually, App.js will handle navigation
-      // based on authentication state
+      setIsLoading(false);
     } catch (error) {
+      setIsLoading(false);
       if (error.code === 'auth/email-already-in-use') {
         Alert.alert('Error', 'That email address is already in use!');
       } else if (error.code === 'auth/invalid-email') {
@@ -43,89 +74,86 @@ const SignUpScreen = ({ navigation }) => {
       } else if (error.code === 'auth/weak-password') {
         Alert.alert('Error', 'Password should be at least 6 characters');
       } else {
-        Alert.alert('Error', error.message);
+        Alert.alert('Errorrrr', error.message);
       }
-      console.error(error);
+      console.log('New Error', error);
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}>
-        <View style={styles.contentContainer}>
-          <View style={styles.headerContainer}>
-            <Logo size="large" />
-            <Text style={styles.title}>Create Account</Text>
-            <Text style={styles.subtitle}>
-              Join the community of movie enthusiasts
-            </Text>
-          </View>
+      <StatusBar
+        backgroundColor={colors.STATUSBAR_BG_COLOR}
+        barStyle="light-content"
+      />
 
-          <View style={styles.formContainer}>
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Username</Text>
-              <View style={styles.inputWrapper}>
-                <Icon name="person-outline" size={20} color="#666666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardView}>
+          <ScrollView
+            contentContainerStyle={{flexGrow: 1, paddingBottom: 15}}
+            showsVerticalScrollIndicator={false}>
+            <View style={styles.contentContainer}>
+              <View style={styles.headerContainer}>
+                <Logo size="large" />
+                <Text style={styles.title}>Create Account</Text>
+                <Text style={styles.subtitle}>
+                  Join the community of movie enthusiasts
+                </Text>
+              </View>
+
+              <View style={styles.formContainer}>
+                <CustomInput
+                  label={'Username'}
+                  leftIcon={'person-outline'}
                   placeholder="Choose a username"
-                  placeholderTextColor="#666666"
                   value={username}
                   onChangeText={setUsername}
-                  autoCapitalize="none"
                 />
-              </View>
-            </View>
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email</Text>
-              <View style={styles.inputWrapper}>
-                <Icon name="mail-outline" size={20} color="#666666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
+                <CustomInput
+                  label={'Email'}
+                  leftIcon={'mail-outline'}
                   placeholder="Enter your email"
-                  placeholderTextColor="#666666"
                   value={email}
                   onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
                 />
-              </View>
-            </View>
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Password</Text>
-              <View style={styles.inputWrapper}>
-                <Icon name="lock-closed-outline" size={20} color="#666666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Create a password"
-                  placeholderTextColor="#666666"
+                <CustomInput
+                  label="Password"
+                  leftIcon="lock-closed-outline"
+                  rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                  placeholder="Enter password"
+                  secureTextEntry={!showPassword}
                   value={password}
                   onChangeText={setPassword}
-                  secureTextEntry
+                  onRightIconPress={() => setShowPassword(!showPassword)}
                 />
+
+                <TouchableOpacity
+                  style={[styles.button, isLoading && styles.buttonDisabled]}
+                  onPress={handleSignUp}
+                  disabled={isLoading}
+                  activeOpacity={0.8}>
+                  {isLoading ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={styles.buttonText}>Create Account</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.linkContainer}
+                  onPress={() => navigation.navigate('Login')}>
+                  <Text style={styles.linkText}>Already have an account? </Text>
+                  <Text style={styles.link}>Login</Text>
+                </TouchableOpacity>
               </View>
             </View>
-
-            <TouchableOpacity 
-              style={styles.button}
-              onPress={handleSignUp}
-              activeOpacity={0.8}>
-              <Text style={styles.buttonText}>Create Account</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.linkContainer}
-              onPress={() => navigation.navigate('Login')}>
-              <Text style={styles.linkText}>Already have an account? </Text>
-              <Text style={styles.link}>Login</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 };
@@ -133,7 +161,7 @@ const SignUpScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
   keyboardView: {
     flex: 1,
@@ -149,12 +177,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#FFFFFF',
+    color: colors.TITLE_COLOR,
     marginBottom: 12,
   },
   subtitle: {
     fontSize: 16,
-    color: '#888888',
+    color: colors.SUB_TITLE_COLOR,
     maxWidth: '80%',
   },
   formContainer: {
@@ -166,17 +194,17 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: colors.TITLE_COLOR,
     marginBottom: 8,
     marginLeft: 4,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1E1E1E',
+    backgroundColor: colors.INPUTBOX_BG_COLOR,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
     paddingHorizontal: 16,
   },
   inputIcon: {
@@ -186,22 +214,22 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     fontSize: 16,
-    color: '#FFFFFF',
+    color: colors.TITLE_COLOR,
   },
   button: {
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.PRIMARY_COLOR,
     padding: 18,
     borderRadius: 16,
     alignItems: 'center',
     marginTop: 32,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: {width: 0, height: 4},
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
   },
   buttonText: {
-    color: '#FFFFFF',
+    color: colors.TITLE_COLOR,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -211,14 +239,14 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   linkText: {
-    color: '#888888',
+    color: colors.SUB_TITLE_COLOR,
     fontSize: 14,
   },
   link: {
-    color: '#007AFF',
+    color: colors.PRIMARY_COLOR,
     fontSize: 14,
     fontWeight: '500',
   },
 });
 
-export default SignUpScreen; 
+export default SignUpScreen;

@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "719989061898",
+    "firebase_url": "https://nightwatcher-89f6e-default-rtdb.firebaseio.com",
+    "project_id": "nightwatcher-89f6e",
+    "storage_bucket": "nightwatcher-89f6e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:719989061898:android:9e12bad90a71e4bda1e2f3",
+        "android_client_info": {
+          "package_name": "com.nightwatcher"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB4fW215s0bTVQYMJGFWr--bM2vnPaTq-U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
