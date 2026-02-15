@@ -1,46 +1,140 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Modal,
   TextInput,
   Alert,
   SafeAreaView,
   ScrollView,
   StatusBar,
+  Dimensions,
 } from 'react-native';
-import Logo from '../../components/Logo1';
 import { useNavigation } from '@react-navigation/native';
-import { auth} from '../../config/firebase';
+import { auth } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Animated, { 
-  withSpring, 
-  useAnimatedStyle, 
-  useSharedValue, 
-  withRepeat 
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import Logo from '../../components/Logo1';
+import Animated, {
+  withSpring,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  FadeIn,
+  FadeInDown,
 } from 'react-native-reanimated';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
+import LinearGradient from 'react-native-linear-gradient';
 import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
 import colors from '../../theme/Colors';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// ──────────────────────────────────────────────────────────────
+//  Room Card Component
+// ──────────────────────────────────────────────────────────────
+const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
+  const renderRightActions = () => (
+    <TouchableOpacity
+      style={[
+        styles.swipeDeleteBtn,
+        { display: isCreator ? 'flex' : 'none' },
+      ]}
+      onPress={onDelete}
+    >
+      <LinearGradient
+        colors={[colors.DELETE_RED_COLOR, '#CC2D26']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.swipeDeleteGradient}
+      >
+        <MaterialIcons name="delete-outline" size={22} color="#FFF" />
+        <Text style={styles.swipeDeleteText}>Delete</Text>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+
+  const participantCount = item?.participants?.length || 0;
+
+  return (
+    <Swipeable renderRightActions={renderRightActions}>
+      <TouchableOpacity activeOpacity={0.85} style={styles.roomCard} onPress={onPress}>
+        {/* Left accent strip */}
+        <LinearGradient
+          colors={isCreator ? [colors.GRADIENT_START, colors.GRADIENT_END] : [colors.FILM_GOLD, '#FF8C00']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={styles.roomAccentStrip}
+        />
+
+        <View style={styles.roomCardInner}>
+          {/* Thumbnail */}
+          <View style={styles.roomThumbnailWrap}>
+            <LinearGradient
+              colors={isCreator ? [colors.GRADIENT_START, colors.GRADIENT_END] : [colors.FILM_GOLD, '#FF8C00']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.roomThumbnailGradient}
+            >
+              <Ionicons name="film" size={22} color="#FFF" />
+            </LinearGradient>
+          </View>
+
+          {/* Info */}
+          <View style={styles.roomInfo}>
+            <Text style={styles.roomName} numberOfLines={1}>{item.name}</Text>
+            <View style={styles.roomMeta}>
+              <MaterialIcons name="person" size={13} color={colors.SUB_TITLE_COLOR} />
+              <Text style={styles.roomCreator} numberOfLines={1}>
+                {isCreator ? 'Created by you' : `by ${item.creator?.userName}`}
+              </Text>
+            </View>
+            {participantCount > 0 && (
+              <View style={styles.roomParticipantRow}>
+                <MaterialIcons name="people" size={13} color={colors.CYAN_ACCENT} />
+                <Text style={styles.roomParticipantText}>
+                  {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Right side decorations */}
+          <View style={styles.roomCardRight}>
+            {isCreator && (
+              <View style={styles.creatorBadge}>
+                <Ionicons name="star" size={10} color={colors.FILM_GOLD} />
+                <Text style={styles.creatorBadgeText}>Host</Text>
+              </View>
+            )}
+            <MaterialIcons name="chevron-right" size={22} color={colors.MUTED_COLOR} />
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Swipeable>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────
+//  Home Screen
+// ──────────────────────────────────────────────────────────────
 const HomeScreen = () => {
   const [rooms, setRooms] = useState([]);
-  const [filterType, setFilterType] = useState('all'); // 'all', 'created', 'invited'
+  const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('newest'); // 'newest', 'oldest', 'alphabetical'
+  const [sortBy, setSortBy] = useState('newest');
+  const [searchFocused, setSearchFocused] = useState(false);
   const navigation = useNavigation();
-  
-  // Animation setup
+
+  // Empty state pulse
   const emptyStateScale = useSharedValue(1);
 
   useEffect(() => {
-    // Start the pulsing animation
     emptyStateScale.value = withRepeat(
-      withSpring(1.1, { duration: 1000 }), 
-      -1, 
+      withSpring(1.08, { duration: 1200 }),
+      -1,
       true
     );
   }, []);
@@ -49,7 +143,6 @@ const HomeScreen = () => {
     const db = getDatabase();
     const roomsRef = ref(db, 'rooms');
     const currentUser = auth.currentUser;
-    
     if (!currentUser) return;
 
     const unsubscribe = onValue(roomsRef, (snapshot) => {
@@ -60,13 +153,10 @@ const HomeScreen = () => {
           const isParticipant = room.participants?.includes(currentUser.email);
           return isCreator || isParticipant;
         });
-        
-        // Ensure all rooms have a createdAt value
         const roomsWithDates = roomsArray.map(room => ({
           ...room,
-          createdAt: room.createdAt || new Date().toISOString()
+          createdAt: room.createdAt || new Date().toISOString(),
         }));
-        
         setRooms(roomsWithDates);
       } else {
         setRooms([]);
@@ -76,188 +166,101 @@ const HomeScreen = () => {
     return () => unsubscribe();
   }, []);
 
-  const animatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: emptyStateScale.value }],
-    };
-  });
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: emptyStateScale.value }],
+  }));
 
-  const renderEmptyState = () => (
-    <View style={styles.emptyStateContainer}>
-      <Animated.View style={[styles.emptyStateIconContainer, animatedStyle]}>
-        <Text style={styles.emptyStateIcon}>🎬</Text>
-      </Animated.View>
-      <Text style={styles.emptyStateTitle}>No Rooms Yet</Text>
-      <Text style={styles.emptyStateDescription}>
-        Create your first room or wait for an invitation to join one!
-      </Text>
-    </View>
-  );
-
+  // ── Firebase logic ──────────────────────────────────────────
   const deleteRoom = async (roomId) => {
     try {
       const db = getDatabase();
       const currentUser = auth.currentUser;
-      
-      // Get the room data first to check permissions
       const roomRef = ref(db, `rooms/${roomId}`);
       const roomSnapshot = await get(roomRef);
       const roomData = roomSnapshot.val();
 
-      // Only allow creator to delete the room
       if (roomData.creator.email !== currentUser.email) {
         Alert.alert('Error', 'Only the room creator can delete this room');
         return;
       }
 
-      // Show confirmation dialog
-      Alert.alert(
-        'Delete Room',
-        'Are you sure you want to delete this room?',
-        [
-          {
-            text: 'Cancel',
-            style: 'cancel'
+      Alert.alert('Delete Room', 'Are you sure you want to delete this screening room?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await set(roomRef, null);
+            Alert.alert('Done', 'Room deleted successfully');
           },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: async () => {
-              await set(roomRef, null);
-              Alert.alert('Success', 'Room deleted successfully');
-            }
-          }
-        ]
-      );
+        },
+      ]);
     } catch (error) {
       console.error('Error deleting room:', error);
       Alert.alert('Error', 'Failed to delete room');
     }
   };
 
-  const renderRoom = ({ item }) => {
+  const onRoomPress = (item) => {
     const currentUser = auth.currentUser;
     const isCreator = item.creator.email === currentUser?.email;
 
-    const renderRightActions = () => (
-      <TouchableOpacity
-        style={[
-           {
-              backgroundColor: 'red',
-              padding: 16,
-              borderRadius: 16,
-              marginBottom: 16,
-              flexDirection: 'row',
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: 'red',
-              marginLeft: 10
-           },
-          { display: isCreator ? 'flex' : 'none' }
-        ]}
-        onPress={() => deleteRoom(item.roomId)}
-      >
-        <MaterialIcons name="delete" size={24} color={colors.TITLE_COLOR} />
-        <Text style={styles.deleteText}>Delete</Text>
-      </TouchableOpacity>
-    );
-
-    const onRoomPress = () => {
-      if (isCreator) {
-        Alert.alert(
-          'Room Options',
-          'What would you like to do?',
-          [
-            {
-              text: 'Join Room',
-              onPress: () => {
-                console.log("Newww Dataa", item?.participants?.length);
-                if(item?.participants?.length === 0 || item?.participants === undefined){
-                  navigation.navigate('StreamInfo', {
-                    roomId: item.roomId,
-                    roomName: item.name,
-                    streamUrl: item.streamUrl,
-                  });
-                 
-                }else{
-                  navigation.navigate('WaitingScreen', {
-                    roomId: item.roomId,
-                    roomName: item.name,
-                    streamUrl: item.streamUrl,
-                  });
-                }
-              }
-            },
-            {
-              text: 'Edit Room',
-              onPress: () => navigation.navigate('CreateRoom', { room: item })
-            },
-            {
-              text: 'Cancel',
-              style: 'cancel'
+    if (isCreator) {
+      Alert.alert('Screening Room', 'What would you like to do?', [
+        {
+          text: 'Join Room',
+          onPress: () => {
+            if (item?.participants?.length === 0 || item?.participants === undefined) {
+              navigation.navigate('StreamInfo', {
+                roomId: item.roomId,
+                roomName: item.name,
+                streamUrl: item.streamUrl,
+              });
+            } else {
+              navigation.navigate('WaitingScreen', {
+                roomId: item.roomId,
+                roomName: item.name,
+                streamUrl: item.streamUrl,
+              });
             }
-          ]
-        );
-      } else {
-        navigation.navigate('WaitingScreen', {
-          roomId: item.roomId,
-          roomName: item.name,
-          streamUrl: item.streamUrl,
-        });
-      }
-    };
-
-    return (
-      <Swipeable renderRightActions={renderRightActions}>
-        <TouchableOpacity style={styles.roomContainer} onPress={onRoomPress}>
-          <View style={styles.roomThumbnail}>
-            <Text style={styles.thumbnailText}>{item.thumbnail || '🎬'}</Text>
-          </View>
-          <View style={styles.roomInfo}>
-            <Text style={styles.roomName}>{item.name}</Text>
-            <Text style={styles.roomCreator}>
-              Created by {item.creator?.userName}
-            </Text>
-            {item?.participants?.length > 0 && (
-              <View style={styles.participantsContainer}>
-                <Text style={styles.roomParticipants}>
-                  { item.participants?.length} participants
-                </Text>
-              </View>
-            )}
-          </View>
-          <Text style={styles.arrowText}>›</Text>
-        </TouchableOpacity>
-      </Swipeable>
-    );
+          },
+        },
+        {
+          text: 'Edit Room',
+          onPress: () => navigation.navigate('CreateRoom', { room: item }),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    } else {
+      navigation.navigate('WaitingScreen', {
+        roomId: item.roomId,
+        roomName: item.name,
+        streamUrl: item.streamUrl,
+      });
+    }
   };
 
-  // Update getFilteredRooms to include search and sorting
+  // ── Filtering & sorting ─────────────────────────────────────
   const getFilteredRooms = () => {
     const currentUser = auth.currentUser;
     if (!currentUser) return [];
 
-    // First filter by type (all, created, invited)
     let filteredRooms = [...rooms];
     if (filterType === 'created') {
       filteredRooms = rooms.filter(room => room.creator.email === currentUser.email);
     } else if (filterType === 'invited') {
-      filteredRooms = rooms.filter(room => 
-        room.creator.email !== currentUser.email && 
-        room.participants?.includes(currentUser.email)
+      filteredRooms = rooms.filter(
+        room => room.creator.email !== currentUser.email && room.participants?.includes(currentUser.email)
       );
     }
 
-    // Then apply search filter if there's a search query
     if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      filteredRooms = filteredRooms.filter(room => 
-        room.name.toLowerCase().includes(query) ||
-        room.creator.email.toLowerCase().includes(query)
+      const q = searchQuery.toLowerCase().trim();
+      filteredRooms = filteredRooms.filter(
+        room => room.name.toLowerCase().includes(q) || room.creator.email.toLowerCase().includes(q)
       );
     }
 
-    // Finally, sort the results
     return filteredRooms.sort((a, b) => {
       switch (sortBy) {
         case 'newest':
@@ -272,206 +275,343 @@ const HomeScreen = () => {
     });
   };
 
-  // Update the filter buttons with a more modern design
-  const renderFilterButtons = () => (
-    <View style={styles.filterSection}>
-      <View style={styles.searchContainer}>
-        <MaterialIcons name="search" size={20} color="#666666" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search rooms..."
-          placeholderTextColor="#666666"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-      
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScrollView}
-      >
-        <View style={styles.filterContainer}>
-          <TouchableOpacity 
-            style={[styles.filterButton, filterType === 'all' && styles.filterButtonActive]}
-            onPress={() => setFilterType('all')}
-          >
-            <MaterialIcons 
-              name="dashboard" 
-              size={18} 
-              color={filterType === 'all' ? colors.TITLE_COLOR : '#888888'} 
-            />
-            <Text style={[styles.filterButtonText, filterType === 'all' && styles.filterButtonTextActive]}>
-              All Rooms
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.filterButton, filterType === 'created' && styles.filterButtonActive]}
-            onPress={() => setFilterType('created')}
-          >
-            <MaterialIcons 
-              name="add-circle" 
-              size={18} 
-              color={filterType === 'created' ? colors.TITLE_COLOR : '#888888'} 
-            />
-            <Text style={[styles.filterButtonText, filterType === 'created' && styles.filterButtonTextActive]}>
-              Created
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.filterButton, filterType === 'invited' && styles.filterButtonActive]}
-            onPress={() => setFilterType('invited')}
-          >
-            <MaterialIcons 
-              name="people" 
-              size={18} 
-              color={filterType === 'invited' ? colors.TITLE_COLOR : '#888888'} 
-            />
-            <Text style={[styles.filterButtonText, filterType === 'invited' && styles.filterButtonTextActive]}>
-              Invited
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+  const sortLabels = { newest: 'Newest', oldest: 'Oldest', alphabetical: 'A-Z' };
+  const cycleSortBy = () => {
+    const next = { newest: 'oldest', oldest: 'alphabetical', alphabetical: 'newest' };
+    setSortBy(next[sortBy]);
+  };
 
-      <View style={styles.sortContainer}>
-        <TouchableOpacity
-          style={styles.sortButton}
-          onPress={() => {
-            // Toggle between sort options
-            const nextSort = {
-              'newest': 'oldest',
-              'oldest': 'alphabetical',
-              'alphabetical': 'newest'
-            }[sortBy];
-            setSortBy(nextSort);
-          }}
-        >
-          <MaterialIcons name="sort" size={20} color={colors.TITLE_COLOR} />
-          <Text style={styles.sortButtonText}>
-            {sortBy.charAt(0).toUpperCase() + sortBy.slice(1)}
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-  
+  const filtered = getFilteredRooms();
+  const currentUser = auth.currentUser;
+
+  // ── Render ──────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor={colors.STATUSBAR_BG_COLOR} barStyle="light-content" />
+      <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" />
+
+      {/* ── Header ─────────────────────────────────────────── */}
       <View style={styles.header}>
         <Logo size="small" />
-        <View style={styles.headerButtons}></View>
       </View>
 
-      <View style={styles.roomsSection}>
-        {rooms.length > 0 && renderFilterButtons()}
+      {/* ── Search ────────────────────────────────────────── */}
+      <View style={styles.searchRow}>
+        <View style={[styles.searchBox, searchFocused && styles.searchBoxFocused]}>
+          <MaterialIcons name="search" size={20} color={searchFocused ? colors.PRIMARY_COLOR : colors.MUTED_COLOR} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search rooms..."
+            placeholderTextColor={colors.MUTED_COLOR}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+              <MaterialIcons name="close" size={18} color={colors.MUTED_COLOR} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
 
-        {getFilteredRooms().length > 0 ? (
+      {/* ── Filters ───────────────────────────────────────── */}
+      <View style={styles.filterRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
+          {[
+            { key: 'all', label: 'All Rooms', icon: 'apps' },
+            { key: 'created', label: 'My Rooms', icon: 'movie-creation' },
+            { key: 'invited', label: 'Invited', icon: 'group' },
+          ].map(f => (
+            <TouchableOpacity
+              key={f.key}
+              activeOpacity={0.8}
+
+              onPress={() => setFilterType(f.key)}
+            >
+              {filterType === f.key ? (
+                <LinearGradient
+                  colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.filterChipActive}
+                >
+                  <MaterialIcons name={f.icon} size={16} color="#FFF" />
+                  <Text style={styles.filterChipTextActive}>{f.label}</Text>
+                </LinearGradient>
+              ) : (
+                <View style={styles.filterChip}>
+                  <MaterialIcons name={f.icon} size={16} color={colors.SUB_TITLE_COLOR} />
+                  <Text style={styles.filterChipText}>{f.label}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* ── Sort ──────────────────────────────────────────── */}
+      <View style={styles.sortRow}>
+        <TouchableOpacity activeOpacity={0.7} style={styles.sortBtn} onPress={cycleSortBy}>
+          <MaterialIcons name="sort" size={18} color={colors.FILM_GOLD} />
+          <Text style={styles.sortLabel}>{sortLabels[sortBy]}</Text>
+          <MaterialIcons name="swap-vert" size={16} color={colors.MUTED_COLOR} />
+        </TouchableOpacity>
+        <Text style={styles.roomCount}>
+          {filtered.length} {filtered.length === 1 ? 'room' : 'rooms'}
+        </Text>
+      </View>
+
+      {/* ── Room List ─────────────────────────────────────── */}
+      <View style={styles.content}>
+        {filtered.length > 0 ? (
           <FlatList
-            data={getFilteredRooms()}
-            renderItem={({item}) => renderRoom({item})}
+            data={filtered}
+            renderItem={({ item, index }) => {
+              const isCreator = item.creator.email === currentUser?.email;
+              return (
+                <RoomCard
+                  item={item}
+                  isCreator={isCreator}
+                  index={index}
+                  onPress={() => onRoomPress(item)}
+                  onDelete={() => deleteRoom(item.roomId)}
+                />
+              );
+            }}
             keyExtractor={item => item.roomId}
-            contentContainerStyle={styles.roomsListContent}
+            contentContainerStyle={styles.listPadding}
             showsVerticalScrollIndicator={false}
           />
         ) : (
-          <View style={styles.emptySearchContainer}>
-            <Text style={styles.emptySearchText}>
-             {searchQuery ? renderEmptyState() : renderEmptyState()}
+          <View style={styles.emptyContainer}>
+            <Animated.View style={[styles.emptyIconCircle, animatedStyle]}>
+              <Ionicons name="film-outline" size={40} color={colors.FILM_GOLD} />
+            </Animated.View>
+            <Text style={styles.emptyTitle}>
+              {searchQuery ? 'No rooms found' : 'No Screening Rooms'}
+            </Text>
+            <Text style={styles.emptySub}>
+              {searchQuery
+                ? 'Try a different search term'
+                : 'Create a room and invite friends to watch together!'}
             </Text>
           </View>
         )}
       </View>
 
+      {/* ── FAB ───────────────────────────────────────────── */}
       {filterType !== 'invited' && (
         <TouchableOpacity
-          style={styles.createRoomButton}
-          onPress={() => navigation.navigate('CreateRoom')}>
-          <Text style={styles.createButtonIcon}>+</Text>
+          activeOpacity={0.85}
+          style={styles.fabWrap}
+          onPress={() => navigation.navigate('CreateRoom')}
+        >
+          <LinearGradient
+            colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.fab}
+          >
+            <MaterialIcons name="add" size={28} color="#FFF" />
+          </LinearGradient>
         </TouchableOpacity>
       )}
     </SafeAreaView>
   );
 };
 
+// ──────────────────────────────────────────────────────────────
+//  Styles
+// ──────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+
+  // ── Header ────────────────────────
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 20,
     paddingVertical: 16,
-    paddingRight: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
-  headerButtons: {
+  headerLeft: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
   },
-  headerButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
+  headerIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: colors.PRIMARY_COLOR_DARK,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.PRIMARY_GLOW,
   },
-  createRoomButton: {
-    position: 'absolute',
-    bottom: 54,
-    right: 24,
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: colors.PRIMARY_COLOR_DARK,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 0,
-  },
-  roomsSection: {
-    flex: 1,
-    paddingHorizontal: 24,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '800',
     color: colors.TITLE_COLOR,
-    marginBottom: 16,
+    letterSpacing: 0.5,
   },
-  roomsListContent: {
-    paddingVertical: 8,
+  headerSub: {
+    fontSize: 13,
+    color: colors.SUB_TITLE_COLOR,
+    marginTop: 2,
   },
-  roomContainer: {
-    backgroundColor: colors.INPUTBOX_BG_COLOR,
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 16,
+
+  // ── Search ────────────────────────
+  searchRow: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    height: 46,
+    borderWidth: 1.5,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+  },
+  searchBoxFocused: {
+    borderColor: colors.BORDER_ACTIVE,
+    backgroundColor: colors.CARD_COLOR,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.TITLE_COLOR,
+    marginLeft: 10,
+    fontSize: 15,
+    fontWeight: '400',
+  },
+
+  // ── Filter Chips ──────────────────
+  filterRow: {
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  filterScroll: {
+    paddingLeft: 20,
+    paddingRight: 20,
+    gap: 8,
+  },
+  filterChipWrap: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    gap: 6,
+  },
+  filterChipActive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    gap: 6,
+    overflow: 'hidden',
+    width: 10
+  },
+  filterChipText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  filterChipTextActive: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Sort ──────────────────────────
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  sortBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.INPUTBOX_BORDER_COLOR,
   },
-  roomThumbnail: {
+  sortLabel: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  roomCount: {
+    color: colors.MUTED_COLOR,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+
+  // ── Content ───────────────────────
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+  },
+  listPadding: {
+    paddingVertical: 8,
+    paddingBottom: 100,
+  },
+
+  // ── Room Card ─────────────────────
+  roomCard: {
+    backgroundColor: colors.CARD_COLOR,
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    overflow: 'hidden',
+    flexDirection: 'row',
+  },
+  roomAccentStrip: {
+    width: 4,
+  },
+  roomCardInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  roomThumbnailWrap: {
+    marginRight: 14,
+  },
+  roomThumbnailGradient: {
     width: 48,
     height: 48,
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    borderRadius: 24,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
   },
   roomInfo: {
     flex: 1,
@@ -479,338 +619,125 @@ const styles = StyleSheet.create({
   roomName: {
     color: colors.TITLE_COLOR,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
     marginBottom: 4,
+  },
+  roomMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
   },
   roomCreator: {
-    color: '#888888',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  participantsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  roomParticipants: {
-    color: '#666666',
-    fontSize: 13,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-  },
-  modalContent: {
-    backgroundColor: colors.INPUTBOX_BG_COLOR,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    paddingTop: 32,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    borderBottomWidth: 0,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 32,
-  },
-  modalTitle: {
-    color: colors.TITLE_COLOR,
-    fontSize: 24,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-  },
-  closeButton: {
-    backgroundColor: '#2A2A2A',
-    borderRadius: 12,
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeButtonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 18,
-    fontWeight: '300',
-    marginTop: -2,
-  },
-  inputContainer: {
-    marginBottom: 24,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.TITLE_COLOR,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    paddingHorizontal: 16,
-    height: 56,
-  },
-  inputIcon: {
-    marginRight: 12,
-    fontSize: 20,
-  },
-  textInput: {
-    flex: 1,
-    color: colors.TITLE_COLOR,
-    fontSize: 16,
-    height: '100%',
-  },
-  createButton: {
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    padding: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    marginTop: 8,
-    shadowColor: colors.PRIMARY_COLOR_DARK,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 0,
-    height: 56,
-    justifyContent: 'center',
-    marginBottom:30
-  },
-  createButtonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 16,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  logoText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: colors.TITLE_COLOR,
-  },
-  createButtonIcon: {
-    fontSize: 28,
-    color: colors.TITLE_COLOR,
-    fontWeight: 'bold',
-  },
-  thumbnailText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 24,
-  },
-  arrowText: {
-    color: '#666666',
-    fontSize: 24,
-    fontWeight: '300',
-  },
-  emailChipsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 12,
-    gap: 8,
-  },
-  emailChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    marginRight: 8,
-    marginBottom: 8,
-  },
-  emailChipText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
-    marginRight: 6,
-  },
-  removeEmailButton: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  removeEmailText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  addButton: {
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  addButtonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  emptyStateContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  emptyStateIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#2A2A2A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-  },
-  emptyStateIcon: {
-    fontSize: 32,
-  },
-  emptyStateTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.TITLE_COLOR,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  emptyStateDescription: {
-    fontSize: 16,
-    color: '#888888',
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  iconGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 8,
-  },
-  iconOption: {
-    width: '22%',
-    aspectRatio: 1,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    padding: 8,
-  },
-  iconOptionSelected: {
-    backgroundColor: '#1A1A1A',
-    borderColor: colors.PRIMARY_COLOR_DARK,
-    borderWidth: 2,
-  },
-  iconOptionEmoji: {
-    fontSize: 24,
-    marginBottom: 4,
-  },
-  iconOptionLabel: {
-    color: '#888888',
-    fontSize: 10,
-    textAlign: 'center',
-  },
-  filterSection: {
-    marginBottom: 16,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    height: 44,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-  },
-  searchInput: {
-    flex: 1,
-    color: colors.TITLE_COLOR,
-    marginLeft: 8,
-    fontSize: 15,
-  },
-  filterScrollView: {
-    marginBottom: 12,
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  filterButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#2A2A2A',
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    gap: 6,
-  },
-  filterButtonActive: {
-    backgroundColor: colors.PRIMARY_COLOR_DARK,
-    borderColor: colors.PRIMARY_COLOR_DARK,
-  },
-  filterButtonText: {
-    color: '#888888',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  filterButtonTextActive: {
-    color: colors.TITLE_COLOR,
-  },
-  sortContainer: {
-    borderTopWidth: 1,
-    borderTopColor: colors.INPUTBOX_BORDER_COLOR,
-    paddingTop: 12,
-  },
-  sortButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  sortButtonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
     fontWeight: '500',
   },
-  emptySearchContainer: {
+  roomParticipantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  roomParticipantText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  roomCardRight: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 6,
+    marginLeft: 8,
+  },
+  creatorBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.FILM_GOLD_GLOW,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    gap: 3,
+  },
+  creatorBadgeText: {
+    color: colors.FILM_GOLD,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+
+  // ── Swipe Delete ──────────────────
+  swipeDeleteBtn: {
+    justifyContent: 'center',
+    marginLeft: 10,
+    marginBottom: 12,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  swipeDeleteGradient: {
+    width: 80,
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 16,
+  },
+  swipeDeleteText: {
+    color: '#FFF',
+    fontSize: 11,
+    marginTop: 4,
+    fontWeight: '700',
+  },
+
+  // ── Empty State ───────────────────
+  emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 40,
   },
-  emptySearchText: {
-    color: '#888888',
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  deleteButton: {
-    backgroundColor: '#FF3B30',
+  emptyIconCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
-    width: 100,
-    height: '100%',
-    borderRadius: 16,
-    marginBottom: 16,
-    marginLeft: 10,
-    flexDirection: 'column',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: colors.FILM_GOLD_GLOW,
   },
-  deleteText: {
+  emptyTitle: {
     color: colors.TITLE_COLOR,
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptySub: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+
+  // ── FAB ───────────────────────────
+  fabWrap: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  fab: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
 
-export default HomeScreen; 
+export default HomeScreen;
