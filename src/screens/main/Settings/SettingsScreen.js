@@ -1,30 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  SafeAreaView, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
   ScrollView,
   TextInput,
   Alert,
   Switch,
-  Image,
-  Dimensions
+  Dimensions,
 } from 'react-native';
 import { auth } from '../../../config/firebase';
-import { 
-  updateProfile, 
-  updatePassword, 
-  deleteUser, 
+import {
+  updateProfile,
+  updatePassword,
+  deleteUser,
   EmailAuthProvider,
   reauthenticateWithCredential,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
 } from 'firebase/auth';
 import { getDatabase, ref, update } from 'firebase/database';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import LinearGradient from 'react-native-linear-gradient';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import colors from '../../../theme/Colors';
 
 const { width } = Dimensions.get('window');
 
@@ -39,7 +40,7 @@ const SettingsScreen = ({ navigation }) => {
   useEffect(() => {
     const currentUser = auth.currentUser;
     console.log(currentUser);
-    
+
     if (currentUser?.username) {
       setUsername(currentUser.username);
     }
@@ -65,16 +66,9 @@ const SettingsScreen = ({ navigation }) => {
     try {
       const user = auth.currentUser;
       const db = getDatabase();
-      
-      // Update in Firebase Auth
-      await updateProfile(user, {
-        displayName: username
-      });
 
-      // Update in Realtime Database
-      await update(ref(db, `users/${user.uid}`), {
-        username: username
-      });
+      await updateProfile(user, { displayName: username });
+      await update(ref(db, `users/${user.uid}`), { username: username });
 
       Alert.alert('Success', 'Username updated successfully');
       setIsEditing(false);
@@ -88,8 +82,8 @@ const SettingsScreen = ({ navigation }) => {
       const user = auth.currentUser;
       await sendPasswordResetEmail(auth, user.email);
       Alert.alert(
-        'Success', 
-        'Password reset email sent. Please check your inbox.'
+        'Success',
+        'Password reset email sent. Please check your inbox.',
       );
     } catch (error) {
       Alert.alert('Error', error.message);
@@ -101,10 +95,7 @@ const SettingsScreen = ({ navigation }) => {
       'Delete Account',
       'Are you sure you want to delete your account? This action cannot be undone.',
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
@@ -112,12 +103,11 @@ const SettingsScreen = ({ navigation }) => {
             try {
               const user = auth.currentUser;
               await deleteUser(user);
-              // Navigation will be handled by the auth state listener in App.js
             } catch (error) {
               if (error.code === 'auth/requires-recent-login') {
                 Alert.alert(
                   'Re-authentication Required',
-                  'Please log out and log in again to delete your account.'
+                  'Please log out and log in again to delete your account.',
                 );
               } else {
                 Alert.alert('Error', error.message);
@@ -125,7 +115,7 @@ const SettingsScreen = ({ navigation }) => {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -137,10 +127,7 @@ const SettingsScreen = ({ navigation }) => {
         'Disable App Lock',
         'Are you sure you want to disable app lock?',
         [
-          {
-            text: 'Cancel',
-            style: 'cancel'
-          },
+          { text: 'Cancel', style: 'cancel' },
           {
             text: 'Disable',
             style: 'destructive',
@@ -151,14 +138,13 @@ const SettingsScreen = ({ navigation }) => {
               } catch (error) {
                 Alert.alert('Error', 'Failed to disable app lock');
               }
-            }
-          }
-        ]
+            },
+          },
+        ],
       );
     }
   };
 
-  // Add a focus effect to check PIN status when screen is focused
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', async () => {
       try {
@@ -168,19 +154,22 @@ const SettingsScreen = ({ navigation }) => {
         console.error('Error checking app lock:', error);
       }
     });
-
     return unsubscribe;
   }, [navigation]);
 
-  const SettingRow = ({ label, value, onPress, icon, isLast }) => (
-    <TouchableOpacity 
-      style={[styles.settingRow, !isLast && styles.settingRowBorder]} 
+  // ── Setting Row Component ─────────────────────────────────
+  const SettingRow = ({ label, value, onPress, icon, iconColor, isLast }) => (
+    <TouchableOpacity
+      style={[styles.settingRow, !isLast && styles.settingRowBorder]}
       onPress={onPress}
-      activeOpacity={0.7}
-    >
+      activeOpacity={0.7}>
       <View style={styles.settingRowLeft}>
-        <View style={styles.iconContainer}>
-          <MaterialIcons name={icon} size={22} color="#FFFFFF" />
+        <View style={[styles.iconContainer, iconColor && { backgroundColor: iconColor + '18' }]}>
+          <MaterialIcons
+            name={icon}
+            size={20}
+            color={iconColor || colors.PRIMARY_COLOR}
+          />
         </View>
         <Text style={styles.settingLabel}>{label}</Text>
       </View>
@@ -188,74 +177,95 @@ const SettingsScreen = ({ navigation }) => {
         <Switch
           value={value}
           onValueChange={onPress}
-          trackColor={{ false: '#767577', true: '#81b0ff' }}
-          thumbColor={value ? '#007AFF' : '#f4f3f4'}
+          trackColor={{ false: colors.MUTED_COLOR, true: colors.GRADIENT_START + '80' }}
+          thumbColor={value ? colors.PRIMARY_COLOR : colors.SUB_TITLE_COLOR}
         />
       ) : (
         <View style={styles.settingRowRight}>
           {value && <Text style={styles.settingValue}>{value}</Text>}
-          <MaterialIcons name="chevron-right" size={20} color="#666666" />
+          <MaterialIcons
+            name="chevron-right"
+            size={20}
+            color={colors.MUTED_COLOR}
+          />
         </View>
       )}
     </TouchableOpacity>
   );
 
+  // ── Render ──────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
+          activeOpacity={0.7}>
+          <MaterialIcons
+            name="arrow-back-ios"
+            size={18}
+            color={colors.TITLE_COLOR}
+          />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={styles.backButton} />
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Profile Card */}
         <View style={styles.profileCard}>
-          <View style={styles.avatarContainer}>
+          <LinearGradient
+            colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.avatarContainer}>
             <Text style={styles.avatarText}>
               {username ? username[0].toUpperCase() : 'U'}
             </Text>
-          </View>
+          </LinearGradient>
           <View style={styles.profileInfo}>
             {isEditing ? (
-              <Animated.View 
+              <Animated.View
                 entering={FadeIn}
                 exiting={FadeOut}
-                style={styles.editContainer}
-              >
+                style={styles.editContainer}>
                 <TextInput
                   style={styles.input}
                   value={username}
                   onChangeText={setUsername}
                   placeholder="Enter new username"
-                  placeholderTextColor="#666666"
+                  placeholderTextColor={colors.MUTED_COLOR}
                 />
-                <TouchableOpacity 
-                  style={styles.saveButton}
-                  onPress={handleUpdateUsername}
-                >
-                  <Text style={styles.saveButtonText}>Save</Text>
+                <TouchableOpacity onPress={handleUpdateUsername}>
+                  <LinearGradient
+                    colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.saveButton}>
+                    <Text style={styles.saveButtonText}>Save</Text>
+                  </LinearGradient>
                 </TouchableOpacity>
               </Animated.View>
             ) : (
-              <TouchableOpacity 
-                style={styles.usernameContainer} 
-                onPress={() => setIsEditing(true)}
-              >
+              <TouchableOpacity
+                style={styles.usernameContainer}
+                onPress={() => setIsEditing(true)}>
                 <Text style={styles.username}>
                   {username || auth.currentUser?.email.split('@')[0]}
                 </Text>
-                <MaterialIcons name="edit" size={20} color="#007AFF" />
+                <MaterialIcons
+                  name="edit"
+                  size={18}
+                  color={colors.FILM_GOLD}
+                />
               </TouchableOpacity>
             )}
             <Text style={styles.email}>{auth.currentUser?.email}</Text>
           </View>
         </View>
 
+        {/* App Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>App Settings</Text>
           <View style={styles.sectionContent}>
@@ -264,23 +274,27 @@ const SettingsScreen = ({ navigation }) => {
               value={notifications}
               onPress={() => setNotifications(!notifications)}
               icon="notifications"
+              iconColor={colors.FILM_GOLD}
             />
             <SettingRow
               label="Dark Mode"
               value={darkMode}
               onPress={() => setDarkMode(!darkMode)}
               icon="brightness-4"
+              iconColor={colors.PURPLE_ACCENT}
             />
             <SettingRow
               label="App Lock"
               value={appLock}
               onPress={handleAppLockToggle}
               icon="lock"
+              iconColor={colors.CYAN_ACCENT}
               isLast
             />
           </View>
         </View>
 
+        {/* Security */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Security</Text>
           <View style={styles.sectionContent}>
@@ -288,21 +302,25 @@ const SettingsScreen = ({ navigation }) => {
               label="Reset Password"
               onPress={handleResetPassword}
               icon="lock-reset"
+              iconColor={colors.PRIMARY_COLOR}
             />
             <SettingRow
               label="Privacy Settings"
-              onPress={() => {/* Handle privacy settings */}}
+              onPress={() => { }}
               icon="security"
+              iconColor={colors.ACCEPT_GREEN}
             />
             <SettingRow
               label="Blocked Users"
-              onPress={() => {/* Handle blocked users */}}
+              onPress={() => { }}
               icon="block"
+              iconColor={colors.DELETE_RED_COLOR}
               isLast
             />
           </View>
         </View>
 
+        {/* About */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>About</Text>
           <View style={styles.sectionContent}>
@@ -310,27 +328,35 @@ const SettingsScreen = ({ navigation }) => {
               label="App Version"
               value="1.0.0"
               icon="info"
-              onPress={() => {}}
+              iconColor={colors.CYAN_ACCENT}
+              onPress={() => { }}
             />
             <SettingRow
               label="Terms of Service"
               icon="description"
-              onPress={() => {}}
+              iconColor={colors.SUB_TITLE_COLOR}
+              onPress={() => { }}
             />
             <SettingRow
               label="Privacy Policy"
               icon="privacy-tip"
-              onPress={() => {}}
+              iconColor={colors.PURPLE_ACCENT}
+              onPress={() => { }}
               isLast
             />
           </View>
         </View>
 
-        <TouchableOpacity 
+        {/* Delete */}
+        <TouchableOpacity
           style={styles.deleteButton}
           onPress={handleDeleteAccount}
-        >
-          <MaterialIcons name="delete-forever" size={24} color="#FF3B30" />
+          activeOpacity={0.8}>
+          <MaterialIcons
+            name="delete-forever"
+            size={22}
+            color={colors.DELETE_RED_COLOR}
+          />
           <Text style={styles.deleteButtonText}>Delete Account</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -341,67 +367,63 @@ const SettingsScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 16,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#333333',
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.TITLE_COLOR,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
+
   content: {
     flex: 1,
     padding: 16,
   },
+
+  // Profile Card
   profileCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1E1E1E',
+    backgroundColor: colors.CARD_COLOR,
     borderRadius: 20,
-    padding: 20,
+    padding: 18,
     marginBottom: 24,
     borderWidth: 1,
-    borderColor: '#333333',
-    shadowColor: '#007AFF',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
+    borderColor: colors.BORDER_SUBTLE,
   },
   avatarContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#007AFF',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FFF',
   },
   profileInfo: {
     flex: 1,
-    marginLeft: 16,
+    marginLeft: 14,
   },
   usernameContainer: {
     flexDirection: 'row',
@@ -409,50 +431,48 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   username: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.TITLE_COLOR,
   },
   email: {
-    fontSize: 14,
-    color: '#666666',
-    marginTop: 4,
+    fontSize: 13,
+    color: colors.SUB_TITLE_COLOR,
+    marginTop: 3,
   },
+
+  // Sections
   section: {
     marginBottom: 24,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#007AFF',
-    marginBottom: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.PRIMARY_COLOR,
+    marginBottom: 10,
     paddingHorizontal: 4,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   sectionContent: {
-    backgroundColor: '#1E1E1E',
-    borderRadius: 20,
+    backgroundColor: colors.CARD_COLOR,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#333333',
+    borderColor: colors.BORDER_SUBTLE,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
   },
+
+  // Setting Row
   settingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   settingRowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: '#333333',
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
   settingRowLeft: {
     flexDirection: 'row',
@@ -461,66 +481,74 @@ const styles = StyleSheet.create({
   iconContainer: {
     width: 36,
     height: 36,
-    borderRadius: 12,
-    backgroundColor: '#007AFF20',
+    borderRadius: 10,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: 14,
   },
   settingLabel: {
-    fontSize: 16,
-    color: '#FFFFFF',
+    fontSize: 15,
+    color: colors.TITLE_COLOR,
+    fontWeight: '500',
   },
   settingRowRight: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   settingValue: {
-    fontSize: 16,
-    color: '#666666',
-    marginRight: 8,
+    fontSize: 14,
+    color: colors.MUTED_COLOR,
+    marginRight: 6,
   },
+
+  // Edit
   input: {
     flex: 1,
-    height: 40,
-    backgroundColor: '#333333',
-    borderRadius: 8,
+    height: 38,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    color: '#FFFFFF',
-    marginRight: 12,
+    color: colors.TITLE_COLOR,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    fontSize: 14,
   },
   editContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   saveButton: {
-    backgroundColor: '#007AFF',
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
   },
   saveButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
+    color: '#FFF',
+    fontWeight: '700',
+    fontSize: 13,
   },
+
+  // Delete
   deleteButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FF3B3015',
-    borderRadius: 20,
-    padding: 18,
+    backgroundColor: 'rgba(255, 59, 48, 0.08)',
+    borderRadius: 18,
+    padding: 16,
     marginBottom: 32,
     gap: 10,
     borderWidth: 1,
-    borderColor: '#FF3B3030',
+    borderColor: 'rgba(255, 59, 48, 0.15)',
   },
   deleteButtonText: {
-    color: '#FF3B30',
-    fontSize: 16,
+    color: colors.DELETE_RED_COLOR,
+    fontSize: 15,
     fontWeight: '600',
   },
 });
 
-export default SettingsScreen; 
+export default SettingsScreen;
