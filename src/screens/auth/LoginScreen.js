@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,14 +13,19 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import {signInWithEmailAndPassword} from 'firebase/auth';
-import {auth} from '../../config/firebase';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../../config/firebase';
 import colors from '../../theme/Colors';
 import CustomInput from '../../components/UI/CustomInput';
+import LinearGradient from 'react-native-linear-gradient';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 
-const LoginScreen = ({navigation}) => {
+const { width } = Dimensions.get('window');
+
+const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -29,11 +34,8 @@ const LoginScreen = ({navigation}) => {
   const handleLogin = async () => {
     if (isLoading) return;
 
-    // Basic validation
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter email and password', [
-        {text: 'OK'},
-      ]);
+      Alert.alert('Error', 'Please enter email and password', [{ text: 'OK' }]);
       return;
     }
 
@@ -47,7 +49,6 @@ const LoginScreen = ({navigation}) => {
       console.log('User signed in:', userCredential.user);
     } catch (error) {
       console.log(error);
-      // Handle specific Firebase auth errors
       let errorMessage = 'An error occurred during login';
 
       switch (error.code) {
@@ -68,7 +69,7 @@ const LoginScreen = ({navigation}) => {
           break;
       }
 
-      Alert.alert('Login Failed', errorMessage, [{text: 'OK'}]);
+      Alert.alert('Login Failed', errorMessage, [{ text: 'OK' }]);
     } finally {
       setIsLoading(false);
     }
@@ -85,64 +86,80 @@ const LoginScreen = ({navigation}) => {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardView}>
           <ScrollView
-            contentContainerStyle={{flexGrow: 1}}
+            contentContainerStyle={{ flexGrow: 1 }}
             showsVerticalScrollIndicator={false}>
             <View style={styles.contentContainer}>
-              <View style={styles.headerContainer}>
+              <Animated.View
+                entering={FadeInDown.duration(800).delay(200)}
+                style={styles.headerContainer}>
                 <Logo size="large" />
                 <Text style={styles.title}>Welcome Back</Text>
                 <Text style={styles.subtitle}>
                   Join your friends in the virtual theater experience
                 </Text>
-              </View>
+              </Animated.View>
 
-              <View style={styles.formContainer}>
-                <CustomInput
-                  label="Email"
-                  leftIcon="mail-outline"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChangeText={setEmail}
-                />
+              <Animated.View
+                entering={FadeInDown.duration(800).delay(400)}
+                style={styles.formCard}>
+                <View style={styles.formContainer}>
+                  <CustomInput
+                    label="Email"
+                    leftIcon="mail-outline"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChangeText={setEmail}
+                    iconColor={colors.PRIMARY_COLOR}
+                  />
 
-                <CustomInput
-                  label="Password"
-                  leftIcon="lock-closed-outline"
-                  rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                  placeholder="Enter password"
-                  secureTextEntry={!showPassword}
-                  value={password}
-                  onChangeText={setPassword}
-                  onRightIconPress={() => setShowPassword(!showPassword)}
-                />
+                  <CustomInput
+                    label="Password"
+                    leftIcon="lock-closed-outline"
+                    rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                    placeholder="Enter password"
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                    onRightIconPress={() => setShowPassword(!showPassword)}
+                    iconColor={colors.PRIMARY_COLOR}
+                  />
 
-                <TouchableOpacity
-                  style={styles.forgotPassword}
-                  onPress={() => navigation.navigate('ForgetPassword')}>
-                  <Text style={styles.forgotPasswordText}>
-                    Forgot Password?
-                  </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.forgotPassword}
+                    onPress={() => navigation.navigate('ForgetPassword')}>
+                    <Text style={styles.forgotPasswordText}>
+                      Forgot Password?
+                    </Text>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.button, isLoading && styles.buttonDisabled]}
-                  onPress={handleLogin}
-                  disabled={isLoading}
-                  activeOpacity={0.8}>
-                  {isLoading ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                  ) : (
-                    <Text style={styles.buttonText}>Login</Text>
-                  )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleLogin}
+                    disabled={isLoading}
+                    activeOpacity={0.8}>
+                    <LinearGradient
+                      colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={[
+                        styles.button,
+                        isLoading && styles.buttonDisabled,
+                      ]}>
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Login</Text>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.linkContainer}
-                  onPress={() => navigation.navigate('SignUp')}>
-                  <Text style={styles.linkText}>Don't have an account? </Text>
-                  <Text style={styles.link}>Sign Up</Text>
-                </TouchableOpacity>
-              </View>
+                  <TouchableOpacity
+                    style={styles.linkContainer}
+                    onPress={() => navigation.navigate('SignUp')}>
+                    <Text style={styles.linkText}>Don't have an account? </Text>
+                    <Text style={styles.link}>Sign Up</Text>
+                  </TouchableOpacity>
+                </View>
+              </Animated.View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -165,78 +182,68 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   headerContainer: {
-    marginBottom: 30,
+    marginBottom: 40,
+    alignItems: 'center',
   },
   title: {
     fontSize: 32,
-    fontWeight: 'bold',
+    fontWeight: '800',
     color: colors.TITLE_COLOR,
-    marginBottom: 12,
+    marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: colors.SUB_TITLE_COLOR,
-    maxWidth: '80%',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    lineHeight: 22,
+  },
+  formCard: {
+    backgroundColor: colors.CARD_COLOR,
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
   },
   formContainer: {
     width: '100%',
   },
-  inputContainer: {
-    marginBottom: 24,
-  },
-  label: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.TITLE_COLOR,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.INPUTBOX_BG_COLOR,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    paddingHorizontal: 16,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    padding: 16,
-    fontSize: 16,
-    color: colors.TITLE_COLOR,
-  },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginBottom: 32,
+    marginBottom: 24,
+    marginTop: -8,
   },
   forgotPasswordText: {
-    color: colors.PRIMARY_COLOR_DARK,
+    color: colors.PRIMARY_COLOR,
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   button: {
-    backgroundColor: colors.PRIMARY_COLOR,
     padding: 18,
     borderRadius: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   buttonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 16,
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   buttonDisabled: {
-    backgroundColor: colors.DISABLED_BUTTON_COLOR,
-    opacity: 0.8,
+    opacity: 0.6,
   },
   linkContainer: {
     flexDirection: 'row',
@@ -245,12 +252,12 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.SUB_TITLE_COLOR,
-    fontSize: 14,
+    fontSize: 15,
   },
   link: {
-    color: colors.PRIMARY_COLOR_DARK,
-    fontSize: 14,
-    fontWeight: '500',
+    color: colors.PRIMARY_COLOR,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 

@@ -119,10 +119,10 @@ const AppNavigator = () => {
     return <VerifyEmailScreen onSuccess={() => setIsEmailVerified(true)} />;
 
   return (
-    <GestureHandlerRootView style={{flex: 1}}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <BottomSheetModalProvider>
         <NavigationContainer>
-          <Stack.Navigator screenOptions={{headerShown: false}}>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
             {user ? (
               <>
                 <Stack.Screen name="MainTabs" component={MainTabs} />
