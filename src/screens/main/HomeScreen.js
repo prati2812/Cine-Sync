@@ -326,7 +326,7 @@ const HomeScreen = () => {
             <TouchableOpacity
               key={f.key}
               activeOpacity={0.8}
-
+              style={styles.filterChipWrap}
               onPress={() => setFilterType(f.key)}
             >
               {filterType === f.key ? (
@@ -527,8 +527,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     gap: 6,
-    overflow: 'hidden',
-    width: 10
   },
   filterChipText: {
     color: colors.SUB_TITLE_COLOR,
