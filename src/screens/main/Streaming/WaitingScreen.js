@@ -9,8 +9,17 @@ import {
   ScrollView,
   Dimensions,
   Easing,
+  Alert,
 } from 'react-native';
-import { getDatabase, ref, onValue } from 'firebase/database';
+import {
+  getDatabase,
+  ref,
+  onValue,
+  get,
+  query,
+  orderByChild,
+  equalTo,
+} from 'firebase/database';
 import { auth } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -19,6 +28,24 @@ import colors from '../../../theme/Colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ORBIT_SIZE = SCREEN_WIDTH * 0.78;
+
+const AVATAR_COLORS = [
+  colors.PRIMARY_COLOR,
+  colors.PURPLE_ACCENT,
+  colors.CYAN_ACCENT,
+  colors.FILM_GOLD,
+  colors.ACCEPT_GREEN,
+  colors.LIVE_RED,
+];
+
+function getInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
 
 // ──────────────────────────────────────────────────────────────
 //  Pulsing Ring around the center play button
@@ -53,10 +80,14 @@ const PulseRing = ({ delay = 0 }) => {
 //  Waiting Screen
 // ──────────────────────────────────────────────────────────────
 const WaitingScreen = ({ route, navigation }) => {
-  const { roomId, roomName, streamUrl } = route.params;
-  const [participants, setParticipants] = useState([]);
-  const [isStreamingAllowed, setIsStreamingAllowed] = useState(false);
+  const { roomId, roomName, streamUrl: routeStreamUrl } = route.params;
   const currentUser = auth.currentUser;
+
+  const [participantProfiles, setParticipantProfiles] = useState([]);
+  const [onlineStatuses, setOnlineStatuses] = useState({});
+  const [isCreator, setIsCreator] = useState(false);
+  const [resolvedStreamUrl, setResolvedStreamUrl] = useState(routeStreamUrl);
+  const statusListenersRef = useRef([]);
 
   // Animations
   const rotationAnim = useRef(new Animated.Value(0)).current;
@@ -64,40 +95,117 @@ const WaitingScreen = ({ route, navigation }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const dotPulse = useRef(new Animated.Value(1)).current;
 
-  const mockParticipants = [
-    { id: 1, name: 'John Doe', username: '@johndoe', color: colors.PRIMARY_COLOR, initial: 'JD', isHost: true },
-    { id: 2, name: 'Jane Smith', username: '@janesmith', color: colors.PURPLE_ACCENT, initial: 'JS' },
-    { id: 3, name: 'Mike Johnson', username: '@mikej', color: colors.CYAN_ACCENT, initial: 'MJ' },
-  ];
-
+  // ── Fetch room data & resolve participant profiles ─────────
   useEffect(() => {
     const db = getDatabase();
-    const roomRef = ref(db, `rooms/${roomId}/participants`);
-    const unsubscribe = onValue(roomRef, (snapshot) => {
+    const roomRef = ref(db, `rooms/${roomId}`);
+
+    const unsubscribe = onValue(roomRef, async snapshot => {
       const data = snapshot.val();
-      if (data) {
-        setParticipants(data);
-        setIsStreamingAllowed(data.includes(currentUser.email));
+      if (!data) return;
+
+      setIsCreator(currentUser?.uid === data.creator?.uid);
+      if (data.streamUrl) setResolvedStreamUrl(data.streamUrl);
+
+      // Navigate to streaming screen automatically if stream has started and user is not creator
+      if (data.isStreaming && currentUser?.uid !== data.creator?.uid) {
+        navigation.replace('Streaming', {
+          roomId,
+          roomName,
+          streamUrl: data.streamUrl || resolvedStreamUrl,
+        });
+        return; // Stop processing further to avoid state updates on unmounted component
       }
+
+      // Creator email + invited participant emails
+      const allEmails = [
+        data.creator?.email,
+        ...(data.participants || []),
+      ].filter(Boolean);
+      const uniqueEmails = [...new Set(allEmails)];
+
+      const usersRef = ref(db, 'users');
+      const profiles = [];
+
+      for (let i = 0; i < uniqueEmails.length; i++) {
+        const email = uniqueEmails[i];
+        try {
+          const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
+          const userSnap = await get(userQuery);
+
+          if (userSnap.exists()) {
+            const userKey = Object.keys(userSnap.val())[0];
+            const userData = userSnap.val()[userKey];
+            const name = userData.username || email.split('@')[0];
+            profiles.push({
+              id: userKey,
+              uid: userKey,
+              name,
+              email,
+              username: `@${name.toLowerCase().replace(/\s/g, '')}`,
+              color: AVATAR_COLORS[i % AVATAR_COLORS.length],
+              initial: getInitials(name),
+              isHost: email === data.creator?.email,
+            });
+          }
+        } catch (error) {
+          console.log('Error fetching user profile:', error);
+        }
+      }
+
+      setParticipantProfiles(profiles);
     });
+
     return () => unsubscribe();
   }, [roomId, currentUser]);
 
+  // ── Real-time status listeners for each participant ────────
   useEffect(() => {
-    // Outer orbit rotation
+    // Clean up previous listeners
+    statusListenersRef.current.forEach(u => u());
+    statusListenersRef.current = [];
+
+    if (participantProfiles.length === 0) return;
+
+    const db = getDatabase();
+
+    participantProfiles.forEach(p => {
+      if (!p.uid) return;
+      const statusRef = ref(db, `users/${p.uid}/status/state`);
+      const unsub = onValue(statusRef, snap => {
+        const state = snap.val();
+        setOnlineStatuses(prev => ({ ...prev, [p.uid]: state === 'online' }));
+      });
+      statusListenersRef.current.push(unsub);
+    });
+
+    return () => {
+      statusListenersRef.current.forEach(u => u());
+      statusListenersRef.current = [];
+    };
+  }, [participantProfiles]);
+
+  // ── Combine profiles with live statuses ────────────────────
+  const participants = participantProfiles.map(p => ({
+    ...p,
+    isOnline: onlineStatuses[p.uid] ?? false,
+  }));
+
+  const onlineCount = participants.filter(p => p.isOnline).length;
+  const allOnline = participants.length > 0 && onlineCount === participants.length;
+
+  // ── Animations ─────────────────────────────────────────────
+  useEffect(() => {
     Animated.loop(
       Animated.timing(rotationAnim, { toValue: 1, duration: 12000, easing: Easing.linear, useNativeDriver: true })
     ).start();
 
-    // Inner orbit rotation (reverse)
     Animated.loop(
       Animated.timing(innerRotation, { toValue: 1, duration: 18000, easing: Easing.linear, useNativeDriver: true })
     ).start();
 
-    // Fade in
     Animated.timing(fadeAnim, { toValue: 1, duration: 800, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
 
-    // Waiting dots pulse
     Animated.loop(
       Animated.sequence([
         Animated.timing(dotPulse, { toValue: 0.4, duration: 800, useNativeDriver: true }),
@@ -106,37 +214,68 @@ const WaitingScreen = ({ route, navigation }) => {
     ).start();
   }, []);
 
-  const startStreaming = () => {
-    if (currentUser.email !== participants[0]) {
-      navigation.navigate('Streaming', { roomId, roomName, streamUrl });
+  // ── Start Streaming (creator only) ─────────────────────────
+  const startStreaming = async () => {
+    if (isCreator) {
+      // Set isStreaming flag in Firebase so others navigate automatically
+      const db = getDatabase();
+      const roomRef = ref(db, `rooms/${roomId}`);
+
+      try {
+        // We use 'update' or just setting the specific child node to avoid overwriting the whole room
+        const { update } = require('firebase/database'); // dynamically require update
+        await update(roomRef, {
+          isStreaming: true
+        });
+
+        navigation.replace('Streaming', {
+          roomId,
+          roomName,
+          streamUrl: resolvedStreamUrl,
+        });
+      } catch (error) {
+        console.error("Error starting stream:", error);
+        Alert.alert("Error", "Could not start the stream. Please try again.");
+      }
     } else {
-      alert('Only the room creator can start the streaming.');
+      Alert.alert(
+        'Not Allowed',
+        'Only the room creator can start the streaming.',
+      );
     }
   };
 
   const outerSpin = rotationAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
   const innerSpin = innerRotation.interpolate({ inputRange: [0, 1], outputRange: ['360deg', '0deg'] });
 
-  // ── Participant dots on orbit ─────────────────────────────
+  // ── Participant dots on orbit ──────────────────────────────
   const renderOrbitDots = () => {
     const radius = ORBIT_SIZE / 2 - 28;
-    return mockParticipants.map((p, i) => {
-      const angle = (2 * Math.PI * i) / mockParticipants.length - Math.PI / 2;
+    return participants.map((p, i) => {
+      const angle = (2 * Math.PI * i) / participants.length - Math.PI / 2;
       const x = radius * Math.cos(angle);
       const y = radius * Math.sin(angle);
 
       return (
         <View key={p.id} style={[styles.orbitDot, { transform: [{ translateX: x }, { translateY: y }] }]}>
-          <LinearGradient
-            colors={[p.color, shiftColor(p.color)]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.orbitDotGradient}
-          >
-            <Text style={styles.orbitDotInitial}>{p.initial}</Text>
-          </LinearGradient>
-          <View style={styles.orbitDotLabel}>
-            <Text style={styles.orbitDotLabelText}>{p.username}</Text>
+          <View>
+            <LinearGradient
+              colors={[p.color, shiftColor(p.color)]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[
+                styles.orbitDotGradient,
+                !p.isOnline && styles.orbitDotOffline,
+              ]}
+            >
+              <Text style={styles.orbitDotInitial}>{p.initial}</Text>
+            </LinearGradient>
+            <View
+              style={[
+                styles.orbitStatusDot,
+                { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+              ]}
+            />
           </View>
         </View>
       );
@@ -168,7 +307,6 @@ const WaitingScreen = ({ route, navigation }) => {
           <View style={styles.orbitSection}>
             {/* Outer dashed ring */}
             <Animated.View style={[styles.orbitRing, { transform: [{ rotate: outerSpin }] }]}>
-              {/* Decorative dots on the ring */}
               {[0, 1, 2, 3, 4, 5].map(i => (
                 <View key={i} style={[styles.ringDot, {
                   transform: [
@@ -197,21 +335,53 @@ const WaitingScreen = ({ route, navigation }) => {
               <PulseRing delay={700} />
               <TouchableOpacity activeOpacity={0.85} onPress={startStreaming} style={styles.playBtnWrap}>
                 <LinearGradient
-                  colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                  colors={isCreator
+                    ? [colors.GRADIENT_START, colors.GRADIENT_END]
+                    : [colors.MUTED_COLOR, colors.MUTED_COLOR]
+                  }
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.playBtnGradient}
                 >
-                  <MaterialIcons name="play-arrow" size={38} color="#FFF" />
+                  <MaterialIcons
+                    name={isCreator ? 'play-arrow' : 'lock'}
+                    size={isCreator ? 38 : 28}
+                    color="#FFF"
+                  />
                 </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* ── Waiting Text ──────────────────────────────── */}
+          {/* ── Status Tag + Waiting Text ─────────────────── */}
           <View style={styles.waitingSection}>
-            <Text style={styles.waitingTitle}>Waiting for everyone</Text>
-            <Text style={styles.waitingSub}>The screening will begin when the host starts</Text>
+            {participants.length > 0 && (
+              <View style={[
+                styles.availabilityTag,
+                { backgroundColor: allOnline ? 'rgba(0, 200, 83, 0.15)' : 'rgba(255, 180, 0, 0.15)' },
+              ]}>
+                <View style={[
+                  styles.availabilityDot,
+                  { backgroundColor: allOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD },
+                ]} />
+                <Text style={[
+                  styles.availabilityText,
+                  { color: allOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD },
+                ]}>
+                  {allOnline ? 'All Participants Available' : `${onlineCount}/${participants.length} Online`}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.waitingTitle}>
+              {allOnline ? 'Everyone is here!' : 'Waiting for everyone'}
+            </Text>
+            <Text style={styles.waitingSub}>
+              {isCreator
+                ? allOnline
+                  ? 'All participants are online. Tap play to start!'
+                  : 'Waiting for all participants to come online'
+                : 'The screening will begin when the host starts'}
+            </Text>
           </View>
 
           {/* ── Participants List ─────────────────────────── */}
@@ -219,23 +389,37 @@ const WaitingScreen = ({ route, navigation }) => {
             <View style={styles.listHeader}>
               <Text style={styles.listTitle}>Participants</Text>
               <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{mockParticipants.length}</Text>
+                <Text style={styles.countBadgeText}>{participants.length}</Text>
               </View>
             </View>
 
-            {mockParticipants.map((p, index) => (
-              <View key={p.id} style={[styles.participantCard, index === mockParticipants.length - 1 && { marginBottom: 0 }]}>
-                <LinearGradient
-                  colors={[p.color, shiftColor(p.color)]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.participantAvatar}
-                >
-                  <Text style={styles.participantInitial}>{p.initial}</Text>
-                </LinearGradient>
+            {participants.map((p, index) => (
+              <View key={p.id} style={[styles.participantCard, index === participants.length - 1 && { marginBottom: 0 }]}>
+                {/* Avatar with online indicator */}
+                <View>
+                  <LinearGradient
+                    colors={[p.color, shiftColor(p.color)]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[
+                      styles.participantAvatar,
+                      !p.isOnline && styles.avatarOffline,
+                    ]}
+                  >
+                    <Text style={styles.participantInitial}>{p.initial}</Text>
+                  </LinearGradient>
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                    ]}
+                  />
+                </View>
                 <View style={styles.participantInfo}>
                   <Text style={styles.participantName}>{p.name}</Text>
-                  <Text style={styles.participantUsername}>{p.username}</Text>
+                  <Text style={styles.participantUsername}>
+                    {p.username} · {p.isOnline ? 'Online' : 'Offline'}
+                  </Text>
                 </View>
                 {p.isHost ? (
                   <View style={styles.hostBadge}>
@@ -243,9 +427,19 @@ const WaitingScreen = ({ route, navigation }) => {
                     <Text style={styles.hostBadgeText}>Host</Text>
                   </View>
                 ) : (
-                  <View style={styles.viewerBadge}>
-                    <MaterialIcons name="visibility" size={12} color={colors.CYAN_ACCENT} />
-                    <Text style={styles.viewerBadgeText}>Viewer</Text>
+                  <View style={[
+                    styles.viewerBadge,
+                    p.isOnline && styles.viewerBadgeOnline,
+                  ]}>
+                    <MaterialIcons
+                      name="visibility"
+                      size={12}
+                      color={p.isOnline ? colors.CYAN_ACCENT : colors.MUTED_COLOR}
+                    />
+                    <Text style={[
+                      styles.viewerBadgeText,
+                      !p.isOnline && { color: colors.MUTED_COLOR },
+                    ]}>Viewer</Text>
                   </View>
                 )}
               </View>
@@ -393,25 +587,23 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.15)',
   },
+  orbitDotOffline: {
+    opacity: 0.5,
+  },
   orbitDotInitial: {
     color: '#FFF',
     fontSize: 16,
     fontWeight: '800',
   },
-  orbitDotLabel: {
+  orbitStatusDot: {
     position: 'absolute',
-    bottom: -22,
-    backgroundColor: 'rgba(15, 15, 26, 0.9)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-  },
-  orbitDotLabelText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 10,
-    fontWeight: '600',
+    bottom: 0,
+    right: 0,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: colors.BACKGROUND_COLOR,
   },
 
   // ── Center Play ───────────────────
@@ -450,6 +642,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 28,
     paddingHorizontal: 40,
+  },
+  availabilityTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    gap: 7,
+    marginBottom: 14,
+  },
+  availabilityDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  availabilityText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   waitingTitle: {
     color: colors.TITLE_COLOR,
@@ -513,6 +723,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
+  avatarOffline: {
+    opacity: 0.5,
+  },
+  statusDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 10,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: colors.CARD_COLOR,
+  },
   participantInitial: {
     color: '#FFF',
     fontSize: 16,
@@ -554,6 +777,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
     gap: 4,
+  },
+  viewerBadgeOnline: {
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
   },
   viewerBadgeText: {
     color: colors.CYAN_ACCENT,

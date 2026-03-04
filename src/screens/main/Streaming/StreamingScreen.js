@@ -1,133 +1,275 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
+  Text,
   StyleSheet,
-  StatusBar,
   Dimensions,
   TouchableOpacity,
-  Text,
   Pressable,
   Alert,
+  SafeAreaView,
+  FlatList,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
 } from 'react-native';
 import YoutubePlayer from 'react-native-youtube-iframe';
-import Orientation from 'react-native-orientation-locker';
-import Icon from 'react-native-vector-icons/MaterialIcons';
-import { getDatabase, ref, onValue, set } from 'firebase/database';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import {
+  getDatabase,
+  ref,
+  onValue,
+  set,
+  push,
+  query,
+  limitToLast,
+  onChildAdded,
+  orderByChild,
+  equalTo,
+  get,
+  serverTimestamp,
+} from 'firebase/database';
 import { auth } from '../../../config/firebase';
-import Animated, { 
-  withSpring, 
-  useAnimatedStyle, 
-  withTiming,
-  withSequence,
-} from 'react-native-reanimated';
+import colors from '../../../theme/Colors';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const VIDEO_HEIGHT = SCREEN_WIDTH * (9 / 16);
+
+const AVATAR_COLORS = [
+  colors.PRIMARY_COLOR,
+  colors.PURPLE_ACCENT,
+  colors.CYAN_ACCENT,
+  colors.FILM_GOLD,
+  colors.ACCEPT_GREEN,
+  colors.LIVE_RED,
+];
+
+function getInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+const FloatingEmoji = ({ emoji }) => {
+  const translateY = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(translateY, {
+        toValue: -150,
+        duration: 2000,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 0,
+        duration: 2000,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [translateY, opacity]);
+
+  return (
+    <Animated.View style={[styles.floatingEmoji, { transform: [{ translateY }], opacity }]}>
+      <Text style={{ fontSize: 32 }}>{emoji}</Text>
+    </Animated.View>
+  );
+};
 
 const StreamingScreen = ({ route, navigation }) => {
-  const [playing, setPlaying] = useState(true);
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const screenWidth = Dimensions.get('window').width;
-  const screenHeight = Dimensions.get('window').height;
-  const playerRef = React.useRef();
-  const [controlsVisible, setControlsVisible] = useState(true);
-  const fadeAnim = useAnimatedStyle(() => {
-    return {
-      opacity: withTiming(controlsVisible ? 1 : 0, {
-        duration: 300,
-      }),
-    };
-  }, [controlsVisible]);
-  const [isCreator, setIsCreator] = useState(false);
   const { streamUrl, roomName, roomId } = route.params;
 
+  // Video State
+  const [playing, setPlaying] = useState(true);
+  const playerRef = useRef(null);
+  const [isCreator, setIsCreator] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
 
-  // Auto-hide controls after 3 seconds of inactivity
+  // Tabs
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants'
+
+  // Chat State
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+
+  // Participants State
+  const [participantProfiles, setParticipantProfiles] = useState([]);
+  const [onlineStatuses, setOnlineStatuses] = useState({});
+
+  // Reactions State
+  const [floatingEmojis, setFloatingEmojis] = useState([]);
+
+  // Auto-hide controls
   useEffect(() => {
     let timeoutId;
     if (controlsVisible && playing) {
       timeoutId = setTimeout(() => {
-        fadeOutControls();
+        setControlsVisible(false);
       }, 3000);
     }
     return () => timeoutId && clearTimeout(timeoutId);
   }, [controlsVisible, playing]);
 
-  const fadeOutControls = () => {
-    setControlsVisible(false);
-  };
-
-  const fadeInControls = () => {
-    setControlsVisible(true);
-  };
-
-  // // Lock to landscape when component mounts
-  // useEffect(() => {
-  //   Orientation.lockToLandscape();
-  //   return () => {
-  //     Orientation.unlockAllOrientations();
-  //   };
-  // }, []);
-
-  // Extract video ID from the streamUrl passed through navigation
   const getYoutubeVideoId = (url) => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    const match = url.match(regExp);
+    const match = url?.match(regExp);
     return (match && match[7].length === 11) ? match[7] : false;
   };
-
-  // Get streamUrl from navigation params
   const videoId = getYoutubeVideoId(streamUrl);
 
-  // Add error handling if videoId is not valid
   useEffect(() => {
     if (!videoId) {
-      Alert.alert(
-        'Invalid URL',
-        'The provided YouTube URL is not valid.',
-        [
-          { 
-            text: 'OK', 
-            onPress: () => navigation.goBack() 
-          }
-        ]
-      );
+      Alert.alert('Invalid URL', 'The provided YouTube URL is not valid.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     }
-  }, [videoId]);
+  }, [videoId, navigation]);
 
-  // Check if current user is the creator
+  const [creatorLeft, setCreatorLeft] = useState(false);
+
+  // Fetch Room & Participants
   useEffect(() => {
     const db = getDatabase();
     const roomRef = ref(db, `rooms/${roomId}`);
-    
-    onValue(roomRef, (snapshot) => {
+
+    const unsubscribe = onValue(roomRef, async (snapshot) => {
       const roomData = snapshot.val();
-      if (roomData) {
-        setIsCreator(roomData.creator.email === auth.currentUser?.email);
+      if (!roomData) return;
+
+      const userIsCreator = roomData.creator?.email === auth.currentUser?.email;
+      setIsCreator(userIsCreator);
+
+      // If the stream is stopped by creator, pause video and show message to viewers
+      if (!userIsCreator && roomData.isStreaming === false) {
+        setCreatorLeft(true);
+        setPlaying(false);
+      } else if (roomData.isStreaming === true) {
+        setCreatorLeft(false);
       }
+
+      // Fetch participants
+      const allEmails = [roomData.creator?.email, ...(roomData.participants || [])].filter(Boolean);
+      const uniqueEmails = [...new Set(allEmails)];
+      const usersRef = ref(db, 'users');
+      const profiles = [];
+
+      for (let i = 0; i < uniqueEmails.length; i++) {
+        const email = uniqueEmails[i];
+        try {
+          const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
+          const userSnap = await get(userQuery);
+
+          if (userSnap.exists()) {
+            const userKey = Object.keys(userSnap.val())[0];
+            const userData = userSnap.val()[userKey];
+            const name = userData.username || email.split('@')[0];
+            profiles.push({
+              id: userKey,
+              uid: userKey,
+              name,
+              email,
+              username: `@${name.toLowerCase().replace(/\s/g, '')}`,
+              color: AVATAR_COLORS[i % AVATAR_COLORS.length],
+              initial: getInitials(name),
+              isHost: email === roomData.creator?.email,
+            });
+          }
+        } catch (error) {
+          console.log('Error fetching user profile:', error);
+        }
+      }
+      setParticipantProfiles(profiles);
     });
+    return () => unsubscribe();
   }, [roomId]);
 
-  // Sync playback state with Firebase
+  // Online statuses
+  useEffect(() => {
+    if (participantProfiles.length === 0) return;
+    const db = getDatabase();
+    const unsubs = participantProfiles.map(p => {
+      const statusRef = ref(db, `users/${p.uid}/status/state`);
+      return onValue(statusRef, snap => {
+        setOnlineStatuses(prev => ({ ...prev, [p.uid]: snap.val() === 'online' }));
+      });
+    });
+    return () => unsubs.forEach(u => u());
+  }, [participantProfiles]);
+
+  const participants = participantProfiles.map(p => ({
+    ...p,
+    isOnline: onlineStatuses[p.uid] ?? false,
+  }));
+
+  // ──────────────────────────────────────────────────────────────
+  // Sync Playback Logic
+  // ──────────────────────────────────────────────────────────────
+
+  // Viewer Sync
   useEffect(() => {
     const db = getDatabase();
     const playbackRef = ref(db, `rooms/${roomId}/playback`);
-    
-    // Listen for playback changes
+
     const unsubscribe = onValue(playbackRef, (snapshot) => {
       const playbackData = snapshot.val();
       if (playbackData && !isCreator) {
         setPlaying(playbackData.isPlaying);
+
         if (playerRef.current) {
-          playerRef.current.seekTo(playbackData.currentTime || 0);
+          if (playbackData.isPlaying) {
+            // Calculate real-time offset
+            // elapsed seconds = (current time in ms - update time in ms) / 1000
+            const elapsed = (Date.now() - playbackData.updatedAt) / 1000;
+            const currentPosition = playbackData.currentTime + elapsed;
+
+            // Allow a small buffer (e.g., 2 seconds) so we don't jump needlessly
+            // if we're already close enough.
+            playerRef.current.getCurrentTime().then((viewerTime) => {
+              if (Math.abs(viewerTime - currentPosition) > 2) {
+                playerRef.current.seekTo(currentPosition);
+              }
+            });
+          } else {
+            // If paused, just seek exactly to where the creator paused it
+            playerRef.current.seekTo(playbackData.currentTime);
+          }
         }
       }
     });
-
     return () => unsubscribe();
   }, [roomId, isCreator]);
 
-  // Update playback state in Firebase (only creator can do this)
+  // Creator Continuous Sync
+  useEffect(() => {
+    if (!isCreator || !playing) return;
+
+    // Push the creator's current time to Firebase every 5 seconds
+    const intervalId = setInterval(async () => {
+      if (playerRef.current) {
+        try {
+          const currentTime = await playerRef.current.getCurrentTime();
+          const db = getDatabase();
+          const playbackRef = ref(db, `rooms/${roomId}/playback`);
+
+          await set(playbackRef, {
+            isPlaying: true,
+            currentTime: currentTime || 0,
+            updatedAt: Date.now()
+          });
+        } catch (error) {
+          console.log("Error syncing time:", error);
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [isCreator, playing, roomId]);
+
   const updatePlaybackState = async (isPlaying) => {
     if (!isCreator) return;
-
     const db = getDatabase();
     const playbackRef = ref(db, `rooms/${roomId}/playback`);
     const currentTime = await playerRef.current?.getCurrentTime() || 0;
@@ -139,203 +281,502 @@ const StreamingScreen = ({ route, navigation }) => {
     });
   };
 
-  const onStateChange = useCallback((state) => {
-    if (state === "ended") {
-      setPlaying(false);
-    }
-  }, []);
-
   const seekBackward = async () => {
-    if (!isCreator) return;
-    
-    if (playerRef.current) {
-      const currentTime = await playerRef.current.getCurrentTime();
-      const newTime = Math.max(currentTime - 10, 0);
-      playerRef.current.seekTo(newTime);
-      await updatePlaybackState(playing);
-    }
+    if (!isCreator || !playerRef.current) return;
+    const currentTime = await playerRef.current.getCurrentTime();
+    playerRef.current.seekTo(Math.max(currentTime - 10, 0));
+    await updatePlaybackState(playing);
   };
 
   const seekForward = async () => {
-    if (!isCreator) return;
-    
-    if (playerRef.current) {
-      const currentTime = await playerRef.current.getCurrentTime();
-      const newTime = currentTime + 10;
-      playerRef.current.seekTo(newTime);
-      await updatePlaybackState(playing);
-    }
+    if (!isCreator || !playerRef.current) return;
+    const currentTime = await playerRef.current.getCurrentTime();
+    playerRef.current.seekTo(currentTime + 10);
+    await updatePlaybackState(playing);
   };
 
   const togglePlayback = async () => {
-    if (isCreator) {
-      const newPlayingState = !playing;
-      setPlaying(newPlayingState);
-      await updatePlaybackState(newPlayingState);
-    }
+    if (!isCreator) return;
+    const newPlayingState = !playing;
+    setPlaying(newPlayingState);
+    await updatePlaybackState(newPlayingState);
   };
 
-  const changeSpeed = () => {
-    try{
-      const speeds = [0.5, 1, 1.5, 2];
-      const currentIndex = speeds.indexOf(playbackRate);
-      const nextIndex = (currentIndex + 1) % speeds.length;
-      setPlaybackRate(speeds[nextIndex]);
-      if (playerRef.current) {
-        playerRef.current.setPlaybackRate(speeds[nextIndex]);
+  // Chat
+  useEffect(() => {
+    const db = getDatabase();
+    const messagesRef = query(ref(db, `rooms/${roomId}/messages`), limitToLast(50));
+    const unsubscribe = onValue(messagesRef, snapshot => {
+      const data = snapshot.val();
+      if (data) {
+        const msgs = Object.keys(data).map(key => ({ id: key, ...data[key] }));
+        msgs.sort((a, b) => b.timestamp - a.timestamp);
+        setMessages(msgs);
+      } else {
+        setMessages([]);
       }
-    }catch(error){
-      console.log(error);
+    });
+    return () => unsubscribe();
+  }, [roomId]);
+
+  const sendMessage = async () => {
+    if (!newMessage.trim()) return;
+    const db = getDatabase();
+    const messagesRef = ref(db, `rooms/${roomId}/messages`);
+    const currentUserProfile = participantProfiles.find(p => p.email === auth.currentUser?.email) || {
+      name: auth.currentUser?.email.split('@')[0],
+      color: colors.PRIMARY_COLOR,
+    };
+
+    await push(messagesRef, {
+      text: newMessage.trim(),
+      senderId: auth.currentUser?.uid,
+      senderName: currentUserProfile.name,
+      senderColor: currentUserProfile.color,
+      timestamp: serverTimestamp(),
+    });
+    setNewMessage('');
+  };
+
+  // Reactions
+  useEffect(() => {
+    const db = getDatabase();
+    const reactionsRef = query(ref(db, `rooms/${roomId}/reactions`), limitToLast(1));
+    const now = Date.now();
+
+    const unsubscribe = onChildAdded(reactionsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.timestamp > now - 5000) { // Only show recent ones
+        const id = Math.random().toString();
+        setFloatingEmojis(prev => [...prev, { id, emoji: data.emoji }]);
+        setTimeout(() => {
+          setFloatingEmojis(prev => prev.filter(e => e.id !== id));
+        }, 2000);
+      }
+    });
+    return () => unsubscribe();
+  }, [roomId]);
+
+  const sendReaction = async (emoji) => {
+    const db = getDatabase();
+    const reactionsRef = ref(db, `rooms/${roomId}/reactions`);
+    await push(reactionsRef, {
+      emoji,
+      senderId: auth.currentUser?.uid,
+      timestamp: Date.now(),
+    });
+  };
+
+  const renderMessage = ({ item }) => {
+    const isMe = item.senderId === auth.currentUser?.uid;
+    return (
+      <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleThem]}>
+        {!isMe && <Text style={[styles.messageSender, { color: item.senderColor || colors.PRIMARY_COLOR }]}>{item.senderName}</Text>}
+        <Text style={styles.messageText}>{item.text}</Text>
+      </View>
+    );
+  };
+
+  const renderParticipant = ({ item }) => (
+    <View style={styles.participantCard}>
+      <View style={[styles.avatar, { backgroundColor: item.color }]}>
+        <Text style={styles.avatarText}>{item.initial}</Text>
+        <View style={[styles.statusIndicator, { backgroundColor: item.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR }]} />
+      </View>
+      <View style={styles.participantInfo}>
+        <Text style={styles.participantName}>{item.name}</Text>
+        <Text style={styles.participantUsername}>{item.username}</Text>
+      </View>
+      {item.isHost && (
+        <View style={styles.hostBadge}>
+          <Text style={styles.hostBadgeText}>Host</Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const handleGoBack = async () => {
+    if (isCreator) {
+      // If creator leaves, reset isStreaming to false so people go back to waiting
+      try {
+        const db = getDatabase();
+        const { update } = require('firebase/database');
+        await update(ref(db, `rooms/${roomId}`), {
+          isStreaming: false
+        });
+      } catch (error) {
+        console.error("Error resetting stream state:", error);
+      }
     }
-   
+    navigation.goBack();
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
-      <Pressable 
-        style={styles.videoWrapper}
-        onPress={fadeInControls}
-      >
-        <View style={styles.videoContainer}>
-          {videoId ? (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
+          <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>{roomName || 'Streaming Room'}</Text>
+        <View style={styles.liveBadge}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>LIVE</Text>
+        </View>
+      </View>
+
+      {/* VIDEO PLAYER SECTION */}
+      <View style={styles.videoSection}>
+        {videoId ? (
+          <Pressable style={{ flex: 1 }} onPress={() => setControlsVisible(true)}>
             <YoutubePlayer
               ref={playerRef}
-              height={screenWidth}
-              width={screenHeight}
+              height={VIDEO_HEIGHT}
+              width={SCREEN_WIDTH}
               play={playing}
               videoId={videoId}
               initialPlayerParams={{
-                controls: 1,
+                controls: 0,
                 modestbranding: 1,
                 preventFullScreen: true,
+                rel: 0,
               }}
             />
-          ) : (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>Invalid video URL</Text>
-            </View>
-          )}
-          <Pressable style={styles.touchOverlay} onPress={() => {}} disabled={true}/>
+            {/* Custom Controls Overlay */}
+            {controlsVisible && (
+              <View style={styles.controlsOverlay}>
+                <TouchableOpacity onPress={seekBackward} disabled={!isCreator}>
+                  <MaterialIcons name="replay-10" size={36} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={togglePlayback} disabled={!isCreator}>
+                  <MaterialIcons name={playing ? "pause-circle-filled" : "play-circle-filled"} size={64} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={seekForward} disabled={!isCreator}>
+                  <MaterialIcons name="forward-10" size={36} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
+                </TouchableOpacity>
+              </View>
+            )}
+          </Pressable>
+        ) : (
+          <View style={styles.errorVideo}>
+            <Text style={{ color: '#fff' }}>Invalid Video URL</Text>
+          </View>
+        )}
+
+        {/* Video Overlays */}
+        {creatorLeft && (
+          <View style={styles.creatorLeftOverlay}>
+            <Ionicons name="pause-circle" size={48} color="#FFF" />
+            <Text style={styles.creatorLeftTitle}>Host Left</Text>
+            <Text style={styles.creatorLeftText}>The host has paused the stream.</Text>
+          </View>
+        )}
+
+        {/* Floating Emojis */}
+        {floatingEmojis.map(item => (
+          <FloatingEmoji key={item.id} emoji={item.emoji} />
+        ))}
+      </View>
+
+      {/* CONTENT SECTION (Tabs) */}
+      <View style={styles.contentSection}>
+        <View style={styles.tabsContainer}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
+            onPress={() => setActiveTab('chat')}
+          >
+            <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>Live Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'participants' && styles.activeTab]}
+            onPress={() => setActiveTab('participants')}
+          >
+            <Text style={[styles.tabText, activeTab === 'participants' && styles.activeTabText]}>Participants ({participants.length})</Text>
+          </TouchableOpacity>
         </View>
 
-        <Animated.View 
-          style={[
-            styles.controlsWrapper, 
-            fadeAnim,
-            !isCreator && styles.disabledControls
-          ]}
-          pointerEvents={controlsVisible ? 'auto' : 'none'}
-        >
-          <View style={styles.controls}>
-            <View style={styles.mainControls}>
-              <TouchableOpacity 
-                onPress={seekBackward} 
-                style={[styles.controlButton, !isCreator && styles.disabledButton]}
-                disabled={!isCreator}
-              >
-                <Icon name="replay-10" size={26} color={isCreator ? "white" : "#666666"} style={{transform: [{rotate: '90deg'}]}}/>
-              </TouchableOpacity>
+        {activeTab === 'chat' ? (
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <FlatList
+              data={messages}
+              keyExtractor={item => item.id}
+              renderItem={renderMessage}
+              inverted
+              contentContainerStyle={styles.chatList}
+              showsVerticalScrollIndicator={false}
+            />
 
-              <TouchableOpacity 
-                onPress={togglePlayback} 
-                style={[styles.playButton, !isCreator && styles.disabledButton]}
-                disabled={!isCreator}
-              >
-                <Icon 
-                  name={playing ? "pause" : "play-arrow"} 
-                  size={40} 
-                  color={isCreator ? "white" : "#666666"}
-                  style={{transform: [{rotate: '90deg'}]}}
-                />
-              </TouchableOpacity>
+            {/* Emoji Reaction Bar */}
+            <View style={styles.reactionBar}>
+              {['❤️', '😂', '🔥', '👏', '🎉', '😮'].map(emoji => (
+                <TouchableOpacity key={emoji} onPress={() => sendReaction(emoji)} style={styles.reactionBtn}>
+                  <Text style={styles.reactionEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
-              <TouchableOpacity 
-                onPress={seekForward} 
-                style={[styles.controlButton, !isCreator && styles.disabledButton]}
-                disabled={!isCreator}
-              >
-                <Icon name="forward-10" size={26} color={isCreator ? "white" : "#666666"} style={{transform: [{rotate: '90deg'}]}}/>
+            <View style={styles.chatInputContainer}>
+              <TextInput
+                style={styles.chatInput}
+                placeholder="Say something..."
+                placeholderTextColor={colors.SUB_TITLE_COLOR}
+                value={newMessage}
+                onChangeText={setNewMessage}
+                onSubmitEditing={sendMessage}
+              />
+              <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
+                <Ionicons name="send" size={20} color="#FFF" />
               </TouchableOpacity>
             </View>
-          </View>
-        </Animated.View>
-      </Pressable>
-    </View>
+          </KeyboardAvoidingView>
+        ) : (
+          <FlatList
+            data={participants}
+            keyExtractor={item => item.id}
+            renderItem={renderParticipant}
+            contentContainerStyle={styles.participantsList}
+          />
+        )}
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
   },
-  videoWrapper: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
+  },
+  backButton: {
+    padding: 8,
+    marginRight: 8,
+  },
+  headerTitle: {
     flex: 1,
+    color: colors.TITLE_COLOR || '#FFF',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
-  videoContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  liveBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#000000',
-    transform: [{ rotate: '90deg' }],
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
-  controlsWrapper: {
-    position: 'absolute',
-    left: 20,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    background: 'transparent',
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.LIVE_RED || '#EF4444',
+    marginRight: 4,
   },
-  controls: {
-    flexDirection: 'column',
-    alignItems: 'center',
+  liveText: {
+    color: colors.LIVE_RED || '#EF4444',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
-  mainControls: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 24,
+  videoSection: {
+    height: VIDEO_HEIGHT,
+    backgroundColor: '#000',
+    position: 'relative',
   },
-  controlButton: {
-    width: 45,
-    height: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 23,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  playButton: {
-    width: 60,
-    height: 60,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  touchOverlay: {
-    position: 'absolute',
-    width: Dimensions.get('window').height,
-    height: Dimensions.get('window').width,
-    backgroundColor: 'transparent',
-    zIndex: 2,
-  },
-  errorContainer: {
+  errorVideo: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#000000',
   },
-  errorText: {
-    color: '#FFFFFF',
+  creatorLeftOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  creatorLeftTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginTop: 10,
+  },
+  creatorLeftText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    marginTop: 5,
+  },
+  controlsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+  },
+  contentSection: {
+    flex: 1,
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+    borderBottomColor: colors.PRIMARY_COLOR || '#7C3AED',
+  },
+  tabText: {
+    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  activeTabText: {
+    color: colors.PRIMARY_COLOR || '#7C3AED',
+  },
+  chatList: {
+    padding: 16,
+    paddingBottom: 20,
+  },
+  messageBubble: {
+    maxWidth: '80%',
+    padding: 12,
+    borderRadius: 16,
+    marginBottom: 12,
+  },
+  messageBubbleMe: {
+    alignSelf: 'flex-end',
+    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
+    borderBottomRightRadius: 4,
+  },
+  messageBubbleThem: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.CARD_COLOR || '#1C1C23',
+    borderBottomLeftRadius: 4,
+  },
+  messageSender: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  messageText: {
+    color: '#FFF',
+    fontSize: 15,
+  },
+  reactionBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE || '#1F1F25',
+  },
+  reactionBtn: {
+    padding: 8,
+  },
+  reactionEmoji: {
+    fontSize: 24,
+  },
+  chatInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE || '#1F1F25',
+  },
+  chatInput: {
+    flex: 1,
+    backgroundColor: colors.CARD_COLOR || '#1C1C23',
+    color: '#FFF',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    marginLeft: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  participantsList: {
+    padding: 16,
+  },
+  participantCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.CARD_COLOR || '#1C1C23',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  avatarText: {
+    color: '#FFF',
     fontSize: 16,
-    textAlign: 'center',
+    fontWeight: 'bold',
   },
-  disabledControls: {
-    opacity: 0.5,
+  statusIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.CARD_COLOR || '#1C1C23',
   },
-  disabledButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  participantInfo: {
+    flex: 1,
+  },
+  participantName: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  participantUsername: {
+    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    fontSize: 13,
+  },
+  hostBadge: {
+    backgroundColor: 'rgba(250, 204, 21, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  hostBadgeText: {
+    color: colors.FILM_GOLD || '#FACC15',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  floatingEmoji: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    zIndex: 1000,
   },
 });
 

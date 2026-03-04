@@ -205,33 +205,34 @@ const HomeScreen = () => {
     const currentUser = auth.currentUser;
     const isCreator = item.creator.email === currentUser?.email;
 
+    // If the stream has already started, everyone goes directly to the Streaming screen
+    if (item.isStreaming) {
+      navigation.navigate('Streaming', {
+        roomId: item.roomId,
+        roomName: item.name,
+        streamUrl: item.streamUrl,
+      });
+      return;
+    }
+
     if (isCreator) {
-      Alert.alert('Screening Room', 'What would you like to do?', [
-        {
-          text: 'Join Room',
-          onPress: () => {
-            if (item?.participants?.length === 0 || item?.participants === undefined) {
-              navigation.navigate('StreamInfo', {
-                roomId: item.roomId,
-                roomName: item.name,
-                streamUrl: item.streamUrl,
-              });
-            } else {
-              navigation.navigate('WaitingScreen', {
-                roomId: item.roomId,
-                roomName: item.name,
-                streamUrl: item.streamUrl,
-              });
-            }
-          },
-        },
-        {
-          text: 'Edit Room',
-          onPress: () => navigation.navigate('CreateRoom', { room: item }),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
+      if (!item?.participants?.length) {
+        // Creator is the only one — go directly to Streaming
+        navigation.navigate('Streaming', {
+          roomId: item.roomId,
+          roomName: item.name,
+          streamUrl: item.streamUrl,
+        });
+      } else {
+        // Creator has invited participants — go to WaitingScreen
+        navigation.navigate('WaitingScreen', {
+          roomId: item.roomId,
+          roomName: item.name,
+          streamUrl: item.streamUrl,
+        });
+      }
     } else {
+      // Invited room — go to WaitingScreen
       navigation.navigate('WaitingScreen', {
         roomId: item.roomId,
         roomName: item.name,

@@ -175,6 +175,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
       navigation.replace('WaitingScreen', {
         roomId: roomId,
         roomName: roomName,
+        streamUrl: streamUrl,
       });
     } catch (error) {
       console.error('Error saving room:', error);
