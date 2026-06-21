@@ -17,8 +17,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getDatabase, ref, push, onValue, off, serverTimestamp, set } from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import { useAudioCall } from '../../../webRTC/useAudioCall';
 import { RTCView } from 'react-native-webrtc';
 import colors from '../../../theme/Colors';
@@ -96,9 +95,7 @@ const ChatScreen = ({ route, navigation }) => {
     setupUserPresence();
     return () => {
       if (chatId) {
-        const db = getDatabase();
-        const chatRef = ref(db, `chats/${chatId}/messages`);
-        off(chatRef);
+        database().ref(`chats/${chatId}/messages`).off('value');
       }
     };
   }, []);
@@ -150,14 +147,13 @@ const ChatScreen = ({ route, navigation }) => {
   }, [showAttachments]);
 
   const initializeChat = async () => {
-    const db = getDatabase();
-    const currentUser = auth.currentUser;
+    const currentUser = auth().currentUser;
     const otherUserId = route.params?.userId;
 
     if (!currentUser || !otherUserId) return;
 
-    const userChatsRef = ref(db, `user_chats/${currentUser.uid}`);
-    onValue(userChatsRef, (snapshot) => {
+    const userChatsRef = database().ref(`user_chats/${currentUser.uid}`);
+    userChatsRef.on('value', (snapshot) => {
       const chats = snapshot.val();
       if (chats) {
         const existingChatId = Object.keys(chats).find(
@@ -176,22 +172,22 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   const createNewChat = async (currentUserId, otherUserId) => {
-    const db = getDatabase();
-    const newChatRef = push(ref(db, 'chats'));
+    const db = database();
+    const newChatRef = db.ref('chats').push();
     const newChatId = newChatRef.key;
 
     await Promise.all([
-      set(ref(db, `chats/${newChatId}/participants/${currentUserId}`), true),
-      set(ref(db, `chats/${newChatId}/participants/${otherUserId}`), true),
-      set(ref(db, `user_chats/${currentUserId}/${newChatId}`), {
+      db.ref(`chats/${newChatId}/participants/${currentUserId}`).set(true),
+      db.ref(`chats/${newChatId}/participants/${otherUserId}`).set(true),
+      db.ref(`user_chats/${currentUserId}/${newChatId}`).set({
         otherUserId,
         lastMessage: '',
-        lastMessageTimestamp: serverTimestamp(),
+        lastMessageTimestamp: database.ServerValue.TIMESTAMP,
       }),
-      set(ref(db, `user_chats/${otherUserId}/${newChatId}`), {
+      db.ref(`user_chats/${otherUserId}/${newChatId}`).set({
         otherUserId: currentUserId,
         lastMessage: '',
-        lastMessageTimestamp: serverTimestamp(),
+        lastMessageTimestamp: database.ServerValue.TIMESTAMP,
       }),
     ]);
 
@@ -200,10 +196,9 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   const listenToMessages = (activeChatId) => {
-    const db = getDatabase();
-    const messagesRef = ref(db, `chats/${activeChatId}/messages`);
+    const messagesRef = database().ref(`chats/${activeChatId}/messages`);
 
-    onValue(messagesRef, (snapshot) => {
+    messagesRef.on('value', (snapshot) => {
       const messagesData = snapshot.val();
       if (messagesData) {
         const messagesList = Object.entries(messagesData).map(([id, data]) => ({
@@ -223,32 +218,32 @@ const ChatScreen = ({ route, navigation }) => {
   const sendMessage = async () => {
     if (!message.trim() || !chatId) return;
 
-    const db = getDatabase();
-    const currentUser = auth.currentUser;
+    const db = database();
+    const currentUser = auth().currentUser;
     const messageData = {
       text: message.trim(),
       senderId: currentUser.uid,
-      timestamp: serverTimestamp(),
+      timestamp: database.ServerValue.TIMESTAMP,
       type: 'text',
     };
 
-    const newMessageRef = push(ref(db, `chats/${chatId}/messages`));
-    await set(newMessageRef, messageData);
+    const newMessageRef = db.ref(`chats/${chatId}/messages`).push();
+    await newMessageRef.set(messageData);
     setMessage('');
   };
 
   const setupUserPresence = () => {
-    if (!auth.currentUser) return;
-    const db = getDatabase();
-    const userStatusRef = ref(db, `users/${auth.currentUser.uid}/status`);
-    set(userStatusRef, 'online');
+    if (!auth().currentUser) return;
+    const db = database();
+    const userStatusRef = db.ref(`users/${auth().currentUser.uid}/status`);
+    userStatusRef.set('online');
 
-    const connectedRef = ref(db, '.info/connected');
-    onValue(connectedRef, (snapshot) => {
+    const connectedRef = db.ref('.info/connected');
+    connectedRef.on('value', (snapshot) => {
       if (snapshot.val() === false) {
-        set(userStatusRef, 'offline');
+        userStatusRef.set('offline');
       } else {
-        set(userStatusRef, 'online');
+        userStatusRef.set('online');
       }
     });
   };
@@ -256,7 +251,7 @@ const ChatScreen = ({ route, navigation }) => {
   // ─── Message rendering ───────────────────────────────────
 
   const renderMessage = ({ item, index }) => {
-    const isMyMessage = item.senderId === auth.currentUser?.uid;
+    const isMyMessage = item.senderId === auth().currentUser?.uid;
 
     const dateSeparator = (() => {
       const currentMessageDate = new Date(item.timestamp);

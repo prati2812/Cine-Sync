@@ -2,13 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator, AppState } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { onAuthStateChanged } from 'firebase/auth';
-import { getDatabase, ref, update, onDisconnect, onValue, serverTimestamp, get } from 'firebase/database';
+
+// import { getDatabase, ref, update, onDisconnect, onValue, serverTimestamp, get } from 'firebase/database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useDispatch } from 'react-redux';
 import { setUser, clearUser, updateStatus } from '../store/slices/user/userSlice';
-import { auth } from '../config/firebase';
+import { auth, database } from '../config/firebase';
 
 import LoginScreen from '../screens/auth/LoginScreen';
 import SignUpScreen from '../screens/auth/SignUpScreen';
@@ -36,12 +36,15 @@ const AppNavigator = () => {
   const [isEmailVerified, setIsEmailVerified] = useState(false);
   const dispatch = useDispatch();
 
-  const updateUserStatus = (status) => {
-    if (user) {
-      const db = getDatabase();
-      const userStatusRef = ref(db, `users/${user.uid}/status`);
-      update(userStatusRef, { state: status, last_changed: serverTimestamp() });
-    }
+  const updateUserStatus = async (status) => {
+    if (!user) return;
+
+    await database()
+      .ref(`users/${user.uid}/status`)
+      .update({
+        state: status,
+        last_changed: database.ServerValue.TIMESTAMP,
+      });
   };
 
   useEffect(() => {
@@ -58,26 +61,33 @@ const AppNavigator = () => {
 
     if (authUser) {
       try {
-        const db = getDatabase();
-        const userStatusRef = ref(db, `users/${authUser.uid}/status`);
-        const connectedRef = ref(db, '.info/connected');
-        onValue(connectedRef, snapshot => {
-          if (!snapshot.val()) return;
-          onDisconnect(userStatusRef)
-            .update({
-              state: 'offline',
-              last_changed: serverTimestamp(),
-            })
-            .then(() => {
-              update(userStatusRef, {
-                state: 'online',
-                last_changed: serverTimestamp(),
-              });
-            });
-        });
+        const userStatusRef = database().ref(
+          `users/${authUser.uid}/status`
+        );
+       
+        database()
+          .ref('.info/connected')
+          .on('value', snapshot => {
+            if (!snapshot.val()) return;
 
-        const userRef = ref(db, `users/${authUser.uid}`);
-        const snapshot = await get(userRef);
+            userStatusRef
+              .onDisconnect()
+              .update({
+                state: 'offline',
+                last_changed: database.ServerValue.TIMESTAMP,
+              })
+              .then(() => {
+                userStatusRef.update({
+                  state: 'online',
+                  last_changed: database.ServerValue.TIMESTAMP,
+                });
+              });
+          });
+
+
+        const snapshot = await database()
+          .ref(`users/${authUser.uid}`)
+          .once('value');
 
 
         if (snapshot.exists()) {
@@ -93,7 +103,7 @@ const AppNavigator = () => {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, handleAuthStateChanged);
+    const unsubscribe = auth().onAuthStateChanged(handleAuthStateChanged);
     return unsubscribe;
   }, []);
 
@@ -119,10 +129,10 @@ const AppNavigator = () => {
     return <VerifyEmailScreen onSuccess={() => setIsEmailVerified(true)} />;
 
   return (
-    <GestureHandlerRootView style={{flex: 1}}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <BottomSheetModalProvider>
         <NavigationContainer>
-          <Stack.Navigator screenOptions={{headerShown: false}}>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
             {user ? (
               <>
                 <Stack.Screen name="MainTabs" component={MainTabs} />

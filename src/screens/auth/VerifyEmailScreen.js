@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,35 +9,22 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  StatusBar,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
+  FadeInDown,
 } from 'react-native-reanimated';
-import {auth} from '../../config/firebase';
-import {sendEmailVerification, onAuthStateChanged} from 'firebase/auth';
+import { auth } from '../../config/firebase';
+import colors from '../../theme/Colors';
+import LinearGradient from 'react-native-linear-gradient';
 
-const VerifyEmailScreen = ({onSuccess}) => {
-  const [email, setEmail] = useState('');
-  const [isSuccess, setIsSuccess] = useState(false);
+const VerifyEmailScreen = ({ onSuccess }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [canResend, setCanResend] = useState(false);
   const [timer, setTimer] = useState(30);
-
-  const scale = useSharedValue(1);
-  const opacity = useSharedValue(1);
-  const successOpacity = useSharedValue(0);
-
-  const formAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{scale: scale.value}],
-    opacity: opacity.value,
-  }));
-
-  const successAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: successOpacity.value,
-    transform: [{scale: successOpacity.value}],
-  }));
 
   useEffect(() => {
     if (!canResend) {
@@ -51,16 +38,14 @@ const VerifyEmailScreen = ({onSuccess}) => {
           return prev - 1;
         });
       }, 1000);
-      return () => clearInterval(countdown); // Cleanup interval on unmount
+      return () => clearInterval(countdown);
     }
   }, [canResend]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
-      await auth.currentUser.reload();
-      console.log('Email Verified:', auth.currentUser.emailVerified);
-
-      if (auth.currentUser.emailVerified) {
+      await auth().currentUser?.reload();
+      if (auth().currentUser?.emailVerified) {
         onSuccess();
         clearInterval(interval);
       }
@@ -72,10 +57,10 @@ const VerifyEmailScreen = ({onSuccess}) => {
   const handleResendEmail = async () => {
     setIsLoading(true);
     try {
-      await sendEmailVerification(auth.currentUser);
+      await auth().currentUser?.sendEmailVerification();
       Alert.alert('Verification Email Sent', 'Please check your inbox.');
       setCanResend(false);
-      setTimer(30); // Reset timer to 30 seconds
+      setTimer(30);
     } catch (error) {
       console.log('Error sending verification email:', error);
       Alert.alert('Error', 'Failed to send verification email.');
@@ -86,31 +71,48 @@ const VerifyEmailScreen = ({onSuccess}) => {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar
+        backgroundColor={colors.STATUSBAR_BG_COLOR}
+        barStyle="light-content"
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}>
         <View style={styles.contentContainer}>
-          {!isSuccess ? (
-            <Animated.View style={[styles.formContent, formAnimatedStyle]}>
-              <View style={styles.headerContainer}>
-                <Icon
-                  name="mail-outline"
-                  size={48}
-                  color="#007AFF"
-                  style={styles.headerIcon}
-                />
-                <Text style={styles.title}>Verify Your Email</Text>
+          <Animated.View
+            entering={FadeInDown.duration(800)}
+            style={styles.formContent}>
+            <View style={styles.headerContainer}>
+              <LinearGradient
+                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                style={styles.iconCircle}>
+                <Icon name="mail-outline" size={40} color="#FFFFFF" />
+              </LinearGradient>
+              <Text style={styles.title}>Verify Your Email</Text>
+              <View style={styles.infoCard}>
                 <Text style={styles.subtitle}>
                   A verification link has been sent to your email. Please check
                   your inbox and follow the instructions to verify your account.
                 </Text>
               </View>
+            </View>
 
-              <TouchableOpacity
-                style={styles.resendButton}
-                onPress={handleResendEmail}
-                disabled={!canResend}
-                activeOpacity={0.8}>
+            <TouchableOpacity
+              onPress={handleResendEmail}
+              disabled={!canResend || isLoading}
+              activeOpacity={0.8}>
+              <LinearGradient
+                colors={
+                  canResend
+                    ? [colors.GRADIENT_START, colors.GRADIENT_END]
+                    : [colors.DISABLED_BUTTON_COLOR, colors.DISABLED_BUTTON_COLOR]
+                }
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[
+                  styles.resendButton,
+                  (!canResend || isLoading) && styles.buttonDisabled,
+                ]}>
                 {isLoading ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
@@ -120,18 +122,9 @@ const VerifyEmailScreen = ({onSuccess}) => {
                       : `Wait ${timer}s to resend`}
                   </Text>
                 )}
-              </TouchableOpacity>
-            </Animated.View>
-          ) : (
-            <Animated.View
-              style={[styles.successContainer, successAnimatedStyle]}>
-              <Icon name="checkmark-circle-outline" size={80} color="#4CAF50" />
-              <Text style={styles.successTitle}>Check Your Email</Text>
-              <Text style={styles.successText}>
-                We've sent a verification link to your email address.
-              </Text>
-            </Animated.View>
-          )}
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -141,7 +134,7 @@ const VerifyEmailScreen = ({onSuccess}) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
   keyboardView: {
     flex: 1,
@@ -155,77 +148,61 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 40,
   },
-  headerIcon: {
-    marginBottom: 20,
+  iconCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.4,
+    shadowRadius: 15,
+    elevation: 8,
   },
   title: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 12,
+    fontWeight: '800',
+    color: colors.TITLE_COLOR,
+    marginBottom: 20,
     textAlign: 'center',
   },
+  infoCard: {
+    backgroundColor: colors.SURFACE_GLASS,
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
   subtitle: {
-    fontSize: 15,
-    color: '#888888',
+    fontSize: 16,
+    color: colors.SUB_TITLE_COLOR,
     textAlign: 'center',
-    lineHeight: 22,
-    paddingHorizontal: 20,
+    lineHeight: 24,
   },
   formContent: {
     width: '100%',
   },
-  button: {
-    backgroundColor: '#007AFF',
+  resendButton: {
     height: 56,
-    borderRadius: 12,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 32,
-    shadowColor: '#007AFF',
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  resendButton: {
-    backgroundColor: '#FF3B30',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
+    marginTop: 10,
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   resendButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
   },
-  successContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  successTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginTop: 20,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  successText: {
-    fontSize: 16,
-    color: '#888888',
-    textAlign: 'center',
-    lineHeight: 24,
-    paddingHorizontal: 20,
+  buttonDisabled: {
+    opacity: 0.6,
   },
 });
 

@@ -1,97 +1,276 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# 🎬 NightWatcher
 
-# Getting Started
+A modern React Native mobile application that enables users to create and join collaborative video screening rooms. Watch movies, shows, and live streams together with friends in real-time synchronized viewing sessions.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## ✨ Features
 
-## Step 1: Start Metro
+### Core Functionality
+- **Create Screening Rooms** — Set up private or public screening rooms for synchronized watching
+- **Real-time Synchronization** — Keep video playback in sync across all participants
+- **Room Management** — Create, manage, and delete screening rooms
+- **Participant Tracking** — See who's watching with you and manage room members
+- **Search & Filter** — Easily find rooms by name, creator, or filter by type (All/Created/Invited)
+- **Smart Sorting** — Sort rooms by newest, oldest, or alphabetical order
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+### User Features
+- **Authentication** — Secure Firebase-based sign up, login, and email verification
+- **PIN Security** — Additional PIN verification layer for account security
+- **User Profiles** — Customize your profile with personal information
+- **Friends List** — Connect with other users and see friends' activity
+- **Real-time Chat** — Communicate with other room participants
+- **Settings & Preferences** — Configure app settings, notifications, and preferences
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+### Advanced Capabilities
+- **Video Streaming** — Support for multiple video sources and streaming protocols
+- **WebRTC Integration** — Peer-to-peer communication for low-latency interactions
+- **Gesture Controls** — Native gesture handling for intuitive UI interactions
+- **Animated UI** — Smooth animations and transitions powered by React Native Reanimated
+- **Dark Theme** — Eye-friendly dark interface optimized for viewing
+- **Cross-Platform** — Available on both iOS and Android
 
-```sh
-# Using npm
-npm start
+## 🏗️ Project Structure
 
-# OR using Yarn
+```
+NightWatcher/
+├── src/
+│   ├── screens/
+│   │   ├── auth/                 # Authentication screens
+│   │   │   ├── LoginScreen.js
+│   │   │   ├── SignUpScreen.js
+│   │   │   ├── VerifyEmailScreen.js
+│   │   │   ├── PINVerificationScreen.js
+│   │   │   └── ForgetPasswordScreen.js
+│   │   ├── main/                 # Main app screens
+│   │   │   ├── HomeScreen.js     # Room list and management
+│   │   │   ├── Streaming/
+│   │   │   │   ├── StreamingScreen.js
+│   │   │   │   ├── CreateRoomScreen.js
+│   │   │   │   ├── WaitingScreen.js
+│   │   │   │   └── StreamInfoScreen.js
+│   │   │   ├── Chat/
+│   │   │   │   ├── ChatScreen.js
+│   │   │   │   └── FriendsScreen.js
+│   │   │   └── Settings/
+│   │   │       ├── SettingsScreen.js
+│   │   │       ├── UserProfileScreen.js
+│   │   │       ├── SetupPINScreen.js
+│   │   │       └── HelpAndSupportScreen.js
+│   ├── components/               # Reusable components
+│   │   ├── UI/
+│   │   │   ├── CustomInput.js
+│   │   │   └── RoundButton.js
+│   │   ├── Logo.js
+│   │   ├── AnimatedLoader.js
+│   │   ├── CreateRoomModal.js
+│   │   └── ...
+│   ├── navigation/               # Navigation configuration
+│   │   ├── AppNavigator.js
+│   │   └── MainTabs.js
+│   ├── webRTC/                   # WebRTC functionality
+│   │   └── useAudioCall.js
+│   ├── store/                    # Redux state management
+│   │   ├── store.js
+│   │   └── slices/
+│   │       └── user/userSlice.js
+│   ├── theme/                    # Theming
+│   │   └── Colors.js
+│   ├── functions/                # Utility functions
+│   │   └── index.js
+│   └── config/                   # Configuration
+│       └── firebase.js           # Firebase setup
+├── ios/                          # iOS native code
+├── android/                      # Android native code
+├── package.json                  # Dependencies and scripts
+└── App.js                        # App entry point
+```
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js >= 18
+- Yarn or npm
+- iOS: Xcode and CocoaPods
+- Android: Android Studio and Android SDK
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd NightWatcher
+   ```
+
+2. **Install dependencies**
+   ```bash
+   yarn install
+   # or
+   npm install
+   ```
+
+3. **iOS Setup** (first time or after updating native dependencies)
+   ```bash
+   cd ios
+   bundle install
+   bundle exec pod install
+   cd ..
+   ```
+
+4. **Configure Firebase**
+   - Set up your Firebase project
+   - Add your Firebase configuration to `src/config/firebase.js`
+   - Ensure Firebase authentication, database, and storage are enabled
+
+5. **Start Metro bundler**
+   ```bash
+   yarn start
+   # or
+   npm start
+   ```
+
+6. **Run the app**
+   ```bash
+   # iOS
+   yarn ios
+   # or
+   npm run ios
+
+   # Android
+   yarn android
+   # or
+   npm run android
+   ```
+
+## 📱 Key Technologies
+
+- **React Native 0.80.1** — Cross-platform mobile framework
+- **React 19.1.0** — UI library
+- **Firebase** — Backend services (Authentication, Realtime Database)
+- **Redux Toolkit** — State management
+- **React Navigation** — Navigation library
+- **React Native Reanimated** — Advanced animations
+- **WebRTC** — Real-time communication
+- **React Native Video** — Video playback
+
+## 🎯 Core Features Explained
+
+### Room Management
+Users can create screening rooms and invite friends. Room creators have full control including:
+- Starting/stopping the stream
+- Adding or removing participants
+- Deleting the room
+- Controlling playback synchronization
+
+### Streaming
+Once in a room, users experience:
+- Synchronized video playback across all devices
+- Real-time chat during streaming
+- Participant count and presence indicators
+- Stream quality and playback controls
+
+### Authentication
+- Email/password registration and login
+- Email verification for security
+- PIN-based account recovery
+- Password reset functionality
+
+## 🧪 Scripts
+
+```bash
+# Start development server
 yarn start
-```
 
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
-
-```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
+# Run iOS app
 yarn ios
+
+# Run Android app
+yarn android
+
+# Lint code
+yarn lint
+
+# Run tests
+yarn test
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+## 🔧 Configuration
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+### Firebase Setup
+Edit `src/config/firebase.js` with your Firebase credentials:
+```javascript
+// Example structure
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  databaseURL: "YOUR_DATABASE_URL",
+  projectId: "YOUR_PROJECT_ID",
+  // ... other config
+};
+```
 
-## Step 3: Modify your app
+### Theme Customization
+Colors and theme are defined in `src/theme/Colors.js`. Customize the design by modifying color constants.
 
-Now that you have successfully run the app, let's make changes!
+## 📚 Project Scripts
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+- **Android**: `npm run android` — Build and run on Android emulator/device
+- **iOS**: `npm run ios` — Build and run on iOS simulator/device
+- **Lint**: `npm run lint` — Run ESLint to check code quality
+- **Start**: `npm start` — Start Metro bundler
+- **Test**: `npm test` — Run Jest tests
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+## 🐛 Troubleshooting
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+### Metro Connection Issues
+```bash
+# Clear cache and restart
+npm start -- --reset-cache
+```
 
-## Congratulations! :tada:
+### Pod Installation Issues (iOS)
+```bash
+cd ios
+rm -rf Pods
+rm Podfile.lock
+bundle install
+bundle exec pod install
+cd ..
+```
 
-You've successfully run and modified your React Native App. :partying_face:
+### Build Issues
+- Clear build folders: `npm run clean` or manual deletion
+- Ensure correct Node version (18+)
+- Check Firebase configuration
+- Verify all dependencies are installed
 
-### Now what?
+## 📖 Learn More
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+- [React Native Documentation](https://reactnative.dev)
+- [Firebase Documentation](https://firebase.google.com/docs)
+- [React Navigation Docs](https://reactnavigation.org)
+- [Redux Toolkit Guide](https://redux-toolkit.js.org)
 
-# Troubleshooting
+## 🎨 Design System
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+NightWatcher features a modern dark theme with:
+- Gradient overlays for visual hierarchy
+- Smooth animations and transitions
+- Intuitive gesture controls
+- Accessible color contrasts
+- Icon-based navigation
 
-# Learn More
+## 📄 License
 
-To learn more about React Native, take a look at the following resources:
+Private project. All rights reserved.
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+## 👨‍💻 Development
+
+- **Current Branch**: `UPDATE_UI`
+- **Latest Version**: 0.0.1
+- **Node Requirements**: >= 18
+- **React Native**: 0.80.1
+
+---
+
+**Last Updated**: 2026-06-21
+
+For issues, feature requests, or questions, please contact the development team.

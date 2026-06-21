@@ -8,11 +8,12 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert
+  Alert,
 } from 'react-native';
-import { getDatabase, ref, set, get, query, orderByChild, equalTo } from 'firebase/database';
-import {auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { useSelector } from 'react-redux';
 
@@ -23,10 +24,14 @@ const CreateRoomScreen = ({ navigation, route }) => {
   const loggedInUser = useSelector(state => state.user.user);
 
   const [roomName, setRoomName] = useState(editingRoom?.name || '');
-  const [inviteEmails, setInviteEmails] = useState(editingRoom?.participants || []);
+  const [inviteEmails, setInviteEmails] = useState(
+    editingRoom?.participants || [],
+  );
   const [currentEmail, setCurrentEmail] = useState('');
   const [streamUrl, setStreamUrl] = useState(editingRoom?.streamUrl || '');
-  const [selectedIcon, setSelectedIcon] = useState(editingRoom?.thumbnail || '🎬');
+  const [selectedIcon, setSelectedIcon] = useState(
+    editingRoom?.thumbnail || '🎬',
+  );
 
   const ROOM_ICONS = [
     { icon: '🎬', label: 'Movie' },
@@ -39,23 +44,23 @@ const CreateRoomScreen = ({ navigation, route }) => {
     { icon: '🎪', label: 'Event' },
   ];
 
-  const checkUserExists = async (email) => {
+  const checkUserExists = async email => {
     try {
-      const db = getDatabase();
-      const usersRef = ref(db, 'users');
-      const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
-      const snapshot = await get(userQuery);
+      const snapshot = await database()
+        .ref('users')
+        .orderByChild('email')
+        .equalTo(email)
+        .once('value');
       return snapshot.exists();
     } catch (error) {
-      console.log("Neww Dataabase error:", error);
-      
+      console.log('Neww Dataabase error:', error);
       return false;
     }
   };
 
   const addEmail = async () => {
     if (!currentEmail) return;
-    
+
     if (!currentEmail.includes('@')) {
       Alert.alert('Invalid Email', 'Please enter a valid email address');
       return;
@@ -66,14 +71,14 @@ const CreateRoomScreen = ({ navigation, route }) => {
       return;
     }
 
-    if (currentEmail === auth.currentUser?.email) {
+    if (currentEmail === auth().currentUser?.email) {
       Alert.alert('Invalid Invitation', 'You cannot invite yourself');
       return;
     }
 
     try {
       const userExists = await checkUserExists(currentEmail);
-      
+
       if (userExists) {
         setInviteEmails([...inviteEmails, currentEmail]);
         setCurrentEmail('');
@@ -81,7 +86,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
         Alert.alert(
           'User Not Found',
           'This user is not registered in the app. Only registered users can be invited.',
-          [{ text: 'OK', onPress: () => setCurrentEmail('') }]
+          [{ text: 'OK', onPress: () => setCurrentEmail('') }],
         );
       }
     } catch (error) {
@@ -90,7 +95,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
     }
   };
 
-  const removeEmail = (emailToRemove) => {
+  const removeEmail = emailToRemove => {
     setInviteEmails(inviteEmails.filter(email => email !== emailToRemove));
   };
 
@@ -99,10 +104,10 @@ const CreateRoomScreen = ({ navigation, route }) => {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
-    
-    const db = getDatabase();
-    const user = auth.currentUser;
-    
+
+    const db = database();
+    const user = auth().currentUser;
+
     if (!user) {
       Alert.alert('Error', 'You must be logged in to create a room');
       return;
@@ -120,156 +125,193 @@ const CreateRoomScreen = ({ navigation, route }) => {
       if (invalidEmails.length > 0) {
         Alert.alert(
           'Invalid Participants',
-          `Some invited users are no longer registered: ${invalidEmails.join(', ')}. Please remove them and try again.`
+          `Some invited users are no longer registered: ${invalidEmails.join(
+            ', ',
+          )}. Please remove them and try again.`,
         );
         return;
       }
 
-      const roomId = isEditing ? editingRoom.roomId : `room_${Date.now()}`;
-      const roomRef = ref(db, `rooms/${roomId}`);
-      
+      const roomId = isEditing
+        ? editingRoom.roomId
+        : `room_${Date.now()}`;
+      const roomRef = db.ref(`rooms/${roomId}`);
+
       const roomData = {
         roomId: roomId,
         name: roomName,
-        creator: isEditing ? editingRoom.creator : {
-          uid: user.uid,
-          email: user.email,
-          userName: loggedInUser?.username || 'Anonymous'
-        },
+        creator: isEditing
+          ? editingRoom.creator
+          : {
+            uid: user.uid,
+            email: user.email,
+            userName: loggedInUser?.username || 'Anonymous',
+          },
         streamUrl: streamUrl,
         participants: [...inviteEmails],
         thumbnail: selectedIcon,
-        createdAt: isEditing ? editingRoom.createdAt : new Date().toISOString(),
-        status: 'active'
+        createdAt: isEditing
+          ? editingRoom.createdAt
+          : new Date().toISOString(),
+        status: 'active',
       };
 
-      console.log("Newwww Dataaa", roomData, loggedInUser);
-      
-      
-      await set(roomRef, roomData);
-      
+      console.log('Newwww Dataaa', roomData, loggedInUser);
+
+      await roomRef.set(roomData);
+
       navigation.replace('WaitingScreen', {
         roomId: roomId,
         roomName: roomName,
+        streamUrl: streamUrl,
       });
-
     } catch (error) {
       console.error('Error saving room:', error);
-      Alert.alert('Error', `Failed to ${isEditing ? 'update' : 'create'} room. Please try again.`);
+      Alert.alert(
+        'Error',
+        `Failed to ${isEditing ? 'update' : 'create'} room. Please try again.`,
+      );
     }
   };
 
-  const renderEmailChip = (email) => (
-    <View key={email} style={styles.emailChip}>
-      <Text style={styles.emailChipText}>{email}</Text>
-      <TouchableOpacity 
-        onPress={() => removeEmail(email)}
-        style={styles.removeEmailButton}
-      >
-        <Text style={styles.removeEmailText}>×</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
+  // ────────────────────────────────────────────────────────────
+  //  Render
+  // ────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      {/* ── Header ─────────────────────────────────────────── */}
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.closeButton}
           onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="close" size={24} color="#FFFFFF" />
+          activeOpacity={0.7}>
+          <MaterialIcons name="close" size={20} color={colors.TITLE_COLOR} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>
-          {isEditing ? 'Edit Room' : 'Create New Room'}
-        </Text>
-        <View style={{ width: 40 }}></View>
+        <View style={styles.headerCenter}>
+          <Ionicons name="film" size={18} color={colors.FILM_GOLD} />
+          <Text style={styles.headerTitle}>
+            {isEditing ? 'Edit Room' : 'New Screening Room'}
+          </Text>
+        </View>
+        <View style={{ width: 38 }} />
       </View>
 
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.inputContainer}>
+        showsVerticalScrollIndicator={false}>
+        {/* ── Room Name ──────────────────────────────────── */}
+        <View style={styles.section}>
           <Text style={styles.label}>Room Name</Text>
           <View style={styles.inputWrapper}>
-            <Text style={styles.inputIcon}>🎬</Text>
+            <MaterialIcons
+              name="movie-creation"
+              size={20}
+              color={colors.FILM_GOLD}
+            />
             <TextInput
               style={styles.textInput}
               placeholder="Enter room name"
-              placeholderTextColor="#666666"
+              placeholderTextColor={colors.MUTED_COLOR}
               value={roomName}
               onChangeText={setRoomName}
             />
           </View>
         </View>
 
-        <View style={styles.inputContainer}>
+        {/* ── Room Icon ──────────────────────────────────── */}
+        <View style={styles.section}>
           <Text style={styles.label}>Room Icon</Text>
           <View style={styles.iconGrid}>
-            {ROOM_ICONS.map((item) => (
+            {ROOM_ICONS.map(item => (
               <TouchableOpacity
                 key={item.icon}
-                style={[
-                  styles.iconOption,
-                  selectedIcon === item.icon && {
-                    backgroundColor: colors.ROOM_BUTTON_BG_COLOR,
-                    borderColor: colors.PRIMARY_COLOR,
-                    borderWidth: 2,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    padding: 4,
-                  }
-                ]}
-                onPress={() => setSelectedIcon(item.icon)}
-              >
-                <Text style={styles.iconOptionEmoji}>{item.icon}</Text>
-                <Text style={styles.iconOptionLabel}>{item.label}</Text>
+                activeOpacity={0.8}
+                onPress={() => setSelectedIcon(item.icon)}>
+                {selectedIcon === item.icon ? (
+                  <LinearGradient
+                    colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.iconOptionActive}>
+                    <Text style={styles.iconEmoji}>{item.icon}</Text>
+                    <Text style={styles.iconLabelActive}>{item.label}</Text>
+                  </LinearGradient>
+                ) : (
+                  <View style={styles.iconOption}>
+                    <Text style={styles.iconEmoji}>{item.icon}</Text>
+                    <Text style={styles.iconLabel}>{item.label}</Text>
+                  </View>
+                )}
               </TouchableOpacity>
             ))}
           </View>
         </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Invite Users</Text>
+        {/* ── Invite Users ───────────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.label}>Invite Viewers</Text>
           <View style={styles.inputWrapper}>
-            <Text style={styles.inputIcon}>👥</Text>
+            <MaterialIcons
+              name="person-add"
+              size={20}
+              color={colors.CYAN_ACCENT}
+            />
             <TextInput
               style={styles.textInput}
               placeholder="Enter email address"
-              placeholderTextColor="#666666"
+              placeholderTextColor={colors.MUTED_COLOR}
               value={currentEmail}
               onChangeText={setCurrentEmail}
               keyboardType="email-address"
               onSubmitEditing={addEmail}
               autoCapitalize="none"
             />
-            <TouchableOpacity 
-              style={styles.addButton}
-              onPress={addEmail}
-            >
-              <Text style={styles.addButtonText}>Add</Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={addEmail}>
+              <LinearGradient
+                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.addBtn}>
+                <Text style={styles.addBtnText}>Add</Text>
+              </LinearGradient>
             </TouchableOpacity>
           </View>
-          
+
           {inviteEmails.length > 0 && (
-            <View style={styles.emailChipsContainer}>
-              {inviteEmails.map(renderEmailChip)}
+            <View style={styles.chipsWrap}>
+              {inviteEmails.map(email => (
+                <View key={email} style={styles.emailChip}>
+                  <MaterialIcons
+                    name="person"
+                    size={14}
+                    color={colors.PRIMARY_COLOR}
+                  />
+                  <Text style={styles.emailChipText}>{email}</Text>
+                  <TouchableOpacity
+                    onPress={() => removeEmail(email)}
+                    style={styles.chipRemoveBtn}
+                    activeOpacity={0.7}>
+                    <MaterialIcons name="close" size={14} color={colors.SUB_TITLE_COLOR} />
+                  </TouchableOpacity>
+                </View>
+              ))}
             </View>
           )}
         </View>
 
-        <View style={styles.inputContainer}>
+        {/* ── Stream URL ─────────────────────────────────── */}
+        <View style={styles.section}>
           <Text style={styles.label}>Stream URL</Text>
           <View style={styles.inputWrapper}>
-            <Text style={styles.inputIcon}>🔗</Text>
+            <MaterialIcons name="link" size={20} color={colors.PURPLE_ACCENT} />
             <TextInput
               style={styles.textInput}
-              placeholder="Enter streaming URL"
-              placeholderTextColor="#666666"
+              placeholder="Paste YouTube or stream URL"
+              placeholderTextColor={colors.MUTED_COLOR}
               value={streamUrl}
               onChangeText={setStreamUrl}
             />
@@ -277,121 +319,160 @@ const CreateRoomScreen = ({ navigation, route }) => {
         </View>
       </ScrollView>
 
+      {/* ── Footer ─────────────────────────────────────────── */}
       <View style={styles.footer}>
-        <TouchableOpacity 
-          style={styles.createButton}
-          onPress={createRoom}
-        >
-          <Text style={styles.createButtonText}>
-            {isEditing ? 'Save Changes' : 'Create Room'}
-          </Text>
+        <TouchableOpacity activeOpacity={0.85} onPress={createRoom}>
+          <LinearGradient
+            colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.createBtn}>
+            <Ionicons
+              name={isEditing ? 'checkmark-circle' : 'add-circle'}
+              size={22}
+              color="#FFF"
+            />
+            <Text style={styles.createBtnText}>
+              {isEditing ? 'Save Changes' : 'Create Room'}
+            </Text>
+          </LinearGradient>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   );
 };
 
+// ──────────────────────────────────────────────────────────────
+//  Styles
+// ──────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
+
+  // ── Header ────────────────────────
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 60 : 20,
-    paddingBottom: 20,
+    paddingTop: Platform.OS === 'ios' ? 56 : 16,
+    paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#333333',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
   closeButton: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
   },
+  headerCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.TITLE_COLOR,
+  },
+
+  // ── Scroll Content ────────────────
   content: {
-    padding: 24,
+    padding: 20,
+    paddingBottom: 30,
   },
-  inputContainer: {
-    marginBottom: 24,
+
+  // ── Sections ──────────────────────
+  section: {
+    marginBottom: 26,
   },
   label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginBottom: 12,
-    marginLeft: 4,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.TITLE_COLOR,
+    marginBottom: 10,
+    marginLeft: 2,
+    letterSpacing: 0.3,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#333333',
-    paddingHorizontal: 16,
-    height: 56,
-  },
-  inputIcon: {
-    marginRight: 12,
-    fontSize: 20,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    paddingHorizontal: 14,
+    height: 52,
+    gap: 10,
   },
   textInput: {
     flex: 1,
-    color: '#FFFFFF',
-    fontSize: 16,
+    color: colors.TITLE_COLOR,
+    fontSize: 15,
+    fontWeight: '400',
   },
+
+  // ── Icon Grid ─────────────────────
   iconGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
   },
   iconOption: {
-    width: '22%',
-    aspectRatio: 1,
-    backgroundColor: '#2A2A2A',
+    width: 76,
+    height: 76,
+    backgroundColor: colors.SURFACE_COLOR,
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333333',
-    padding: 8,
+    borderWidth: 1.5,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
   },
-  iconOptionSelected: {
-    backgroundColor: '#1A1A1A',
-    borderColor: '#007AFF',
-    borderWidth: 2,
+  iconOptionActive: {
+    width: 76,
+    height: 76,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  iconOptionEmoji: {
+  iconEmoji: {
     fontSize: 24,
-    marginBottom: 4,
+    marginBottom: 3,
   },
-  iconOptionLabel: {
-    color: '#888888',
+  iconLabel: {
+    color: colors.SUB_TITLE_COLOR,
     fontSize: 10,
+    fontWeight: '600',
     textAlign: 'center',
   },
-  addButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginLeft: 8,
+  iconLabelActive: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'center',
   },
-  addButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
+
+  // ── Add Button ────────────────────
+  addBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
-  emailChipsContainer: {
+  addBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Email Chips ───────────────────
+  chipsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 12,
@@ -400,47 +481,51 @@ const styles = StyleSheet.create({
   emailChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#007AFF',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    backgroundColor: colors.CARD_COLOR,
+    paddingVertical: 7,
+    paddingLeft: 10,
+    paddingRight: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    gap: 6,
   },
   emailChipText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    marginRight: 6,
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '500',
   },
-  removeEmailButton: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  chipRemoveBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  removeEmailText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
+
+  // ── Footer ────────────────────────
   footer: {
-    padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 20,
     borderTopWidth: 1,
-    borderTopColor: '#333333',
+    borderTopColor: colors.BORDER_SUBTLE,
   },
-  createButton: {
-    backgroundColor: '#007AFF',
-    height: 56,
+  createBtn: {
+    height: 54,
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
-  createButtonText: {
-    color: '#FFFFFF',
+  createBtnText: {
+    color: '#FFF',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });
 
-export default CreateRoomScreen; 
+export default CreateRoomScreen;

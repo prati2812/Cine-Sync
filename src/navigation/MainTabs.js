@@ -3,6 +3,8 @@ import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Animated, { useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/Ionicons';
+import LinearGradient from 'react-native-linear-gradient';
+import colors from '../theme/Colors';
 
 import HomeScreen from '../screens/main/HomeScreen';
 import FriendsScreen from '../screens/main/Chat/FriendsScreen';
@@ -13,9 +15,8 @@ const Tab = createBottomTabNavigator();
 const MainTabs = () => {
   return (
     <Tab.Navigator
-      tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
-    >
+      tabBar={props => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}>
       <Tab.Screen
         name="Home"
         component={HomeScreen}
@@ -24,8 +25,8 @@ const MainTabs = () => {
           tabBarIcon: ({ focused }) => (
             <Icon
               name={focused ? 'home' : 'home-outline'}
-              size={24}
-              color={focused ? '#007AFF' : '#8E8E93'}
+              size={22}
+              color={focused ? '#FFF' : colors.MUTED_COLOR}
             />
           ),
         }}
@@ -38,8 +39,8 @@ const MainTabs = () => {
           tabBarIcon: ({ focused }) => (
             <Icon
               name={focused ? 'people' : 'people-outline'}
-              size={24}
-              color={focused ? '#007AFF' : '#8E8E93'}
+              size={22}
+              color={focused ? '#FFF' : colors.MUTED_COLOR}
             />
           ),
         }}
@@ -52,8 +53,8 @@ const MainTabs = () => {
           tabBarIcon: ({ focused }) => (
             <Icon
               name={focused ? 'person' : 'person-outline'}
-              size={24}
-              color={focused ? '#007AFF' : '#8E8E93'}
+              size={22}
+              color={focused ? '#FFF' : colors.MUTED_COLOR}
             />
           ),
         }}
@@ -75,23 +76,35 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
         };
 
         const animatedIconStyle = useAnimatedStyle(() => ({
-          transform: [{ scale: withSpring(isFocused ? 1.2 : 1) }],
-          opacity: withSpring(isFocused ? 1 : 0.7),
+          transform: [{ scale: withSpring(isFocused ? 1 : 1) }],
+          opacity: withSpring(isFocused ? 1 : 0.6),
         }));
 
         return (
           <TouchableOpacity
             key={route.key}
             onPress={onPress}
-            style={[styles.tabButton, isFocused && styles.tabButtonFocused]}
-            activeOpacity={0.7}
-          >
-            <Animated.View style={animatedIconStyle}>
-              {options.tabBarIcon({ focused: isFocused })}
-            </Animated.View>
-            <Text style={[styles.tabText, isFocused && styles.tabTextFocused]}>
-              {label}
-            </Text>
+            style={styles.tabButton}
+            activeOpacity={0.7}>
+            {isFocused ? (
+              <LinearGradient
+                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.activeTabBg}>
+                <Animated.View style={animatedIconStyle}>
+                  {options.tabBarIcon({ focused: true })}
+                </Animated.View>
+                <Text style={styles.tabTextFocused}>{label}</Text>
+              </LinearGradient>
+            ) : (
+              <View style={styles.inactiveTab}>
+                <Animated.View style={animatedIconStyle}>
+                  {options.tabBarIcon({ focused: false })}
+                </Animated.View>
+                <Text style={styles.tabText}>{label}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         );
       })}
@@ -102,31 +115,42 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
 const styles = StyleSheet.create({
   tabBarContainer: {
     flexDirection: 'row',
-    height: 80,
-    backgroundColor: '#1C1C1E',
+    height: 72,
+    backgroundColor: colors.SURFACE_COLOR,
     borderTopWidth: 1,
-    borderTopColor: '#2C2C2E',
-    paddingBottom: 20,
-    paddingHorizontal: 8,
+    borderTopColor: colors.BORDER_SUBTLE,
+    paddingBottom: 14,
+    paddingTop: 6,
+    paddingHorizontal: 12,
   },
   tabButton: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 10,
   },
-  tabButtonFocused: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderRadius: 16,
+  activeTabBg: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 24,
+  },
+  inactiveTab: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
   tabText: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 4,
+    fontSize: 11,
+    color: colors.MUTED_COLOR,
+    fontWeight: '500',
   },
   tabTextFocused: {
-    color: '#007AFF',
-    fontWeight: '600',
+    fontSize: 13,
+    color: '#FFF',
+    fontWeight: '700',
   },
 });
 

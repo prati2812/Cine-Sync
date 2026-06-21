@@ -26,8 +26,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import {formatTime, getYoutubeVideoId} from '../../../functions';
-import {getDatabase, ref, onValue, set, get, query, orderByChild, equalTo, push, off} from 'firebase/database';
-import {auth} from '../../../config/firebase';
+import {auth, database} from '../../../config/firebase';
 import Slider from '@react-native-community/slider';
 import ViewShot from 'react-native-view-shot';
 import RNFS from 'react-native-fs';
@@ -56,7 +55,7 @@ const StreamInfoScreen = ({route, navigation}) => {
   const [isNoteVisible, setIsNoteVisible] = useState(false);
   const [noteModalData , setNoteModalData] = useState(null);
 
-  const db = getDatabase();
+  const db = database();
 
   const emptyStateScale = useSharedValue(1);
 
@@ -85,25 +84,24 @@ const StreamInfoScreen = ({route, navigation}) => {
   }, [videoId]);
 
   useEffect(() => {
-    const db = getDatabase();
-    const roomRef = ref(db, `rooms/${roomId}`);
+    const roomRef = database().ref(`rooms/${roomId}`);
 
-    onValue(roomRef, snapshot => {
+    roomRef.on('value', snapshot => {
       const roomData = snapshot.val();
       if (roomData) {
-        setIsCreator(roomData.creator.email === auth.currentUser?.email);
+        setIsCreator(roomData.creator.email === auth().currentUser?.email);
       }
     });
   }, [roomId]);
 
 
   useEffect(() => {
-    const user = auth.currentUser;
+    const user = auth().currentUser;
     if (!user) return;
   
-    const notesRef = ref(db, `notes/${user.uid}/${roomId}`);
+    const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
   
-    const unsubscribe = onValue(notesRef, (snapshot) => {
+    const onNotesHandler = (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         const notesArray = Object.values(data);
@@ -113,9 +111,11 @@ const StreamInfoScreen = ({route, navigation}) => {
       } else {
         setNotes([]);
       }
-    });
+    };
+
+    notesRef.on('value', onNotesHandler);
   
-    return () => off(notesRef);
+    return () => notesRef.off('value', onNotesHandler);
   }, [roomId]);
   
 
@@ -254,17 +254,15 @@ const StreamInfoScreen = ({route, navigation}) => {
         return;
       }
   
-       const user = auth.currentUser;
+       const user = auth().currentUser;
   
-      const notesRef = ref(db , `notes/${user.uid}/${roomId}`);
+      const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
   
-      const newNotesRef = push(notesRef);
+      const newNotesRef = notesRef.push();
 
       const base64Screenshot = screenshotUri ? await convertUriToBase64(screenshotUri) : null;
 
       console.log('Base64 Screenshot:', base64Screenshot);
-      
-  
   
       const newNote = {
         note: noteText.trim(),
@@ -274,7 +272,7 @@ const StreamInfoScreen = ({route, navigation}) => {
         id: newNotesRef.key,
       };
   
-      await set(newNotesRef, newNote);
+      await newNotesRef.set(newNote);
     
       setNoteText('');
       setScreenshotUri('');
@@ -356,12 +354,12 @@ const StreamInfoScreen = ({route, navigation}) => {
   const handleDeleteNote = async() => {
      
     try{
-      const user = auth.currentUser;
+      const user = auth().currentUser;
       if(!user || !noteModalData) return;
 
-      const noteRef = ref(db , `notes/${user.uid}/${roomId}/${noteModalData.id}`);
+      const noteRef = database().ref(`notes/${user.uid}/${roomId}/${noteModalData.id}`);
 
-      await set(noteRef , null);
+      await noteRef.set(null);
 
       setIsNoteVisible(false);
     }catch(error){

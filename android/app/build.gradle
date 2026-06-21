@@ -124,6 +124,5 @@ dependencies {
     implementation "com.google.firebase:firebase-database:21.0.0"
     implementation "com.google.firebase:firebase-messaging:24.1.0"
     implementation "com.google.firebase:firebase-storage:21.0.1"
-    implementation project(':react-native-config')
 }
 apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")

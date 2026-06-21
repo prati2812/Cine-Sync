@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -13,18 +13,18 @@ import {
   Keyboard,
   ScrollView,
   ActivityIndicator,
+  Dimensions,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import {auth} from '../../config/firebase';
-import {
-  createUserWithEmailAndPassword,
-  sendEmailVerification,
-} from 'firebase/auth';
-import {getDatabase, ref, set} from 'firebase/database';
+import { auth, database } from '../../config/firebase';
 import colors from '../../theme/Colors';
 import CustomInput from '../../components/UI/CustomInput';
+import LinearGradient from 'react-native-linear-gradient';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 
-const SignUpScreen = ({navigation}) => {
+const { width } = Dimensions.get('window');
+
+const SignUpScreen = ({ navigation }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,7 +32,6 @@ const SignUpScreen = ({navigation}) => {
   const [showPassword, setShowPassword] = useState(false);
 
   const handleSignUp = async () => {
-    console.log('Creating user account...', auth, email, password);
     setIsLoading(true);
     if (!username || !email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
@@ -41,18 +40,13 @@ const SignUpScreen = ({navigation}) => {
     }
 
     try {
-      // Create user with email and password
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
+      const userCredential = await auth().createUserWithEmailAndPassword(
         email,
         password,
       );
 
-      await sendEmailVerification(userCredential.user);
+      await userCredential.user.sendEmailVerification();
 
-      const db = getDatabase();
-
-      // Create user data object
       const userData = {
         username: username,
         email: email,
@@ -60,8 +54,7 @@ const SignUpScreen = ({navigation}) => {
         createdAt: new Date().toISOString(),
       };
 
-      // Store user data in Realtime Database
-      await set(ref(db, 'users/' + userCredential.user.uid), userData);
+      await database().ref('users/' + userCredential.user.uid).set(userData);
 
       console.log('User account created & signed in!');
       setIsLoading(false);
@@ -74,7 +67,7 @@ const SignUpScreen = ({navigation}) => {
       } else if (error.code === 'auth/weak-password') {
         Alert.alert('Error', 'Password should be at least 6 characters');
       } else {
-        Alert.alert('Errorrrr', error.message);
+        Alert.alert('Error', error.message);
       }
       console.log('New Error', error);
     }
@@ -92,64 +85,81 @@ const SignUpScreen = ({navigation}) => {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardView}>
           <ScrollView
-            contentContainerStyle={{flexGrow: 1, paddingBottom: 15}}
+            contentContainerStyle={{ flexGrow: 1 }}
             showsVerticalScrollIndicator={false}>
             <View style={styles.contentContainer}>
-              <View style={styles.headerContainer}>
+              <Animated.View
+                entering={FadeInDown.duration(800).delay(200)}
+                style={styles.headerContainer}>
                 <Logo size="large" />
                 <Text style={styles.title}>Create Account</Text>
                 <Text style={styles.subtitle}>
                   Join the community of movie enthusiasts
                 </Text>
-              </View>
+              </Animated.View>
 
-              <View style={styles.formContainer}>
-                <CustomInput
-                  label={'Username'}
-                  leftIcon={'person-outline'}
-                  placeholder="Choose a username"
-                  value={username}
-                  onChangeText={setUsername}
-                />
+              <Animated.View
+                entering={FadeInDown.duration(800).delay(400)}
+                style={styles.formCard}>
+                <View style={styles.formContainer}>
+                  <CustomInput
+                    label={'Username'}
+                    leftIcon={'person-outline'}
+                    placeholder="Choose a username"
+                    value={username}
+                    onChangeText={setUsername}
+                    iconColor={colors.PRIMARY_COLOR}
+                  />
 
-                <CustomInput
-                  label={'Email'}
-                  leftIcon={'mail-outline'}
-                  placeholder="Enter your email"
-                  value={email}
-                  onChangeText={setEmail}
-                />
+                  <CustomInput
+                    label={'Email'}
+                    leftIcon={'mail-outline'}
+                    placeholder="Enter your email"
+                    value={email}
+                    onChangeText={setEmail}
+                    iconColor={colors.PRIMARY_COLOR}
+                  />
 
-                <CustomInput
-                  label="Password"
-                  leftIcon="lock-closed-outline"
-                  rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                  placeholder="Enter password"
-                  secureTextEntry={!showPassword}
-                  value={password}
-                  onChangeText={setPassword}
-                  onRightIconPress={() => setShowPassword(!showPassword)}
-                />
+                  <CustomInput
+                    label="Password"
+                    leftIcon="lock-closed-outline"
+                    rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                    placeholder="Enter password"
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                    onRightIconPress={() => setShowPassword(!showPassword)}
+                    iconColor={colors.PRIMARY_COLOR}
+                  />
 
-                <TouchableOpacity
-                  style={[styles.button, isLoading && styles.buttonDisabled]}
-                  onPress={handleSignUp}
-                  disabled={isLoading}
-                  activeOpacity={0.8}>
-                  {isLoading ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                  ) : (
-                    <Text style={styles.buttonText}>Create Account</Text>
-                  )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleSignUp}
+                    disabled={isLoading}
+                    activeOpacity={0.8}>
+                    <LinearGradient
+                      colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={[
+                        styles.button,
+                        isLoading && styles.buttonDisabled,
+                      ]}>
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Create Account</Text>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.linkContainer}
-                  onPress={() => navigation.navigate('Login')}>
-                  <Text style={styles.linkText}>Already have an account? </Text>
-                  <Text style={styles.link}>Login</Text>
-                </TouchableOpacity>
-              </View>
+                  <TouchableOpacity
+                    style={styles.linkContainer}
+                    onPress={() => navigation.navigate('Login')}>
+                    <Text style={styles.linkText}>Already have an account? </Text>
+                    <Text style={styles.link}>Login</Text>
+                  </TouchableOpacity>
+                </View>
+              </Animated.View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -172,66 +182,59 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   headerContainer: {
-    marginBottom: 30,
+    marginBottom: 40,
+    alignItems: 'center',
   },
   title: {
     fontSize: 32,
-    fontWeight: 'bold',
+    fontWeight: '800',
     color: colors.TITLE_COLOR,
-    marginBottom: 12,
+    marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: colors.SUB_TITLE_COLOR,
-    maxWidth: '80%',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    lineHeight: 22,
+  },
+  formCard: {
+    backgroundColor: colors.CARD_COLOR,
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
   },
   formContainer: {
     width: '100%',
   },
-  inputContainer: {
-    marginBottom: 24,
-  },
-  label: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.TITLE_COLOR,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.INPUTBOX_BG_COLOR,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    paddingHorizontal: 16,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    padding: 16,
-    fontSize: 16,
-    color: colors.TITLE_COLOR,
-  },
   button: {
-    backgroundColor: colors.PRIMARY_COLOR,
     padding: 18,
     borderRadius: 16,
     alignItems: 'center',
-    marginTop: 32,
+    justifyContent: 'center',
+    marginTop: 10,
     shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   buttonText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 16,
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   linkContainer: {
     flexDirection: 'row',
@@ -240,12 +243,12 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.SUB_TITLE_COLOR,
-    fontSize: 14,
+    fontSize: 15,
   },
   link: {
     color: colors.PRIMARY_COLOR,
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 
