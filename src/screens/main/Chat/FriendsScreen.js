@@ -18,8 +18,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
-import { getDatabase, ref, set, remove, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -159,10 +158,10 @@ const FriendsScreen = ({ navigation }) => {
 
   // ── Firebase logic (unchanged) ─────────────────────────────
   const getFriendRequests = async () => {
-    const db = getDatabase();
-    const user = await auth.currentUser;
-    const friendRequestsRef = ref(db, `friend_requests/${user?.uid}`);
-    const unsubscribe = onValue(friendRequestsRef, async (snapshot) => {
+    const db = database();
+    const user = auth().currentUser;
+    const friendRequestsRef = db.ref(`friend_requests/${user?.uid}`);
+    const callback = friendRequestsRef.on('value', async (snapshot) => {
       const friendRequests = snapshot.val();
       if (!friendRequests) { setFriendRequests([]); return; }
       let userDetails = [];
@@ -172,14 +171,14 @@ const FriendsScreen = ({ navigation }) => {
       }
       setFriendRequests(userDetails);
     });
-    return () => unsubscribe();
+    return () => friendRequestsRef.off('value', callback);
   };
 
   const getFriendSentRequests = async () => {
-    const db = getDatabase();
-    const user = auth.currentUser;
-    const friendSentRequestRef = ref(db, `user_friend_requests/${user?.uid}`);
-    const unsubscribe = onValue(friendSentRequestRef, async (snapshot) => {
+    const db = database();
+    const user = auth().currentUser;
+    const friendSentRequestRef = db.ref(`user_friend_requests/${user?.uid}`);
+    const callback = friendSentRequestRef.on('value', async (snapshot) => {
       const friendSentRequests = snapshot.val();
       if (!friendSentRequests) { setSentRequests([]); return; }
       let userDetails = [];
@@ -189,20 +188,20 @@ const FriendsScreen = ({ navigation }) => {
       }
       setSentRequests(userDetails);
     });
-    return () => unsubscribe();
+    return () => friendSentRequestRef.off('value', callback);
   };
 
   const getFriends = () => {
-    const db = getDatabase();
-    const user = auth.currentUser;
+    const db = database();
+    const user = auth().currentUser;
     if (!user) return null;
-    const friendsRef = ref(db, `friends/${user.uid}`);
-    const unsubscribe = onValue(friendsRef, (snapshot) => {
+    const friendsRef = db.ref(`friends/${user.uid}`);
+    const callback = friendsRef.on('value', (snapshot) => {
       const friends = snapshot.val();
       if (!friends) { setFriendsList([]); return; }
       Object.keys(friends).forEach(friendId => {
-        const userRef = ref(db, `users/${friendId}`);
-        onValue(userRef, (userSnapshot) => {
+        const userRef = db.ref(`users/${friendId}`);
+        userRef.on('value', (userSnapshot) => {
           const friendDetails = userSnapshot.val();
           if (friendDetails) {
             setFriendsList(currentList => {
@@ -214,13 +213,10 @@ const FriendsScreen = ({ navigation }) => {
       });
     });
     return () => {
-      const db = getDatabase();
       if (user) {
-        const friendsRef = ref(db, `friends/${user.uid}`);
-        off(friendsRef);
+        friendsRef.off('value', callback);
         friendsList.forEach(friend => {
-          const userRef = ref(db, `users/${friend.userId}`);
-          off(userRef);
+          db.ref(`users/${friend.userId}`).off('value');
         });
       }
     };
@@ -228,80 +224,73 @@ const FriendsScreen = ({ navigation }) => {
 
   const acceptFriendRequest = async (userId) => {
     try {
-      const db = getDatabase();
-      const user = await auth.currentUser;
+      const db = database();
+      const user = auth().currentUser;
       if (!user) throw new Error('No authenticated user');
-      const friendRequestRef = ref(db, `friend_requests/${user.uid}/${userId}`);
-      const unsubscribe = onValue(friendRequestRef, async (snapshot) => {
-        const friendRequest = snapshot.val();
-        if (friendRequest) {
-          await remove(friendRequestRef);
-          const friendRef1 = ref(db, `friends/${user.uid}/${userId}`);
-          const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
-          await set(friendRef1, true);
-          await set(friendRef2, true);
-          const userFriendSentRequestRef = ref(db, `user_friend_requests/${userId}/${user.uid}`);
-          await remove(userFriendSentRequestRef);
-        }
-      });
+      const friendRequestRef = db.ref(`friend_requests/${user.uid}/${userId}`);
+      const snapshot = await friendRequestRef.once('value');
+      const friendRequest = snapshot.val();
+      if (friendRequest) {
+        await friendRequestRef.remove();
+        await db.ref(`friends/${user.uid}/${userId}`).set(true);
+        await db.ref(`friends/${userId}/${user.uid}`).set(true);
+        await db.ref(`user_friend_requests/${userId}/${user.uid}`).remove();
+      }
     } catch (error) {
       console.error('Error accepting friend request:', error.message);
     }
   };
 
   const declineFriendRequest = async (userId) => {
-    const db = getDatabase();
-    const user = await auth.currentUser;
-    const friendRequestRef = ref(db, `friend_requests/${user.uid}/${userId}`);
-    const unsubscribe = onValue(friendRequestRef, async (snapshot) => {
-      const friendRequest = snapshot.val();
-      if (friendRequest) {
-        await remove(friendRequestRef);
-      }
-    });
-    return unsubscribe;
+    const db = database();
+    const user = auth().currentUser;
+    const friendRequestRef = db.ref(`friend_requests/${user.uid}/${userId}`);
+    const snapshot = await friendRequestRef.once('value');
+    const friendRequest = snapshot.val();
+    if (friendRequest) {
+      await friendRequestRef.remove();
+    }
   };
 
   const getUserFriendDetails = async (userId) => {
-    const db = getDatabase();
-    const userRef = ref(db, `users/${userId}`);
-    const snapshot = await get(userRef);
+    const db = database();
+    const userRef = db.ref(`users/${userId}`);
+    const snapshot = await userRef.once('value');
     return snapshot.val();
   };
 
   const isFriendIsOrNot = async (userId) => {
-    const db = getDatabase();
-    const user = await auth.currentUser;
-    const userRef = ref(db, `friends/${user.uid}/${userId}`);
-    const snapshot = await get(userRef);
+    const db = database();
+    const user = auth().currentUser;
+    const userRef = db.ref(`friends/${user.uid}/${userId}`);
+    const snapshot = await userRef.once('value');
     return snapshot.val();
   };
 
   const removeFriend = async (userId) => {
-    const db = getDatabase();
-    const user = await auth.currentUser;
-    const friendRef = ref(db, `friends/${user.uid}/${userId}`);
-    const friendRef2 = ref(db, `friends/${userId}/${user.uid}`);
-    await remove(friendRef);
-    await remove(friendRef2);
+    const db = database();
+    const user = auth().currentUser;
+    const friendRef = db.ref(`friends/${user.uid}/${userId}`);
+    const friendRef2 = db.ref(`friends/${userId}/${user.uid}`);
+    await friendRef.remove();
+    await friendRef2.remove();
   };
 
   const cancelFriendRequest = async (userId) => {
-    const db = getDatabase();
-    const user = await auth.currentUser;
-    const friendRequestRef = ref(db, `friend_requests/${user?.uid}/${userId}`);
-    const userFriendRequestRef = ref(db, `user_friend_requests/${user?.uid}/${userId}`);
-    await remove(friendRequestRef);
-    await remove(userFriendRequestRef);
+    const db = database();
+    const user = auth().currentUser;
+    const friendRequestRef = db.ref(`friend_requests/${user?.uid}/${userId}`);
+    const userFriendRequestRef = db.ref(`user_friend_requests/${user?.uid}/${userId}`);
+    await friendRequestRef.remove();
+    await userFriendRequestRef.remove();
   };
 
   const checkUserExists = async (email) => {
     try {
       setIsLoading(true);
-      const db = getDatabase();
-      const usersRef = ref(db, 'users');
-      const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
-      const snapshot = await get(userQuery);
+      const db = database();
+      const userQuery = db.ref('users').orderByChild('email').equalTo(email);
+      const snapshot = await userQuery.once('value');
       let newVal = await snapshot.val();
       return Object.values(newVal)[0];
     } catch (error) {
@@ -311,7 +300,7 @@ const FriendsScreen = ({ navigation }) => {
   };
 
   const handleAddFriend = async () => {
-    const tempUser = await auth.currentUser;
+    const tempUser = auth().currentUser;
     if (tempUser.email !== searchEmail) {
       const userExists = await checkUserExists(searchEmail);
       if (userExists && userExists.userId !== null) {
@@ -321,13 +310,13 @@ const FriendsScreen = ({ navigation }) => {
           setIsLoading(false);
           return;
         } else {
-          const db = getDatabase();
-          const user = await auth.currentUser;
+          const db = database();
+          const user = auth().currentUser;
           if (user.uid) {
-            const friendRequestRef = ref(db, `friend_requests/${userExists?.userId}/${user?.uid}`);
-            const userFriendRequestRef = ref(db, `user_friend_requests/${user?.uid}/${userExists?.userId}`);
-            set(friendRequestRef, true);
-            set(userFriendRequestRef, true);
+            const friendRequestRef = db.ref(`friend_requests/${userExists?.userId}/${user?.uid}`);
+            const userFriendRequestRef = db.ref(`user_friend_requests/${user?.uid}/${userExists?.userId}`);
+            await friendRequestRef.set(true);
+            await userFriendRequestRef.set(true);
             setSearchEmail('');
             setIsLoading(false);
           }

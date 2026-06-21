@@ -18,7 +18,6 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import { auth } from '../../config/firebase';
-import { sendEmailVerification } from 'firebase/auth';
 import colors from '../../theme/Colors';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -45,8 +44,8 @@ const VerifyEmailScreen = ({ onSuccess }) => {
 
   useEffect(() => {
     const interval = setInterval(async () => {
-      await auth.currentUser?.reload();
-      if (auth.currentUser?.emailVerified) {
+      await auth().currentUser?.reload();
+      if (auth().currentUser?.emailVerified) {
         onSuccess();
         clearInterval(interval);
       }
@@ -58,7 +57,7 @@ const VerifyEmailScreen = ({ onSuccess }) => {
   const handleResendEmail = async () => {
     setIsLoading(true);
     try {
-      await sendEmailVerification(auth.currentUser);
+      await auth().currentUser?.sendEmailVerification();
       Alert.alert('Verification Email Sent', 'Please check your inbox.');
       setCanResend(false);
       setTimer(30);

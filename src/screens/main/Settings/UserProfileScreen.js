@@ -8,9 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
-import { signOut, onAuthStateChanged } from 'firebase/auth';
-import { getDatabase, ref, onValue } from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -22,11 +20,10 @@ const UserProfileScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, user => {
+    const unsubscribe = auth().onAuthStateChanged(user => {
       if (user) {
-        const db = getDatabase();
-        const userRef = ref(db, 'users/' + user.uid);
-        onValue(userRef, snapshot => {
+        const userRef = database().ref('users/' + user.uid);
+        userRef.on('value', snapshot => {
           const data = snapshot.val();
           if (data) {
             setUserData(data);
@@ -40,7 +37,7 @@ const UserProfileScreen = ({ navigation }) => {
 
   const handleSignOut = async () => {
     try {
-      await signOut(auth);
+      await auth().signOut();
     } catch (error) {
       console.error(error);
     }

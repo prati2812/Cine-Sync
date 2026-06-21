@@ -16,12 +16,7 @@ import {
   Dimensions,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import { auth } from '../../config/firebase';
-import {
-  createUserWithEmailAndPassword,
-  sendEmailVerification,
-} from 'firebase/auth';
-import { getDatabase, ref, set } from 'firebase/database';
+import { auth, database } from '../../config/firebase';
 import colors from '../../theme/Colors';
 import CustomInput from '../../components/UI/CustomInput';
 import LinearGradient from 'react-native-linear-gradient';
@@ -45,15 +40,13 @@ const SignUpScreen = ({ navigation }) => {
     }
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
+      const userCredential = await auth().createUserWithEmailAndPassword(
         email,
         password,
       );
 
-      await sendEmailVerification(userCredential.user);
+      await userCredential.user.sendEmailVerification();
 
-      const db = getDatabase();
       const userData = {
         username: username,
         email: email,
@@ -61,7 +54,7 @@ const SignUpScreen = ({ navigation }) => {
         createdAt: new Date().toISOString(),
       };
 
-      await set(ref(db, 'users/' + userCredential.user.uid), userData);
+      await database().ref('users/' + userCredential.user.uid).set(userData);
 
       console.log('User account created & signed in!');
       setIsLoading(false);

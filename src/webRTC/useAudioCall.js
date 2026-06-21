@@ -6,19 +6,7 @@ import {
   RTCSessionDescription,
   mediaDevices,
 } from 'react-native-webrtc';
-import {
-  getDatabase,
-  ref,
-  set,
-  push,
-  get,
-  onValue,
-  onChildAdded,
-  off,
-  serverTimestamp,
-  remove,
-} from 'firebase/database';
-import { auth } from '../config/firebase';
+import { auth, database } from '../config/firebase';
 
 const ICE_SERVERS = {
   iceServers: [
@@ -63,14 +51,13 @@ export function useAudioCall(chatId) {
   // ─── Helpers ──────────────────────────────────────────────
 
   const addFirebaseListener = useCallback((dbRef, eventType, callback) => {
-    const fn = eventType === 'child_added' ? onChildAdded : onValue;
-    fn(dbRef, callback);
+    dbRef.on(eventType, callback);
     listenersRef.current.push({ ref: dbRef, eventType });
   }, []);
 
   const removeAllListeners = useCallback(() => {
     listenersRef.current.forEach(({ ref: r }) => {
-      off(r);
+      r.off();
     });
     listenersRef.current = [];
   }, []);
@@ -147,24 +134,22 @@ export function useAudioCall(chatId) {
 
   const setupICECandidateSending = useCallback((peer) => {
     if (!chatId) return;
-    const db = getDatabase();
+    const db = database();
     const myUid = auth.currentUser?.uid;
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
         console.log('[WebRTC] Sending ICE candidate');
-        const candidateRef = push(
-          ref(db, `calls/${chatId}/candidates/${myUid}`)
-        );
-        set(candidateRef, event.candidate.toJSON());
+        const candidateRef = db.ref(`calls/${chatId}/candidates/${myUid}`).push();
+        candidateRef.set(event.candidate.toJSON());
       }
     };
   }, [chatId]);
 
   const listenForRemoteCandidates = useCallback((remoteUid) => {
     if (!chatId) return;
-    const db = getDatabase();
-    const candidatesRef = ref(db, `calls/${chatId}/candidates/${remoteUid}`);
+    const db = database();
+    const candidatesRef = db.ref(`calls/${chatId}/candidates/${remoteUid}`);
 
     addFirebaseListener(candidatesRef, 'child_added', (snapshot) => {
       const candidate = snapshot.val();
@@ -221,22 +206,22 @@ export function useAudioCall(chatId) {
   // ─── End Call (public — signals Firebase, then cleans up locally) ─
 
   const endCall = useCallback(async (reason = 'ended') => {
-    const db = getDatabase();
-    const myUid = auth.currentUser?.uid;
+    const db = database();
+    const myUid = auth().currentUser?.uid;
 
     if (chatId && myUid) {
       try {
         // Write ended signal
-        await set(ref(db, `calls/${chatId}/ended`), {
+        await db.ref(`calls/${chatId}/ended`).set({
           by: myUid,
           reason,
-          timestamp: serverTimestamp(),
+          timestamp: database.ServerValue.TIMESTAMP,
         });
         // DO NOT remove the call node here — let the remote side see the 'ended'
         // signal first. Schedule cleanup of Firebase data after a delay.
         setTimeout(async () => {
           try {
-            await remove(ref(db, `calls/${chatId}`));
+            await db.ref(`calls/${chatId}`).remove();
           } catch (_) {}
         }, 3000);
       } catch (e) {
@@ -250,7 +235,7 @@ export function useAudioCall(chatId) {
   // ─── Start Call (Caller) ──────────────────────────────────
 
   const startCall = useCallback(async (type = 'audio') => {
-    if (!chatId || !auth.currentUser) {
+    if (!chatId || !auth().currentUser) {
       setCallError('Chat not initialized');
       return;
     }
@@ -260,8 +245,8 @@ export function useAudioCall(chatId) {
       setCallType(type);
       setCallState('calling');
 
-      const db = getDatabase();
-      await remove(ref(db, `calls/${chatId}`));
+      const db = database();
+      await db.ref(`calls/${chatId}`).remove();
 
       // Get microphone (+ camera for video)
       const stream = await getLocalMediaStream(type);
@@ -284,17 +269,17 @@ export function useAudioCall(chatId) {
 
       // Write offer to Firebase (include callType so callee knows)
       console.log('[WebRTC] Saving offer to Firebase...');
-      await set(ref(db, `calls/${chatId}/offer`), {
+      await db.ref(`calls/${chatId}/offer`).set({
         type: offer.type,
         sdp: offer.sdp,
-        from: auth.currentUser.uid,
+        from: auth().currentUser.uid,
         callType: type,
-        timestamp: serverTimestamp(),
+        timestamp: database.ServerValue.TIMESTAMP,
       });
 
       // Listen for answer
       answerProcessedRef.current = false;
-      const answerRef = ref(db, `calls/${chatId}/answer`);
+      const answerRef = db.ref(`calls/${chatId}/answer`);
       addFirebaseListener(answerRef, 'value', async (snapshot) => {
         const answerData = snapshot.val();
         if (!answerData || !answerData.sdp) return;
@@ -321,10 +306,10 @@ export function useAudioCall(chatId) {
       });
 
       // Listen for call-ended / declined signal from remote
-      const endedRef = ref(db, `calls/${chatId}/ended`);
+      const endedRef = db.ref(`calls/${chatId}/ended`);
       addFirebaseListener(endedRef, 'value', (snapshot) => {
         const data = snapshot.val();
-        if (data && data.by !== auth.currentUser?.uid) {
+        if (data && data.by !== auth().currentUser?.uid) {
           console.log('[WebRTC] Remote ended/declined the call. Reason:', data.reason);
           if (data.reason === 'declined') {
             setCallError('Call declined');
@@ -352,22 +337,22 @@ export function useAudioCall(chatId) {
   // ─── Listen for Incoming Calls (Callee) ───────────────────
 
   const listenIncoming = useCallback(() => {
-    if (!chatId || !auth.currentUser) {
+    if (!chatId || !auth().currentUser) {
       console.log('[WebRTC] Cannot listen: no chatId or no user');
       return () => {};
     }
 
-    const db = getDatabase();
-    const offerRef = ref(db, `calls/${chatId}/offer`);
+    const db = database();
+    const offerRef = db.ref(`calls/${chatId}/offer`);
 
     console.log('[WebRTC] Listening for incoming calls on', `calls/${chatId}/offer`);
 
-    const unsubscribe = onValue(offerRef, (snapshot) => {
+    offerRef.on('value', (snapshot) => {
       const offerData = snapshot.val();
       if (
         offerData &&
         offerData.from &&
-        offerData.from !== auth.currentUser?.uid &&
+        offerData.from !== auth().currentUser?.uid &&
         offerData.sdp
       ) {
         // Only show incoming if we're not already in a call
@@ -382,20 +367,20 @@ export function useAudioCall(chatId) {
     });
 
     return () => {
-      off(offerRef);
+      offerRef.off('value');
     };
   }, [chatId, setCallState]);
 
   // ─── Answer Call (Callee) ─────────────────────────────────
 
   const answerCall = useCallback(async () => {
-    if (!chatId || !auth.currentUser) return;
+    if (!chatId || !auth().currentUser) return;
 
     try {
       setCallError(null);
-      const db = getDatabase();
+      const db = database();
 
-      const offerSnapshot = await get(ref(db, `calls/${chatId}/offer`));
+      const offerSnapshot = await db.ref(`calls/${chatId}/offer`).once('value');
       const offerData = offerSnapshot.val();
 
       if (!offerData || !offerData.sdp) {
@@ -434,21 +419,21 @@ export function useAudioCall(chatId) {
 
       // Write answer to Firebase
       console.log('[WebRTC] Saving answer to Firebase...');
-      await set(ref(db, `calls/${chatId}/answer`), {
+      await db.ref(`calls/${chatId}/answer`).set({
         type: answer.type,
         sdp: answer.sdp,
-        from: auth.currentUser.uid,
-        timestamp: serverTimestamp(),
+        from: auth().currentUser.uid,
+        timestamp: database.ServerValue.TIMESTAMP,
       });
 
       // Listen for ICE candidates from caller
       listenForRemoteCandidates(offerData.from);
 
       // Listen for call-ended signal from remote
-      const endedRef = ref(db, `calls/${chatId}/ended`);
+      const endedRef = db.ref(`calls/${chatId}/ended`);
       addFirebaseListener(endedRef, 'value', (snapshot) => {
         const data = snapshot.val();
-        if (data && data.by !== auth.currentUser?.uid) {
+        if (data && data.by !== auth().currentUser?.uid) {
           console.log('[WebRTC] Remote ended the call');
           cleanupLocal();
         }
@@ -466,13 +451,13 @@ export function useAudioCall(chatId) {
   // ─── Decline Call (Callee) ────────────────────────────────
 
   const declineCall = useCallback(async () => {
-    const db = getDatabase();
-    if (chatId && auth.currentUser) {
+    const db = database();
+    if (chatId && auth().currentUser) {
       // Write ended signal with reason — do NOT remove the node immediately
-      await set(ref(db, `calls/${chatId}/ended`), {
-        by: auth.currentUser.uid,
+      await db.ref(`calls/${chatId}/ended`).set({
+        by: auth().currentUser.uid,
         reason: 'declined',
-        timestamp: serverTimestamp(),
+        timestamp: database.ServerValue.TIMESTAMP,
       });
       // Let the caller see the signal; they'll clean up Firebase after a delay
     }

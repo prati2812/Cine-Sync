@@ -17,21 +17,7 @@ import {
 import YoutubePlayer from 'react-native-youtube-iframe';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import {
-  getDatabase,
-  ref,
-  onValue,
-  set,
-  push,
-  query,
-  limitToLast,
-  onChildAdded,
-  orderByChild,
-  equalTo,
-  get,
-  serverTimestamp,
-} from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -132,14 +118,13 @@ const StreamingScreen = ({ route, navigation }) => {
 
   // Fetch Room & Participants
   useEffect(() => {
-    const db = getDatabase();
-    const roomRef = ref(db, `rooms/${roomId}`);
+    const roomRef = database().ref(`rooms/${roomId}`);
 
-    const unsubscribe = onValue(roomRef, async (snapshot) => {
+    const onRoomHandler = async (snapshot) => {
       const roomData = snapshot.val();
       if (!roomData) return;
 
-      const userIsCreator = roomData.creator?.email === auth.currentUser?.email;
+      const userIsCreator = roomData.creator?.email === auth().currentUser?.email;
       setIsCreator(userIsCreator);
 
       // If the stream is stopped by creator, pause video and show message to viewers
@@ -153,14 +138,16 @@ const StreamingScreen = ({ route, navigation }) => {
       // Fetch participants
       const allEmails = [roomData.creator?.email, ...(roomData.participants || [])].filter(Boolean);
       const uniqueEmails = [...new Set(allEmails)];
-      const usersRef = ref(db, 'users');
       const profiles = [];
 
       for (let i = 0; i < uniqueEmails.length; i++) {
         const email = uniqueEmails[i];
         try {
-          const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
-          const userSnap = await get(userQuery);
+          const userSnap = await database()
+            .ref('users')
+            .orderByChild('email')
+            .equalTo(email)
+            .once('value');
 
           if (userSnap.exists()) {
             const userKey = Object.keys(userSnap.val())[0];
@@ -182,19 +169,23 @@ const StreamingScreen = ({ route, navigation }) => {
         }
       }
       setParticipantProfiles(profiles);
-    });
-    return () => unsubscribe();
+    };
+
+    roomRef.on('value', onRoomHandler);
+    return () => roomRef.off('value', onRoomHandler);
   }, [roomId]);
 
   // Online statuses
   useEffect(() => {
     if (participantProfiles.length === 0) return;
-    const db = getDatabase();
+    const db = database();
     const unsubs = participantProfiles.map(p => {
-      const statusRef = ref(db, `users/${p.uid}/status/state`);
-      return onValue(statusRef, snap => {
+      const statusRef = db.ref(`users/${p.uid}/status/state`);
+      const handler = snap => {
         setOnlineStatuses(prev => ({ ...prev, [p.uid]: snap.val() === 'online' }));
-      });
+      };
+      statusRef.on('value', handler);
+      return () => statusRef.off('value', handler);
     });
     return () => unsubs.forEach(u => u());
   }, [participantProfiles]);
@@ -210,36 +201,32 @@ const StreamingScreen = ({ route, navigation }) => {
 
   // Viewer Sync
   useEffect(() => {
-    const db = getDatabase();
-    const playbackRef = ref(db, `rooms/${roomId}/playback`);
+    const playbackRef = database().ref(`rooms/${roomId}/playback`);
 
-    const unsubscribe = onValue(playbackRef, (snapshot) => {
+    const onPlaybackHandler = (snapshot) => {
       const playbackData = snapshot.val();
       if (playbackData && !isCreator) {
         setPlaying(playbackData.isPlaying);
 
         if (playerRef.current) {
           if (playbackData.isPlaying) {
-            // Calculate real-time offset
-            // elapsed seconds = (current time in ms - update time in ms) / 1000
             const elapsed = (Date.now() - playbackData.updatedAt) / 1000;
             const currentPosition = playbackData.currentTime + elapsed;
 
-            // Allow a small buffer (e.g., 2 seconds) so we don't jump needlessly
-            // if we're already close enough.
             playerRef.current.getCurrentTime().then((viewerTime) => {
               if (Math.abs(viewerTime - currentPosition) > 2) {
                 playerRef.current.seekTo(currentPosition);
               }
             });
           } else {
-            // If paused, just seek exactly to where the creator paused it
             playerRef.current.seekTo(playbackData.currentTime);
           }
         }
       }
-    });
-    return () => unsubscribe();
+    };
+
+    playbackRef.on('value', onPlaybackHandler);
+    return () => playbackRef.off('value', onPlaybackHandler);
   }, [roomId, isCreator]);
 
   // Creator Continuous Sync
@@ -251,10 +238,10 @@ const StreamingScreen = ({ route, navigation }) => {
       if (playerRef.current) {
         try {
           const currentTime = await playerRef.current.getCurrentTime();
-          const db = getDatabase();
-          const playbackRef = ref(db, `rooms/${roomId}/playback`);
+          const db = database();
+          const playbackRef = db.ref(`rooms/${roomId}/playback`);
 
-          await set(playbackRef, {
+          await playbackRef.set({
             isPlaying: true,
             currentTime: currentTime || 0,
             updatedAt: Date.now()
@@ -270,11 +257,10 @@ const StreamingScreen = ({ route, navigation }) => {
 
   const updatePlaybackState = async (isPlaying) => {
     if (!isCreator) return;
-    const db = getDatabase();
-    const playbackRef = ref(db, `rooms/${roomId}/playback`);
+    const playbackRef = database().ref(`rooms/${roomId}/playback`);
     const currentTime = await playerRef.current?.getCurrentTime() || 0;
 
-    await set(playbackRef, {
+    await playbackRef.set({
       isPlaying,
       currentTime,
       updatedAt: Date.now()
@@ -304,9 +290,8 @@ const StreamingScreen = ({ route, navigation }) => {
 
   // Chat
   useEffect(() => {
-    const db = getDatabase();
-    const messagesRef = query(ref(db, `rooms/${roomId}/messages`), limitToLast(50));
-    const unsubscribe = onValue(messagesRef, snapshot => {
+    const messagesRef = database().ref(`rooms/${roomId}/messages`);
+    const onMessagesHandler = snapshot => {
       const data = snapshot.val();
       if (data) {
         const msgs = Object.keys(data).map(key => ({ id: key, ...data[key] }));
@@ -315,36 +300,36 @@ const StreamingScreen = ({ route, navigation }) => {
       } else {
         setMessages([]);
       }
-    });
-    return () => unsubscribe();
+    };
+    messagesRef.limitToLast(50).on('value', onMessagesHandler);
+    return () => messagesRef.limitToLast(50).off('value', onMessagesHandler);
   }, [roomId]);
 
   const sendMessage = async () => {
     if (!newMessage.trim()) return;
-    const db = getDatabase();
-    const messagesRef = ref(db, `rooms/${roomId}/messages`);
-    const currentUserProfile = participantProfiles.find(p => p.email === auth.currentUser?.email) || {
-      name: auth.currentUser?.email.split('@')[0],
+    const messagesRef = database().ref(`rooms/${roomId}/messages`);
+    const currentUserProfile = participantProfiles.find(p => p.email === auth().currentUser?.email) || {
+      name: auth().currentUser?.email.split('@')[0],
       color: colors.PRIMARY_COLOR,
     };
 
-    await push(messagesRef, {
+    await messagesRef.push({
       text: newMessage.trim(),
-      senderId: auth.currentUser?.uid,
+      senderId: auth().currentUser?.uid,
       senderName: currentUserProfile.name,
       senderColor: currentUserProfile.color,
-      timestamp: serverTimestamp(),
+      timestamp: database.ServerValue.TIMESTAMP,
     });
     setNewMessage('');
   };
 
   // Reactions
   useEffect(() => {
-    const db = getDatabase();
-    const reactionsRef = query(ref(db, `rooms/${roomId}/reactions`), limitToLast(1));
+    const reactionsRef = database().ref(`rooms/${roomId}/reactions`);
     const now = Date.now();
 
-    const unsubscribe = onChildAdded(reactionsRef, (snapshot) => {
+    const reactionsQuery = reactionsRef.limitToLast(1);
+    const onChildAddedHandler = (snapshot) => {
       const data = snapshot.val();
       if (data && data.timestamp > now - 5000) { // Only show recent ones
         const id = Math.random().toString();
@@ -353,22 +338,22 @@ const StreamingScreen = ({ route, navigation }) => {
           setFloatingEmojis(prev => prev.filter(e => e.id !== id));
         }, 2000);
       }
-    });
-    return () => unsubscribe();
+    };
+    reactionsQuery.on('child_added', onChildAddedHandler);
+    return () => reactionsQuery.off('child_added', onChildAddedHandler);
   }, [roomId]);
 
   const sendReaction = async (emoji) => {
-    const db = getDatabase();
-    const reactionsRef = ref(db, `rooms/${roomId}/reactions`);
-    await push(reactionsRef, {
+    const reactionsRef = database().ref(`rooms/${roomId}/reactions`);
+    await reactionsRef.push({
       emoji,
-      senderId: auth.currentUser?.uid,
+      senderId: auth().currentUser?.uid,
       timestamp: Date.now(),
     });
   };
 
   const renderMessage = ({ item }) => {
-    const isMe = item.senderId === auth.currentUser?.uid;
+    const isMe = item.senderId === auth().currentUser?.uid;
     return (
       <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleThem]}>
         {!isMe && <Text style={[styles.messageSender, { color: item.senderColor || colors.PRIMARY_COLOR }]}>{item.senderName}</Text>}
@@ -397,11 +382,8 @@ const StreamingScreen = ({ route, navigation }) => {
 
   const handleGoBack = async () => {
     if (isCreator) {
-      // If creator leaves, reset isStreaming to false so people go back to waiting
       try {
-        const db = getDatabase();
-        const { update } = require('firebase/database');
-        await update(ref(db, `rooms/${roomId}`), {
+        await database().ref(`rooms/${roomId}`).update({
           isStreaming: false
         });
       } catch (error) {

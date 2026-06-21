@@ -16,7 +16,6 @@ import {
   Dimensions,
 } from 'react-native';
 import Logo from '../../components/Logo';
-import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../config/firebase';
 import colors from '../../theme/Colors';
 import CustomInput from '../../components/UI/CustomInput';
@@ -41,8 +40,7 @@ const LoginScreen = ({ navigation }) => {
 
     setIsLoading(true);
     try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
+      const userCredential = await auth().signInWithEmailAndPassword(
         email,
         password,
       );

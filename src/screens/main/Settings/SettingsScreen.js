@@ -11,16 +11,7 @@ import {
   Switch,
   Dimensions,
 } from 'react-native';
-import { auth } from '../../../config/firebase';
-import {
-  updateProfile,
-  updatePassword,
-  deleteUser,
-  EmailAuthProvider,
-  reauthenticateWithCredential,
-  sendPasswordResetEmail,
-} from 'firebase/auth';
-import { getDatabase, ref, update } from 'firebase/database';
+import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
@@ -38,11 +29,11 @@ const SettingsScreen = ({ navigation }) => {
   const [biometricEnabled, setBiometricEnabled] = useState(false);
 
   useEffect(() => {
-    const currentUser = auth.currentUser;
+    const currentUser = auth().currentUser;
     console.log(currentUser);
 
-    if (currentUser?.username) {
-      setUsername(currentUser.username);
+    if (currentUser?.displayName) {
+      setUsername(currentUser.displayName);
     }
 
     const checkAppLock = async () => {
@@ -64,11 +55,10 @@ const SettingsScreen = ({ navigation }) => {
     }
 
     try {
-      const user = auth.currentUser;
-      const db = getDatabase();
+      const user = auth().currentUser;
 
-      await updateProfile(user, { displayName: username });
-      await update(ref(db, `users/${user.uid}`), { username: username });
+      await user.updateProfile({ displayName: username });
+      await database().ref(`users/${user.uid}`).update({ username: username });
 
       Alert.alert('Success', 'Username updated successfully');
       setIsEditing(false);
@@ -79,8 +69,8 @@ const SettingsScreen = ({ navigation }) => {
 
   const handleResetPassword = async () => {
     try {
-      const user = auth.currentUser;
-      await sendPasswordResetEmail(auth, user.email);
+      const user = auth().currentUser;
+      await auth().sendPasswordResetEmail(user.email);
       Alert.alert(
         'Success',
         'Password reset email sent. Please check your inbox.',
@@ -88,6 +78,10 @@ const SettingsScreen = ({ navigation }) => {
     } catch (error) {
       Alert.alert('Error', error.message);
     }
+  };
+
+  const handleLogout = () => {
+    auth().signOut();
   };
 
   const handleDeleteAccount = async () => {
@@ -101,8 +95,8 @@ const SettingsScreen = ({ navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
-              const user = auth.currentUser;
-              await deleteUser(user);
+              const user = auth().currentUser;
+              await user.delete();
             } catch (error) {
               if (error.code === 'auth/requires-recent-login') {
                 Alert.alert(
@@ -252,7 +246,7 @@ const SettingsScreen = ({ navigation }) => {
                 style={styles.usernameContainer}
                 onPress={() => setIsEditing(true)}>
                 <Text style={styles.username}>
-                  {username || auth.currentUser?.email.split('@')[0]}
+                  {username || auth().currentUser?.email.split('@')[0]}
                 </Text>
                 <MaterialIcons
                   name="edit"
@@ -261,7 +255,7 @@ const SettingsScreen = ({ navigation }) => {
                 />
               </TouchableOpacity>
             )}
-            <Text style={styles.email}>{auth.currentUser?.email}</Text>
+            <Text style={styles.email}>{auth().currentUser?.email}</Text>
           </View>
         </View>
 

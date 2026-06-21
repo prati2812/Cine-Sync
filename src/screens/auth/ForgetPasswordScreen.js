@@ -20,16 +20,7 @@ import Animated, {
   withTiming,
   FadeInDown,
 } from 'react-native-reanimated';
-import { auth } from '../../config/firebase';
-import { sendPasswordResetEmail } from 'firebase/auth';
-import {
-  getDatabase,
-  ref,
-  get,
-  query,
-  orderByChild,
-  equalTo,
-} from 'firebase/database';
+import { auth, database } from '../../config/firebase';
 import CustomInput from '../../components/UI/CustomInput';
 import colors from '../../theme/Colors';
 import LinearGradient from 'react-native-linear-gradient';
@@ -56,11 +47,11 @@ const ForgetPasswordScreen = ({ navigation }) => {
 
   const checkUserExists = async email => {
     try {
-      const db = getDatabase();
-      const usersRef = ref(db, 'users');
-      const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
-
-      const snapshot = await get(userQuery);
+      const snapshot = await database()
+        .ref('users')
+        .orderByChild('email')
+        .equalTo(email)
+        .once('value');
       return snapshot.exists();
     } catch (error) {
       console.log('Error checking user:', error);
@@ -80,7 +71,7 @@ const ForgetPasswordScreen = ({ navigation }) => {
       const userExists = await checkUserExists(email);
 
       if (userExists) {
-        await sendPasswordResetEmail(auth, email)
+        await auth().sendPasswordResetEmail(email)
           .then(() => {
             opacity.value = withTiming(0, { duration: 300 });
             scale.value = withTiming(0.8, { duration: 300 });

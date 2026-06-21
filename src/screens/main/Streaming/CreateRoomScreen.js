@@ -10,16 +10,7 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import {
-  getDatabase,
-  ref,
-  set,
-  get,
-  query,
-  orderByChild,
-  equalTo,
-} from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -55,14 +46,11 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
   const checkUserExists = async email => {
     try {
-      const db = getDatabase();
-      const usersRef = ref(db, 'users');
-      const userQuery = query(
-        usersRef,
-        orderByChild('email'),
-        equalTo(email),
-      );
-      const snapshot = await get(userQuery);
+      const snapshot = await database()
+        .ref('users')
+        .orderByChild('email')
+        .equalTo(email)
+        .once('value');
       return snapshot.exists();
     } catch (error) {
       console.log('Neww Dataabase error:', error);
@@ -83,7 +71,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
       return;
     }
 
-    if (currentEmail === auth.currentUser?.email) {
+    if (currentEmail === auth().currentUser?.email) {
       Alert.alert('Invalid Invitation', 'You cannot invite yourself');
       return;
     }
@@ -117,8 +105,8 @@ const CreateRoomScreen = ({ navigation, route }) => {
       return;
     }
 
-    const db = getDatabase();
-    const user = auth.currentUser;
+    const db = database();
+    const user = auth().currentUser;
 
     if (!user) {
       Alert.alert('Error', 'You must be logged in to create a room');
@@ -147,7 +135,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
       const roomId = isEditing
         ? editingRoom.roomId
         : `room_${Date.now()}`;
-      const roomRef = ref(db, `rooms/${roomId}`);
+      const roomRef = db.ref(`rooms/${roomId}`);
 
       const roomData = {
         roomId: roomId,
@@ -170,7 +158,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
       console.log('Newwww Dataaa', roomData, loggedInUser);
 
-      await set(roomRef, roomData);
+      await roomRef.set(roomData);
 
       navigation.replace('WaitingScreen', {
         roomId: roomId,

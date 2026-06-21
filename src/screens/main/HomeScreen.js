@@ -13,7 +13,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { auth } from '../../config/firebase';
+import { auth, database } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Logo from '../../components/Logo1';
@@ -27,7 +27,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import LinearGradient from 'react-native-linear-gradient';
-import { getDatabase, ref, set, onValue, get, query, orderByChild, equalTo } from 'firebase/database';
 import colors from '../../theme/Colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -140,12 +139,11 @@ const HomeScreen = () => {
   }, []);
 
   useEffect(() => {
-    const db = getDatabase();
-    const roomsRef = ref(db, 'rooms');
-    const currentUser = auth.currentUser;
+    const roomsRef = database().ref('rooms');
+    const currentUser = auth().currentUser;
     if (!currentUser) return;
 
-    const unsubscribe = onValue(roomsRef, (snapshot) => {
+    const unsubscribe = roomsRef.on('value', (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const roomsArray = Object.values(data).filter(room => {
@@ -163,7 +161,7 @@ const HomeScreen = () => {
       }
     });
 
-    return () => unsubscribe();
+    return () => roomsRef.off('value', unsubscribe);
   }, []);
 
   const animatedStyle = useAnimatedStyle(() => ({
@@ -173,10 +171,9 @@ const HomeScreen = () => {
   // ── Firebase logic ──────────────────────────────────────────
   const deleteRoom = async (roomId) => {
     try {
-      const db = getDatabase();
-      const currentUser = auth.currentUser;
-      const roomRef = ref(db, `rooms/${roomId}`);
-      const roomSnapshot = await get(roomRef);
+      const currentUser = auth().currentUser;
+      const roomRef = database().ref(`rooms/${roomId}`);
+      const roomSnapshot = await roomRef.once('value');
       const roomData = roomSnapshot.val();
 
       if (roomData.creator.email !== currentUser.email) {
@@ -190,7 +187,7 @@ const HomeScreen = () => {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            await set(roomRef, null);
+            await roomRef.set(null);
             Alert.alert('Done', 'Room deleted successfully');
           },
         },
@@ -202,7 +199,7 @@ const HomeScreen = () => {
   };
 
   const onRoomPress = (item) => {
-    const currentUser = auth.currentUser;
+    const currentUser = auth().currentUser;
     const isCreator = item.creator.email === currentUser?.email;
 
     // If the stream has already started, everyone goes directly to the Streaming screen
@@ -243,7 +240,7 @@ const HomeScreen = () => {
 
   // ── Filtering & sorting ─────────────────────────────────────
   const getFilteredRooms = () => {
-    const currentUser = auth.currentUser;
+    const currentUser = auth().currentUser;
     if (!currentUser) return [];
 
     let filteredRooms = [...rooms];
@@ -283,7 +280,7 @@ const HomeScreen = () => {
   };
 
   const filtered = getFilteredRooms();
-  const currentUser = auth.currentUser;
+  const currentUser = auth().currentUser;
 
   // ── Render ──────────────────────────────────────────────────
   return (

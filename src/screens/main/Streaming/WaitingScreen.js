@@ -11,16 +11,7 @@ import {
   Easing,
   Alert,
 } from 'react-native';
-import {
-  getDatabase,
-  ref,
-  onValue,
-  get,
-  query,
-  orderByChild,
-  equalTo,
-} from 'firebase/database';
-import { auth } from '../../../config/firebase';
+import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -81,7 +72,7 @@ const PulseRing = ({ delay = 0 }) => {
 // ──────────────────────────────────────────────────────────────
 const WaitingScreen = ({ route, navigation }) => {
   const { roomId, roomName, streamUrl: routeStreamUrl } = route.params;
-  const currentUser = auth.currentUser;
+  const currentUser = auth().currentUser;
 
   const [participantProfiles, setParticipantProfiles] = useState([]);
   const [onlineStatuses, setOnlineStatuses] = useState({});
@@ -97,10 +88,9 @@ const WaitingScreen = ({ route, navigation }) => {
 
   // ── Fetch room data & resolve participant profiles ─────────
   useEffect(() => {
-    const db = getDatabase();
-    const roomRef = ref(db, `rooms/${roomId}`);
+    const roomRef = database().ref(`rooms/${roomId}`);
 
-    const unsubscribe = onValue(roomRef, async snapshot => {
+    const onValueHandler = async snapshot => {
       const data = snapshot.val();
       if (!data) return;
 
@@ -124,14 +114,16 @@ const WaitingScreen = ({ route, navigation }) => {
       ].filter(Boolean);
       const uniqueEmails = [...new Set(allEmails)];
 
-      const usersRef = ref(db, 'users');
       const profiles = [];
 
       for (let i = 0; i < uniqueEmails.length; i++) {
         const email = uniqueEmails[i];
         try {
-          const userQuery = query(usersRef, orderByChild('email'), equalTo(email));
-          const userSnap = await get(userQuery);
+          const userSnap = await database()
+            .ref('users')
+            .orderByChild('email')
+            .equalTo(email)
+            .once('value');
 
           if (userSnap.exists()) {
             const userKey = Object.keys(userSnap.val())[0];
@@ -154,9 +146,11 @@ const WaitingScreen = ({ route, navigation }) => {
       }
 
       setParticipantProfiles(profiles);
-    });
+    };
 
-    return () => unsubscribe();
+    roomRef.on('value', onValueHandler);
+
+    return () => roomRef.off('value', onValueHandler);
   }, [roomId, currentUser]);
 
   // ── Real-time status listeners for each participant ────────
@@ -167,20 +161,21 @@ const WaitingScreen = ({ route, navigation }) => {
 
     if (participantProfiles.length === 0) return;
 
-    const db = getDatabase();
+    const db = database();
 
     participantProfiles.forEach(p => {
       if (!p.uid) return;
-      const statusRef = ref(db, `users/${p.uid}/status/state`);
-      const unsub = onValue(statusRef, snap => {
+      const statusRef = db.ref(`users/${p.uid}/status/state`);
+      const onValueHandler = snap => {
         const state = snap.val();
         setOnlineStatuses(prev => ({ ...prev, [p.uid]: state === 'online' }));
-      });
-      statusListenersRef.current.push(unsub);
+      };
+      statusRef.on('value', onValueHandler);
+      statusListenersRef.current.push({ ref: statusRef, handler: onValueHandler });
     });
 
     return () => {
-      statusListenersRef.current.forEach(u => u());
+      statusListenersRef.current.forEach(({ ref: r, handler }) => r.off('value', handler));
       statusListenersRef.current = [];
     };
   }, [participantProfiles]);
@@ -217,14 +212,10 @@ const WaitingScreen = ({ route, navigation }) => {
   // ── Start Streaming (creator only) ─────────────────────────
   const startStreaming = async () => {
     if (isCreator) {
-      // Set isStreaming flag in Firebase so others navigate automatically
-      const db = getDatabase();
-      const roomRef = ref(db, `rooms/${roomId}`);
+      const roomRef = database().ref(`rooms/${roomId}`);
 
       try {
-        // We use 'update' or just setting the specific child node to avoid overwriting the whole room
-        const { update } = require('firebase/database'); // dynamically require update
-        await update(roomRef, {
+        await roomRef.update({
           isStreaming: true
         });
 
