@@ -19,6 +19,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
+import { useRoomVoiceChat } from '../../../webRTC/useRoomVoiceChat';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VIDEO_HEIGHT = SCREEN_WIDTH * (9 / 16);
@@ -86,6 +87,7 @@ const StreamingScreen = ({ route, navigation }) => {
   // Participants State
   const [participantProfiles, setParticipantProfiles] = useState([]);
   const [onlineStatuses, setOnlineStatuses] = useState({});
+  const [voiceParticipantStates, setVoiceParticipantStates] = useState({});
 
   // Reactions State
   const [floatingEmojis, setFloatingEmojis] = useState([]);
@@ -195,7 +197,28 @@ const StreamingScreen = ({ route, navigation }) => {
   const participants = participantProfiles.map(p => ({
     ...p,
     isOnline: onlineStatuses[p.uid] ?? false,
+    isVoiceMuted: voiceParticipantStates[p.uid]?.muted ?? true,
   }));
+
+  const {
+    isReady: isVoiceReady,
+    isMuted: isVoiceMuted,
+    activeSpeakerCount,
+    error: voiceError,
+    toggleMute: toggleVoiceMute,
+  } = useRoomVoiceChat(roomId, participantProfiles);
+
+  const canUseRoomVoice = participants.length > 1;
+
+  useEffect(() => {
+    const voiceParticipantsRef = database().ref(`rooms/${roomId}/voice/participants`);
+    const handler = snapshot => {
+      setVoiceParticipantStates(snapshot.val() || {});
+    };
+
+    voiceParticipantsRef.on('value', handler);
+    return () => voiceParticipantsRef.off('value', handler);
+  }, [roomId]);
 
   // ──────────────────────────────────────────────────────────────
   // Sync Playback Logic
@@ -374,6 +397,13 @@ const StreamingScreen = ({ route, navigation }) => {
         <Text style={styles.participantName}>{item.name}</Text>
         <Text style={styles.participantUsername}>{item.username}</Text>
       </View>
+      <View style={styles.participantVoiceState}>
+        <MaterialIcons
+          name={item.isVoiceMuted ? 'mic-off' : 'mic'}
+          size={18}
+          color={item.isVoiceMuted ? colors.SUB_TITLE_COLOR : colors.ACCEPT_GREEN}
+        />
+      </View>
       {item.isHost && (
         <View style={styles.hostBadge}>
           <Text style={styles.hostBadgeText}>Host</Text>
@@ -402,6 +432,24 @@ const StreamingScreen = ({ route, navigation }) => {
           <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{roomName || 'Streaming Room'}</Text>
+        <TouchableOpacity
+          style={[
+            styles.voiceButton,
+            !canUseRoomVoice && styles.voiceButtonDisabled,
+            canUseRoomVoice && !isVoiceMuted && styles.voiceButtonLive,
+          ]}
+          disabled={!canUseRoomVoice || !isVoiceReady}
+          onPress={toggleVoiceMute}
+        >
+          <MaterialIcons
+            name={canUseRoomVoice && !isVoiceMuted ? 'mic' : 'mic-off'}
+            size={18}
+            color="#FFF"
+          />
+          <Text style={styles.voiceButtonText}>
+            {canUseRoomVoice ? (isVoiceMuted ? 'Unmute' : 'Live') : 'Voice'}
+          </Text>
+        </TouchableOpacity>
         <View style={styles.liveBadge}>
           <View style={styles.liveDot} />
           <Text style={styles.liveText}>LIVE</Text>
@@ -463,6 +511,29 @@ const StreamingScreen = ({ route, navigation }) => {
 
       {/* CONTENT SECTION (Tabs) */}
       <View style={styles.contentSection}>
+        <View style={styles.voiceStatusBar}>
+          <View style={styles.voiceStatusLeft}>
+            <MaterialIcons
+              name={canUseRoomVoice && !isVoiceMuted ? 'graphic-eq' : 'hearing-disabled'}
+              size={18}
+              color={canUseRoomVoice ? colors.PRIMARY_COLOR : colors.SUB_TITLE_COLOR}
+            />
+            <Text style={styles.voiceStatusText}>
+              {canUseRoomVoice
+                ? (isVoiceMuted
+                  ? 'Room voice is ready. Unmute anytime to talk while the video keeps playing.'
+                  : `You are live in voice with ${activeSpeakerCount || participants.length - 1} participant${(activeSpeakerCount || participants.length - 1) === 1 ? '' : 's'}.`)
+                : 'Voice chat becomes available as soon as another participant joins.'}
+            </Text>
+          </View>
+        </View>
+
+        {voiceError ? (
+          <View style={styles.voiceErrorBanner}>
+            <Text style={styles.voiceErrorText}>{voiceError}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.tabsContainer}>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
@@ -551,6 +622,27 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  voiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    marginRight: 10,
+  },
+  voiceButtonDisabled: {
+    opacity: 0.45,
+  },
+  voiceButtonLive: {
+    backgroundColor: colors.ACCEPT_GREEN || '#22C55E',
+  },
+  voiceButtonText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -608,6 +700,35 @@ const styles = StyleSheet.create({
   },
   contentSection: {
     flex: 1,
+  },
+  voiceStatusBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
+  },
+  voiceStatusLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  voiceStatusText: {
+    flex: 1,
+    marginLeft: 10,
+    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  voiceErrorBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239, 68, 68, 0.14)',
+  },
+  voiceErrorText: {
+    color: colors.LIVE_RED || '#EF4444',
+    fontSize: 13,
   },
   tabsContainer: {
     flexDirection: 'row',
@@ -735,6 +856,9 @@ const styles = StyleSheet.create({
   },
   participantInfo: {
     flex: 1,
+  },
+  participantVoiceState: {
+    marginRight: 10,
   },
   participantName: {
     color: '#FFF',
