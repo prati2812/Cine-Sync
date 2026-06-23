@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   Dimensions,
@@ -16,7 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import { auth, database } from '../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import Logo from '../../components/Logo1';
+import Header from '../../components/Header';
 import Animated, {
   withSpring,
   useAnimatedStyle,
@@ -284,13 +283,11 @@ const HomeScreen = () => {
 
   // ── Render ──────────────────────────────────────────────────
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" />
 
       {/* ── Header ─────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <Logo size="small" />
-      </View>
+      <Header showLogo />
 
       {/* ── Search ────────────────────────────────────────── */}
       <View style={styles.searchRow}>
@@ -415,7 +412,7 @@ const HomeScreen = () => {
           </LinearGradient>
         </TouchableOpacity>
       )}
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -428,42 +425,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.BACKGROUND_COLOR,
   },
 
-  // ── Header ────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  headerIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.PRIMARY_GLOW,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: colors.TITLE_COLOR,
-    letterSpacing: 0.5,
-  },
-  headerSub: {
-    fontSize: 13,
-    color: colors.SUB_TITLE_COLOR,
-    marginTop: 2,
-  },
+
 
   // ── Search ────────────────────────
   searchRow: {
