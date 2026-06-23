@@ -165,10 +165,12 @@ const WaitingScreen = ({ route, navigation }) => {
 
     participantProfiles.forEach(p => {
       if (!p.uid) return;
-      const statusRef = db.ref(`users/${p.uid}/status/state`);
+      // Listen at /status (supports both string "online" and object {state:"online"})
+      const statusRef = db.ref(`users/${p.uid}/status`);
       const onValueHandler = snap => {
-        const state = snap.val();
-        setOnlineStatuses(prev => ({ ...prev, [p.uid]: state === 'online' }));
+        const val = snap.val();
+        const isOnline = val === 'online' || val?.state === 'online';
+        setOnlineStatuses(prev => ({ ...prev, [p.uid]: isOnline }));
       };
       statusRef.on('value', onValueHandler);
       statusListenersRef.current.push({ ref: statusRef, handler: onValueHandler });

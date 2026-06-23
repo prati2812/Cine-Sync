@@ -175,14 +175,16 @@ const StreamingScreen = ({ route, navigation }) => {
     return () => roomRef.off('value', onRoomHandler);
   }, [roomId]);
 
-  // Online statuses
   useEffect(() => {
     if (participantProfiles.length === 0) return;
     const db = database();
     const unsubs = participantProfiles.map(p => {
-      const statusRef = db.ref(`users/${p.uid}/status/state`);
+      // Listen at /status (supports both string "online" and object {state:"online"})
+      const statusRef = db.ref(`users/${p.uid}/status`);
       const handler = snap => {
-        setOnlineStatuses(prev => ({ ...prev, [p.uid]: snap.val() === 'online' }));
+        const val = snap.val();
+        const online = val === 'online' || val?.state === 'online';
+        setOnlineStatuses(prev => ({ ...prev, [p.uid]: online }));
       };
       statusRef.on('value', handler);
       return () => statusRef.off('value', handler);

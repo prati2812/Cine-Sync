@@ -335,7 +335,7 @@ const FriendsScreen = ({ navigation }) => {
 
   // ── Render Items ───────────────────────────────────────────
   const renderFriend = ({ item }) => {
-    const isOnline = item?.status?.state === 'online';
+    const isOnline = item?.status === 'online' || item?.status?.state === 'online';
     return (
       <View style={styles.friendCard}>
         {/* Film-strip accent */}
