@@ -4,3 +4,19 @@ extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autoli
 rootProject.name = 'NightWatcher'
 include ':app'
 includeBuild('../node_modules/@react-native/gradle-plugin')
+
+gradle.beforeProject { project ->
+    project.buildscript.repositories {
+        def allRepos = new ArrayList(delegate)
+        clear()
+        google()
+        addAll(allRepos)
+    }
+    project.repositories {
+        def allRepos = new ArrayList(delegate)
+        clear()
+        google()
+        addAll(allRepos)
+    }
+}
+
