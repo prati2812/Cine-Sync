@@ -18,22 +18,20 @@ const ICE_SERVERS = {
 
 export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
   const myUid = auth().currentUser?.uid;
-  const mountedRef = useRef(true);
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
-  const remoteStreamsRef = useRef({});
   const candidateListenersRef = useRef({});
-  const participantNamesRef = useRef({});
-  const remoteParticipantIdsRef = useRef([]);
 
-  const [isReady, setIsReady] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [activeSpeakerCount, setActiveSpeakerCount] = useState(0);
-  const [remoteStreams, setRemoteStreams] = useState([]);
   const [error, setError] = useState(null);
 
-  const updateRemoteStreamsState = useCallback(() => {
-    setRemoteStreams(Object.values(remoteStreamsRef.current));
+  const remoteParticipantIds = participants
+    .map(item => item.uid)
+    .filter(uid => uid && uid !== myUid);
+
+  const updateConnectionState = useCallback(() => {
     setActiveSpeakerCount(Object.keys(peersRef.current).length);
   }, []);
 
@@ -45,19 +43,54 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
     }
   }, []);
 
-  const updateParticipantPresence = useCallback(async (mutedValue) => {
+  const clearSignalingForMe = useCallback(async () => {
     if (!roomId || !myUid) return;
-    const currentUser = auth().currentUser;
-    const currentParticipant = participants.find(item => item.uid === myUid);
+    await Promise.all([
+      database().ref(`rooms/${roomId}/voice/offers/${myUid}`).remove(),
+      database().ref(`rooms/${roomId}/voice/answers/${myUid}`).remove(),
+      database().ref(`rooms/${roomId}/voice/candidates/${myUid}`).remove(),
+    ]);
+  }, [myUid, roomId]);
 
-    await database().ref(`rooms/${roomId}/voice/participants/${myUid}`).update({
-      uid: myUid,
-      email: currentUser?.email || '',
-      name: currentParticipant?.name || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User',
-      muted: mutedValue,
-      updatedAt: database.ServerValue.TIMESTAMP,
-    });
-  }, [myUid, participants, roomId]);
+  const cleanupPeer = useCallback((remoteUid) => {
+    removeCandidateListener(remoteUid);
+    const peer = peersRef.current[remoteUid];
+    if (peer) {
+      peer.onicecandidate = null;
+      peer.ontrack = null;
+      peer.onconnectionstatechange = null;
+      peer.close();
+      delete peersRef.current[remoteUid];
+    }
+    updateConnectionState();
+  }, [removeCandidateListener, updateConnectionState]);
+
+  const cleanupAllPeers = useCallback(() => {
+    Object.keys(peersRef.current).forEach(cleanupPeer);
+  }, [cleanupPeer]);
+
+  const teardownVoiceSession = useCallback(async () => {
+    cleanupAllPeers();
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+
+    if (roomId && myUid) {
+      try {
+        await Promise.all([
+          database().ref(`rooms/${roomId}/voice/participants/${myUid}`).remove(),
+          clearSignalingForMe(),
+        ]);
+      } catch (err) {
+        console.warn('[RoomVoice] teardown failed:', err);
+      }
+    }
+
+    setActiveSpeakerCount(0);
+    setIsConnecting(false);
+  }, [cleanupAllPeers, clearSignalingForMe, myUid, roomId]);
 
   const getLocalStream = useCallback(async () => {
     if (localStreamRef.current) {
@@ -79,26 +112,26 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
     });
 
     stream.getAudioTracks().forEach(track => {
-      track.enabled = false;
+      track.enabled = true;
     });
 
     localStreamRef.current = stream;
     return stream;
   }, []);
 
-  const cleanupPeer = useCallback((remoteUid) => {
-    removeCandidateListener(remoteUid);
-    const peer = peersRef.current[remoteUid];
-    if (peer) {
-      peer.onicecandidate = null;
-      peer.ontrack = null;
-      peer.onconnectionstatechange = null;
-      peer.close();
-      delete peersRef.current[remoteUid];
-    }
-    delete remoteStreamsRef.current[remoteUid];
-    updateRemoteStreamsState();
-  }, [removeCandidateListener, updateRemoteStreamsState]);
+  const updateParticipantPresence = useCallback(async (mutedValue) => {
+    if (!roomId || !myUid) return;
+    const currentUser = auth().currentUser;
+    const currentParticipant = participants.find(item => item.uid === myUid);
+
+    await database().ref(`rooms/${roomId}/voice/participants/${myUid}`).set({
+      uid: myUid,
+      email: currentUser?.email || '',
+      name: currentParticipant?.name || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User',
+      muted: mutedValue,
+      updatedAt: database.ServerValue.TIMESTAMP,
+    });
+  }, [myUid, participants, roomId]);
 
   const listenForCandidates = useCallback((remoteUid) => {
     if (!roomId || !myUid || candidateListenersRef.current[remoteUid]) return;
@@ -117,14 +150,16 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
   }, [myUid, roomId]);
 
   const createPeer = useCallback(async (remoteUid) => {
-    if (!roomId || !myUid || remoteUid === myUid) return null;
-    if (peersRef.current[remoteUid]) return peersRef.current[remoteUid];
+    if (!roomId || !myUid || !localStreamRef.current || remoteUid === myUid) {
+      return null;
+    }
+    if (peersRef.current[remoteUid]) {
+      return peersRef.current[remoteUid];
+    }
 
-    const localStream = await getLocalStream();
     const peer = new RTCPeerConnection(ICE_SERVERS);
-
-    localStream.getTracks().forEach(track => {
-      peer.addTrack(track, localStream);
+    localStreamRef.current.getTracks().forEach(track => {
+      peer.addTrack(track, localStreamRef.current);
     });
 
     peer.onicecandidate = event => {
@@ -134,19 +169,11 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
         .push(event.candidate.toJSON());
     };
 
-    peer.ontrack = event => {
-      if (event.streams?.[0]) {
-        remoteStreamsRef.current[remoteUid] = {
-          id: remoteUid,
-          stream: event.streams[0],
-          name: participantNamesRef.current[remoteUid] || 'Participant',
-        };
-        updateRemoteStreamsState();
-      }
-    };
-
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
+      if (state === 'connected') {
+        updateConnectionState();
+      }
       if (state === 'failed' || state === 'closed' || state === 'disconnected') {
         cleanupPeer(remoteUid);
       }
@@ -154,9 +181,9 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
 
     peersRef.current[remoteUid] = peer;
     listenForCandidates(remoteUid);
-    updateRemoteStreamsState();
+    updateConnectionState();
     return peer;
-  }, [cleanupPeer, getLocalStream, listenForCandidates, myUid, roomId, updateRemoteStreamsState]);
+  }, [cleanupPeer, listenForCandidates, myUid, roomId, updateConnectionState]);
 
   const createOfferForPeer = useCallback(async (remoteUid) => {
     try {
@@ -185,28 +212,17 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
   const handleOffer = useCallback(async (remoteUid, offerData) => {
     try {
       const peer = await createPeer(remoteUid);
-      if (!peer) return;
+      if (!peer || peer.currentRemoteDescription) return;
 
-      if (peer.currentRemoteDescription?.type === 'offer') {
-        return;
-      }
-
-      if (peer.signalingState !== 'stable') {
-        cleanupPeer(remoteUid);
-      }
-
-      const freshPeer = peersRef.current[remoteUid] || await createPeer(remoteUid);
-      if (!freshPeer) return;
-
-      await freshPeer.setRemoteDescription(
+      await peer.setRemoteDescription(
         new RTCSessionDescription({
           type: offerData.type,
           sdp: offerData.sdp,
         })
       );
 
-      const answer = await freshPeer.createAnswer();
-      await freshPeer.setLocalDescription(answer);
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
 
       await database().ref(`rooms/${roomId}/voice/answers/${remoteUid}/${myUid}`).set({
         from: myUid,
@@ -226,8 +242,7 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
 
   const handleAnswer = useCallback(async (remoteUid, answerData) => {
     const peer = peersRef.current[remoteUid];
-    if (!peer) return;
-    if (peer.currentRemoteDescription) return;
+    if (!peer || peer.currentRemoteDescription) return;
 
     try {
       await peer.setRemoteDescription(
@@ -244,66 +259,61 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
     }
   }, [cleanupPeer, myUid, roomId]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const joinVoiceSession = useCallback(async () => {
+    if (!enabled || !roomId || !myUid || !isMuted) return;
+
+    try {
+      setError(null);
+      setIsConnecting(true);
+      await clearSignalingForMe();
+      await getLocalStream();
+      await updateParticipantPresence(false);
+      database().ref(`rooms/${roomId}/voice/participants/${myUid}`).onDisconnect().remove();
+
+      setIsMuted(false);
+
+      await Promise.all(
+        remoteParticipantIds
+          .filter(uid => myUid.localeCompare(uid) < 0)
+          .map(uid => createOfferForPeer(uid))
+      );
+    } catch (err) {
+      console.warn('[RoomVoice] join failed:', err);
+      await teardownVoiceSession();
+      setIsMuted(true);
+      setError(err.message || 'Unable to start room voice');
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [
+    clearSignalingForMe,
+    createOfferForPeer,
+    enabled,
+    getLocalStream,
+    isMuted,
+    myUid,
+    remoteParticipantIds,
+    roomId,
+    teardownVoiceSession,
+    updateParticipantPresence,
+  ]);
+
+  const leaveVoiceSession = useCallback(async () => {
+    await teardownVoiceSession();
+    setIsMuted(true);
+  }, [teardownVoiceSession]);
+
+  const toggleMute = useCallback(async () => {
+    if (!enabled) return;
+    if (isMuted) {
+      await joinVoiceSession();
+      return;
+    }
+    await leaveVoiceSession();
+  }, [enabled, isMuted, joinVoiceSession, leaveVoiceSession]);
 
   useEffect(() => {
-    if (!roomId || !myUid || !enabled) return;
-    let cancelled = false;
-
-    const initialize = async () => {
-      try {
-        setError(null);
-        await Promise.all([
-          database().ref(`rooms/${roomId}/voice/offers/${myUid}`).remove(),
-          database().ref(`rooms/${roomId}/voice/answers/${myUid}`).remove(),
-          database().ref(`rooms/${roomId}/voice/candidates/${myUid}`).remove(),
-        ]);
-        await getLocalStream();
-        if (cancelled || !mountedRef.current) return;
-        await updateParticipantPresence(true);
-        setIsReady(true);
-      } catch (err) {
-        if (cancelled || !mountedRef.current) return;
-        setError(err.message || 'Unable to access microphone');
-        setIsReady(false);
-      }
-    };
-
-    initialize();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, getLocalStream, myUid, roomId, updateParticipantPresence]);
-
-  useEffect(() => {
-    if (!roomId || !myUid || !isReady) return;
-
-    const presenceRef = database().ref(`rooms/${roomId}/voice/participants/${myUid}`);
-    presenceRef.onDisconnect().remove();
-
-    return () => {
-      presenceRef.onDisconnect().cancel();
-    };
-  }, [isReady, myUid, roomId]);
-
-  useEffect(() => {
-    const names = {};
-    participants.forEach(item => {
-      if (item?.uid) {
-        names[item.uid] = item.name;
-      }
-    });
-    participantNamesRef.current = names;
-  }, [participants]);
-
-  useEffect(() => {
-    if (!roomId || !myUid || !isReady) return;
+    if (!roomId || !myUid || isMuted) return;
 
     const offersRef = database().ref(`rooms/${roomId}/voice/offers/${myUid}`);
     const answersRef = database().ref(`rooms/${roomId}/voice/answers/${myUid}`);
@@ -335,88 +345,40 @@ export function useRoomVoiceChat(roomId, participants = [], enabled = true) {
       answersRef.off('child_added', answerHandler);
       answersRef.off('child_changed', answerHandler);
     };
-  }, [handleAnswer, handleOffer, isReady, myUid, roomId]);
+  }, [handleAnswer, handleOffer, isMuted, myUid, roomId]);
 
   useEffect(() => {
-    if (!roomId || !myUid || !isReady) return;
+    if (!enabled || !roomId || !myUid || isMuted) return;
 
-    const remoteIds = participants
-      .map(item => item.uid)
-      .filter(uid => uid && uid !== myUid);
+    remoteParticipantIds
+      .filter(uid => myUid.localeCompare(uid) < 0)
+      .forEach(uid => {
+        if (!peersRef.current[uid]) {
+          createOfferForPeer(uid);
+        }
+      });
 
-    remoteParticipantIdsRef.current
-      .filter(uid => !remoteIds.includes(uid))
-      .forEach(uid => cleanupPeer(uid));
-
-    remoteParticipantIdsRef.current = remoteIds;
-
-    remoteIds.forEach(uid => {
-      if (myUid.localeCompare(uid) < 0 && !peersRef.current[uid]) {
-        createOfferForPeer(uid);
-      }
-    });
-  }, [cleanupPeer, createOfferForPeer, isReady, myUid, participants, roomId]);
-
-  const toggleMute = useCallback(async () => {
-    if (!localStreamRef.current) return;
-    const nextMuted = !isMuted;
-    localStreamRef.current.getAudioTracks().forEach(track => {
-      track.enabled = !nextMuted;
-    });
-    setIsMuted(nextMuted);
-    try {
-      await updateParticipantPresence(nextMuted);
-    } catch (err) {
-      console.warn('[RoomVoice] toggleMute presence update failed:', err);
-    }
-  }, [isMuted, updateParticipantPresence]);
-
-  const disconnect = useCallback(async () => {
-    if (roomId && myUid) {
-      try {
-        await Promise.all([
-          database().ref(`rooms/${roomId}/voice/participants/${myUid}`).remove(),
-          database().ref(`rooms/${roomId}/voice/offers/${myUid}`).remove(),
-          database().ref(`rooms/${roomId}/voice/answers/${myUid}`).remove(),
-          database().ref(`rooms/${roomId}/voice/candidates/${myUid}`).remove(),
-        ]);
-      } catch (err) {
-        console.warn('[RoomVoice] remove presence failed:', err);
-      }
-    }
-
-    Object.keys(candidateListenersRef.current).forEach(removeCandidateListener);
-    Object.keys(peersRef.current).forEach(cleanupPeer);
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-
-    remoteStreamsRef.current = {};
-    setRemoteStreams([]);
-    setActiveSpeakerCount(0);
-    setIsReady(false);
-  }, [cleanupPeer, myUid, removeCandidateListener, roomId]);
+    Object.keys(peersRef.current)
+      .filter(uid => !remoteParticipantIds.includes(uid))
+      .forEach(cleanupPeer);
+  }, [cleanupPeer, createOfferForPeer, enabled, isMuted, myUid, remoteParticipantIds, roomId]);
 
   useEffect(() => {
-    if (!enabled && isReady) {
-      disconnect();
-      setIsMuted(true);
-    }
-  }, [disconnect, enabled, isReady]);
+    if (enabled) return;
+    leaveVoiceSession();
+  }, [enabled, leaveVoiceSession]);
 
   useEffect(() => {
     return () => {
-      disconnect();
+      leaveVoiceSession();
     };
-  }, [disconnect]);
+  }, [leaveVoiceSession]);
 
   return {
-    isReady,
+    isReady: enabled && !isConnecting,
     isMuted,
+    isConnecting,
     activeSpeakerCount,
-    remoteStreams,
     error,
     toggleMute,
   };

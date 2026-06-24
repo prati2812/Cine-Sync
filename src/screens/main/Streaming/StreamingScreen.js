@@ -200,15 +200,16 @@ const StreamingScreen = ({ route, navigation }) => {
     isVoiceMuted: voiceParticipantStates[p.uid]?.muted ?? true,
   }));
 
+  const canUseRoomVoice = participants.length > 1;
+
   const {
     isReady: isVoiceReady,
     isMuted: isVoiceMuted,
+    isConnecting: isVoiceConnecting,
     activeSpeakerCount,
     error: voiceError,
     toggleMute: toggleVoiceMute,
-  } = useRoomVoiceChat(roomId, participantProfiles);
-
-  const canUseRoomVoice = participants.length > 1;
+  } = useRoomVoiceChat(roomId, participantProfiles, canUseRoomVoice);
 
   useEffect(() => {
     const voiceParticipantsRef = database().ref(`rooms/${roomId}/voice/participants`);
@@ -438,16 +439,16 @@ const StreamingScreen = ({ route, navigation }) => {
             !canUseRoomVoice && styles.voiceButtonDisabled,
             canUseRoomVoice && !isVoiceMuted && styles.voiceButtonLive,
           ]}
-          disabled={!canUseRoomVoice || !isVoiceReady}
+          disabled={!canUseRoomVoice || !isVoiceReady || isVoiceConnecting}
           onPress={toggleVoiceMute}
         >
           <MaterialIcons
-            name={canUseRoomVoice && !isVoiceMuted ? 'mic' : 'mic-off'}
+            name={isVoiceConnecting ? 'hourglass-empty' : (canUseRoomVoice && !isVoiceMuted ? 'mic' : 'mic-off')}
             size={18}
             color="#FFF"
           />
           <Text style={styles.voiceButtonText}>
-            {canUseRoomVoice ? (isVoiceMuted ? 'Unmute' : 'Live') : 'Voice'}
+            {canUseRoomVoice ? (isVoiceConnecting ? 'Joining' : (isVoiceMuted ? 'Unmute' : 'Live')) : 'Voice'}
           </Text>
         </TouchableOpacity>
         <View style={styles.liveBadge}>
@@ -520,7 +521,9 @@ const StreamingScreen = ({ route, navigation }) => {
             />
             <Text style={styles.voiceStatusText}>
               {canUseRoomVoice
-                ? (isVoiceMuted
+                ? (isVoiceConnecting
+                  ? 'Joining room voice. Your video audio should keep playing until the mic is fully active.'
+                  : isVoiceMuted
                   ? 'Room voice is ready. Unmute anytime to talk while the video keeps playing.'
                   : `You are live in voice with ${activeSpeakerCount || participants.length - 1} participant${(activeSpeakerCount || participants.length - 1) === 1 ? '' : 's'}.`)
                 : 'Voice chat becomes available as soon as another participant joins.'}
