@@ -3,9 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  Dimensions,
   TouchableOpacity,
-  Pressable,
   Alert,
   SafeAreaView,
   FlatList,
@@ -13,15 +11,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
+  StatusBar,
+  useWindowDimensions,
 } from 'react-native';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import Orientation from 'react-native-orientation-locker';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const VIDEO_HEIGHT = SCREEN_WIDTH * (9 / 16);
 
 const AVATAR_COLORS = [
   colors.PRIMARY_COLOR,
@@ -70,11 +69,31 @@ const FloatingEmoji = ({ emoji }) => {
 const StreamingScreen = ({ route, navigation }) => {
   const { streamUrl, roomName, roomId } = route.params;
 
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
+  const VIDEO_HEIGHT = width * (9 / 16);
+
+  useEffect(() => {
+    return () => {
+      Orientation.lockToPortrait();
+      if (reactionTimerRef.current) {
+        clearTimeout(reactionTimerRef.current);
+      }
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (isLandscape) {
+      Orientation.lockToPortrait();
+    } else {
+      Orientation.lockToLandscapeLeft();
+    }
+  };
+
   // Video State
   const [playing, setPlaying] = useState(true);
   const playerRef = useRef(null);
   const [isCreator, setIsCreator] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(true);
 
   // Tabs
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants'
@@ -89,23 +108,19 @@ const StreamingScreen = ({ route, navigation }) => {
 
   // Reactions State
   const [floatingEmojis, setFloatingEmojis] = useState([]);
+  const [showReactions, setShowReactions] = useState(false);
+  const reactionTimerRef = useRef(null);
 
-  // Auto-hide controls
-  useEffect(() => {
-    let timeoutId;
-    if (controlsVisible && playing) {
-      timeoutId = setTimeout(() => {
-        setControlsVisible(false);
-      }, 3000);
-    }
-    return () => timeoutId && clearTimeout(timeoutId);
-  }, [controlsVisible, playing]);
+  // Notes State
+  const [notes, setNotes] = useState([]);
+  const [newNoteText, setNewNoteText] = useState('');
 
   const getYoutubeVideoId = (url) => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
     const match = url?.match(regExp);
     return (match && match[7].length === 11) ? match[7] : false;
   };
+
   const videoId = getYoutubeVideoId(streamUrl);
 
   useEffect(() => {
@@ -201,94 +216,119 @@ const StreamingScreen = ({ route, navigation }) => {
   // Sync Playback Logic
   // ──────────────────────────────────────────────────────────────
 
-  // Viewer Sync
+  const syncDebounceRef = useRef(null); // debounce host pushes after seek
+  const isSyncingRef = useRef(false);   // prevent viewer re-triggering sync
+  const lastPlaybackRef = useRef(null); // last snapshot from Firebase
+
+  // Push current host state to Firebase (debounced after seek)
+  const pushPlaybackState = async (isPlaying) => {
+    if (!isCreator) return;
+    try {
+      const currentTime = await playerRef.current?.getCurrentTime() || 0;
+      await database().ref(`rooms/${roomId}/playback`).set({
+        isPlaying,
+        currentTime,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.log('[Sync] Error pushing playback state:', e);
+    }
+  };
+
+  // Debounced version – waits 600ms after last call (covers rapid scrubbing)
+  const debouncedPushRef = useRef(null);
+  const debouncedPushPlaybackState = (isPlaying) => {
+    if (debouncedPushRef.current) clearTimeout(debouncedPushRef.current);
+    debouncedPushRef.current = setTimeout(() => {
+      pushPlaybackState(isPlaying);
+    }, 600);
+  };
+
+  // ── HOST: heartbeat every 3 s while playing ──
   useEffect(() => {
+    if (!isCreator || !playing) return;
+    const intervalId = setInterval(async () => {
+      if (!playerRef.current) return;
+      try {
+        const currentTime = await playerRef.current.getCurrentTime();
+        await database().ref(`rooms/${roomId}/playback`).update({
+          currentTime: currentTime || 0,
+          updatedAt: Date.now(),
+        });
+      } catch (e) {
+        console.log('[Sync] Heartbeat error:', e);
+      }
+    }, 3000);
+    return () => clearInterval(intervalId);
+  }, [isCreator, playing, roomId]);
+
+  // ── VIEWER: listen to Firebase playback changes ──
+  useEffect(() => {
+    if (isCreator) return; // host doesn't listen to its own writes
     const playbackRef = database().ref(`rooms/${roomId}/playback`);
 
-    const onPlaybackHandler = (snapshot) => {
-      const playbackData = snapshot.val();
-      if (playbackData && !isCreator) {
-        setPlaying(playbackData.isPlaying);
+    const onPlaybackHandler = async (snapshot) => {
+      const data = snapshot.val();
+      if (!data || isSyncingRef.current) return;
+      lastPlaybackRef.current = data;
 
-        if (playerRef.current) {
-          if (playbackData.isPlaying) {
-            const elapsed = (Date.now() - playbackData.updatedAt) / 1000;
-            const currentPosition = playbackData.currentTime + elapsed;
+      isSyncingRef.current = true;
 
-            playerRef.current.getCurrentTime().then((viewerTime) => {
-              if (Math.abs(viewerTime - currentPosition) > 2) {
-                playerRef.current.seekTo(currentPosition);
-              }
-            });
-          } else {
-            playerRef.current.seekTo(playbackData.currentTime);
-          }
+      // Apply play / pause
+      setPlaying(data.isPlaying);
+
+      if (playerRef.current) {
+        if (data.isPlaying) {
+          // Compute where the host is NOW, accounting for network delay
+          const elapsed = (Date.now() - data.updatedAt) / 1000;
+          const targetTime = data.currentTime + elapsed;
+
+          playerRef.current.getCurrentTime().then((viewerTime) => {
+            // Only seek if drift > 1.5 s to avoid constant micro-seeks
+            if (Math.abs(viewerTime - targetTime) > 1.5) {
+              playerRef.current.seekTo(targetTime, true);
+            }
+          });
+        } else {
+          // Host paused – snap to the exact paused position
+          await playerRef.current.seekTo(data.currentTime, true);
         }
       }
+
+      isSyncingRef.current = false;
     };
 
     playbackRef.on('value', onPlaybackHandler);
     return () => playbackRef.off('value', onPlaybackHandler);
   }, [roomId, isCreator]);
 
-  // Creator Continuous Sync
+  // ── VIEWER: periodic drift correction every 10 s ──
   useEffect(() => {
-    if (!isCreator || !playing) return;
-
-    // Push the creator's current time to Firebase every 5 seconds
-    const intervalId = setInterval(async () => {
-      if (playerRef.current) {
-        try {
-          const currentTime = await playerRef.current.getCurrentTime();
-          const db = database();
-          const playbackRef = db.ref(`rooms/${roomId}/playback`);
-
-          await playbackRef.set({
-            isPlaying: true,
-            currentTime: currentTime || 0,
-            updatedAt: Date.now()
-          });
-        } catch (error) {
-          console.log("Error syncing time:", error);
+    if (isCreator) return;
+    const driftCheckId = setInterval(async () => {
+      const data = lastPlaybackRef.current;
+      if (!data || !data.isPlaying || !playerRef.current) return;
+      try {
+        const elapsed = (Date.now() - data.updatedAt) / 1000;
+        const targetTime = data.currentTime + elapsed;
+        const viewerTime = await playerRef.current.getCurrentTime();
+        if (Math.abs(viewerTime - targetTime) > 2) {
+          playerRef.current.seekTo(targetTime, true);
         }
+      } catch (e) {
+        // silently ignore
       }
-    }, 5000);
+    }, 10000);
+    return () => clearInterval(driftCheckId);
+  }, [isCreator]);
 
-    return () => clearInterval(intervalId);
-  }, [isCreator, playing, roomId]);
-
-  const updatePlaybackState = async (isPlaying) => {
-    if (!isCreator) return;
-    const playbackRef = database().ref(`rooms/${roomId}/playback`);
-    const currentTime = await playerRef.current?.getCurrentTime() || 0;
-
-    await playbackRef.set({
-      isPlaying,
-      currentTime,
-      updatedAt: Date.now()
-    });
-  };
-
-  const seekBackward = async () => {
-    if (!isCreator || !playerRef.current) return;
-    const currentTime = await playerRef.current.getCurrentTime();
-    playerRef.current.seekTo(Math.max(currentTime - 10, 0));
-    await updatePlaybackState(playing);
-  };
-
-  const seekForward = async () => {
-    if (!isCreator || !playerRef.current) return;
-    const currentTime = await playerRef.current.getCurrentTime();
-    playerRef.current.seekTo(currentTime + 10);
-    await updatePlaybackState(playing);
-  };
-
-  const togglePlayback = async () => {
-    if (!isCreator) return;
-    const newPlayingState = !playing;
-    setPlaying(newPlayingState);
-    await updatePlaybackState(newPlayingState);
-  };
+  // Cleanup debounce refs on unmount
+  useEffect(() => {
+    return () => {
+      if (debouncedPushRef.current) clearTimeout(debouncedPushRef.current);
+      if (syncDebounceRef.current) clearTimeout(syncDebounceRef.current);
+    };
+  }, []);
 
   // Chat
   useEffect(() => {
@@ -354,6 +394,94 @@ const StreamingScreen = ({ route, navigation }) => {
     });
   };
 
+  const triggerReactions = () => {
+    setShowReactions(true);
+    resetReactionTimeout();
+  };
+
+  const resetReactionTimeout = () => {
+    if (reactionTimerRef.current) {
+      clearTimeout(reactionTimerRef.current);
+    }
+    reactionTimerRef.current = setTimeout(() => {
+      setShowReactions(false);
+    }, 4000);
+  };
+
+  const handleEmojiPress = (emoji) => {
+    sendReaction(emoji);
+    resetReactionTimeout();
+  };
+
+  // Video Notes Logic
+  const formatTime = (secs) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = Math.floor(secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  useEffect(() => {
+    if (participants.length > 1) return;
+    const notesRef = database().ref(`rooms/${roomId}/notes`);
+    const onNotesHandler = snapshot => {
+      const data = snapshot.val();
+      if (data) {
+        const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
+        list.sort((a, b) => a.seconds - b.seconds);
+        setNotes(list);
+      } else {
+        setNotes([]);
+      }
+    };
+    notesRef.on('value', onNotesHandler);
+    return () => notesRef.off('value', onNotesHandler);
+  }, [roomId, participants.length]);
+
+  const addNote = async () => {
+    if (!newNoteText.trim()) return;
+    try {
+      const secs = await playerRef.current?.getCurrentTime() || 0;
+      const notesRef = database().ref(`rooms/${roomId}/notes`);
+      await notesRef.push({
+        text: newNoteText.trim(),
+        seconds: secs,
+        timestamp: database.ServerValue.TIMESTAMP,
+      });
+      setNewNoteText('');
+    } catch (e) {
+      console.log("Error adding note:", e);
+    }
+  };
+
+  const deleteNote = async (noteId) => {
+    try {
+      await database().ref(`rooms/${roomId}/notes/${noteId}`).remove();
+    } catch (e) {
+      console.log("Error deleting note:", e);
+    }
+  };
+
+  const renderNote = ({ item }) => {
+    return (
+      <View style={styles.noteCard}>
+        <TouchableOpacity
+          style={styles.noteTimeBadge}
+          onPress={() => playerRef.current?.seekTo(item.seconds)}
+        >
+          <Ionicons name="play" size={12} color="#FFF" style={{ marginRight: 4 }} />
+          <Text style={styles.noteTimeText}>{formatTime(item.seconds)}</Text>
+        </TouchableOpacity>
+        <Text style={styles.noteText}>{item.text}</Text>
+        <TouchableOpacity
+          style={styles.noteDeleteBtn}
+          onPress={() => deleteNote(item.id)}
+        >
+          <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.4)" />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   const renderMessage = ({ item }) => {
     const isMe = item.senderId === auth().currentUser?.uid;
     return (
@@ -396,50 +524,58 @@ const StreamingScreen = ({ route, navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
-          <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{roomName || 'Streaming Room'}</Text>
-        <View style={styles.liveBadge}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>LIVE</Text>
-        </View>
-      </View>
+    <View style={[styles.container, isLandscape && styles.containerLandscape]}>
+      <StatusBar hidden={isLandscape} barStyle="light-content" />
+
+      {!isLandscape && (
+        <SafeAreaView style={styles.safeHeader}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
+              <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR || '#FFF'} />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle} numberOfLines={1}>{roomName || 'Streaming Room'}</Text>
+            <View style={styles.liveBadge}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          </View>
+        </SafeAreaView>
+      )}
 
       {/* VIDEO PLAYER SECTION */}
-      <View style={styles.videoSection}>
+      <View style={[styles.videoSection, isLandscape && styles.videoSectionLandscape, { height: isLandscape ? height : VIDEO_HEIGHT }]}>
         {videoId ? (
-          <Pressable style={{ flex: 1 }} onPress={() => setControlsVisible(true)}>
+          <View style={{ flex: 1, position: 'relative' }}>
             <YoutubePlayer
               ref={playerRef}
-              height={VIDEO_HEIGHT}
-              width={SCREEN_WIDTH}
+              height={isLandscape ? height : VIDEO_HEIGHT}
+              width={width}
               play={playing}
               videoId={videoId}
               initialPlayerParams={{
-                controls: 0,
+                controls: 1,
                 modestbranding: 1,
-                preventFullScreen: true,
+                preventFullScreen: false,
                 rel: 0,
               }}
+              onChangeState={(state) => {
+                if (state === 'playing') {
+                  setPlaying(true);
+                  if (isCreator) {
+                    debouncedPushPlaybackState(true);
+                  }
+                } else if (state === 'paused') {
+                  setPlaying(false);
+                  if (isCreator) {
+                    // Push immediately on pause so viewers stop right away
+                    pushPlaybackState(false);
+                  }
+                } else if (state === 'unstarted' || state === 'buffering') {
+                  // no-op – don't push mid-buffer events
+                }
+              }}
             />
-            {/* Custom Controls Overlay */}
-            {controlsVisible && (
-              <View style={styles.controlsOverlay}>
-                <TouchableOpacity onPress={seekBackward} disabled={!isCreator}>
-                  <MaterialIcons name="replay-10" size={36} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={togglePlayback} disabled={!isCreator}>
-                  <MaterialIcons name={playing ? "pause-circle-filled" : "play-circle-filled"} size={64} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={seekForward} disabled={!isCreator}>
-                  <MaterialIcons name="forward-10" size={36} color={isCreator ? "#FFF" : "rgba(255,255,255,0.3)"} />
-                </TouchableOpacity>
-              </View>
-            )}
-          </Pressable>
+          </View>
         ) : (
           <View style={styles.errorVideo}>
             <Text style={{ color: '#fff' }}>Invalid Video URL</Text>
@@ -461,70 +597,119 @@ const StreamingScreen = ({ route, navigation }) => {
         ))}
       </View>
 
-      {/* CONTENT SECTION (Tabs) */}
-      <View style={styles.contentSection}>
-        <View style={styles.tabsContainer}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
-            onPress={() => setActiveTab('chat')}
-          >
-            <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>Live Chat</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'participants' && styles.activeTab]}
-            onPress={() => setActiveTab('participants')}
-          >
-            <Text style={[styles.tabText, activeTab === 'participants' && styles.activeTabText]}>Participants ({participants.length})</Text>
-          </TouchableOpacity>
-        </View>
-
-        {activeTab === 'chat' ? (
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          >
-            <FlatList
-              data={messages}
-              keyExtractor={item => item.id}
-              renderItem={renderMessage}
-              inverted
-              contentContainerStyle={styles.chatList}
-              showsVerticalScrollIndicator={false}
-            />
-
-            {/* Emoji Reaction Bar */}
-            <View style={styles.reactionBar}>
-              {['❤️', '😂', '🔥', '👏', '🎉', '😮'].map(emoji => (
-                <TouchableOpacity key={emoji} onPress={() => sendReaction(emoji)} style={styles.reactionBtn}>
-                  <Text style={styles.reactionEmoji}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View style={styles.chatInputContainer}>
-              <TextInput
-                style={styles.chatInput}
-                placeholder="Say something..."
-                placeholderTextColor={colors.SUB_TITLE_COLOR}
-                value={newMessage}
-                onChangeText={setNewMessage}
-                onSubmitEditing={sendMessage}
+      {/* CONTENT SECTION */}
+      {!isLandscape && (
+        <View style={styles.contentSection}>
+          {participants.length <= 1 ? (
+            <View style={{ flex: 1 }}>
+              <View style={styles.notesHeader}>
+                <Text style={styles.notesTitle}>My Stream Notes</Text>
+                <Text style={styles.notesSubtitle}>Capture notes at specific timestamps</Text>
+              </View>
+              <FlatList
+                data={notes}
+                keyExtractor={item => item.id}
+                renderItem={renderNote}
+                contentContainerStyle={styles.notesList}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={
+                  <View style={styles.emptyNotesContainer}>
+                    <Ionicons name="document-text-outline" size={48} color="rgba(255,255,255,0.2)" />
+                    <Text style={styles.emptyNotesText}>No notes saved yet</Text>
+                    <Text style={styles.emptyNotesSubtext}>Type a note below to save it at the current video time.</Text>
+                  </View>
+                }
               />
-              <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
-                <Ionicons name="send" size={20} color="#FFF" />
-              </TouchableOpacity>
+              <SafeAreaView style={styles.chatInputSafeArea}>
+                <View style={styles.chatInputContainer}>
+                  <TextInput
+                    style={styles.chatInput}
+                    placeholder="Add note at current time..."
+                    placeholderTextColor={colors.SUB_TITLE_COLOR}
+                    value={newNoteText}
+                    onChangeText={setNewNoteText}
+                    onSubmitEditing={addNote}
+                  />
+                  <TouchableOpacity onPress={addNote} style={styles.sendBtn}>
+                    <Ionicons name="add" size={24} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+              </SafeAreaView>
             </View>
-          </KeyboardAvoidingView>
-        ) : (
-          <FlatList
-            data={participants}
-            keyExtractor={item => item.id}
-            renderItem={renderParticipant}
-            contentContainerStyle={styles.participantsList}
-          />
-        )}
-      </View>
-    </SafeAreaView>
+          ) : (
+            <View style={{ flex: 1 }}>
+              <View style={styles.tabsContainer}>
+                <TouchableOpacity
+                  style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
+                  onPress={() => setActiveTab('chat')}
+                >
+                  <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>Live Chat</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tab, activeTab === 'participants' && styles.activeTab]}
+                  onPress={() => setActiveTab('participants')}
+                >
+                  <Text style={[styles.tabText, activeTab === 'participants' && styles.activeTabText]}>Participants ({participants.length})</Text>
+                </TouchableOpacity>
+              </View>
+
+              {activeTab === 'chat' ? (
+                <KeyboardAvoidingView
+                  style={{ flex: 1 }}
+                  behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
+                  <FlatList
+                    data={messages}
+                    keyExtractor={item => item.id}
+                    renderItem={renderMessage}
+                    inverted
+                    contentContainerStyle={styles.chatList}
+                    showsVerticalScrollIndicator={false}
+                  />
+
+                  {/* Emoji Reaction Bar */}
+                  {showReactions && (
+                    <View style={styles.reactionBar}>
+                      {['❤️', '😂', '🔥', '👏', '🎉', '😮'].map(emoji => (
+                        <TouchableOpacity key={emoji} onPress={() => handleEmojiPress(emoji)} style={styles.reactionBtn}>
+                          <Text style={styles.reactionEmoji}>{emoji}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+
+                  <SafeAreaView style={styles.chatInputSafeArea}>
+                    <View style={styles.chatInputContainer}>
+                      <TouchableOpacity onPress={triggerReactions} style={styles.reactionToggleBtn}>
+                        <Ionicons name="happy-outline" size={24} color={colors.SUB_TITLE_COLOR || '#9CA3AF'} />
+                      </TouchableOpacity>
+                      <TextInput
+                        style={styles.chatInput}
+                        placeholder="Say something..."
+                        placeholderTextColor={colors.SUB_TITLE_COLOR}
+                        value={newMessage}
+                        onChangeText={setNewMessage}
+                        onSubmitEditing={sendMessage}
+                      />
+                      <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
+                        <Ionicons name="send" size={18} color="#FFF" />
+                      </TouchableOpacity>
+                    </View>
+                  </SafeAreaView>
+                </KeyboardAvoidingView>
+              ) : (
+                <FlatList
+                  data={participants}
+                  keyExtractor={item => item.id}
+                  renderItem={renderParticipant}
+                  contentContainerStyle={styles.participantsList}
+                />
+              )}
+            </View>
+          )}
+        </View>
+      )}
+    </View>
   );
 };
 
@@ -533,13 +718,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
   },
+  containerLandscape: {
+    backgroundColor: '#000',
+  },
+  safeHeader: {
+    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
   },
   backButton: {
     padding: 8,
@@ -554,7 +746,7 @@ const styles = StyleSheet.create({
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -572,9 +764,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   videoSection: {
-    height: VIDEO_HEIGHT,
     backgroundColor: '#000',
     position: 'relative',
+    overflow: 'hidden',
+  },
+  videoSectionLandscape: {
+    width: '100%',
+    height: '100%',
   },
   errorVideo: {
     flex: 1,
@@ -583,121 +779,188 @@ const styles = StyleSheet.create({
   },
   creatorLeftOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.85)',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    zIndex: 25,
   },
   creatorLeftTitle: {
     color: '#FFF',
     fontSize: 20,
     fontWeight: 'bold',
-    marginTop: 10,
+    marginTop: 12,
   },
   creatorLeftText: {
     color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
-    marginTop: 5,
+    marginTop: 6,
   },
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 15,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '70%',
+  },
+  controlBtn: {
+    padding: 10,
+    marginHorizontal: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 30,
+  },
+  playPauseBtn: {
+    padding: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  overlayBackButton: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 44 : 20,
+    left: 20,
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    zIndex: 20,
+  },
+  fullscreenBtn: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    zIndex: 20,
   },
   contentSection: {
     flex: 1,
   },
   tabsContainer: {
     flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
+    backgroundColor: colors.CARD_COLOR || '#1E1E24',
+    borderRadius: 25,
+    padding: 4,
+    marginHorizontal: 16,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.03)',
   },
   tab: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 10,
     alignItems: 'center',
+    borderRadius: 21,
   },
   activeTab: {
-    borderBottomWidth: 2,
-    borderBottomColor: colors.PRIMARY_COLOR || '#7C3AED',
+    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
   },
   tabText: {
     color: colors.SUB_TITLE_COLOR || '#9CA3AF',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
   },
   activeTabText: {
-    color: colors.PRIMARY_COLOR || '#7C3AED',
+    color: '#FFF',
   },
   chatList: {
-    padding: 16,
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   messageBubble: {
     maxWidth: '80%',
-    padding: 12,
-    borderRadius: 16,
-    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    marginBottom: 10,
   },
   messageBubbleMe: {
     alignSelf: 'flex-end',
-    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
-    borderBottomRightRadius: 4,
+    backgroundColor: '#6366F1',
+    borderBottomRightRadius: 2,
   },
   messageBubbleThem: {
     alignSelf: 'flex-start',
-    backgroundColor: colors.CARD_COLOR || '#1C1C23',
-    borderBottomLeftRadius: 4,
+    backgroundColor: '#1E1E24',
+    borderBottomLeftRadius: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.03)',
   },
   messageSender: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 3,
   },
   messageText: {
-    color: '#FFF',
-    fontSize: 15,
+    color: '#E5E7EB',
+    fontSize: 14,
+    lineHeight: 18,
   },
   reactionBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.BORDER_SUBTLE || '#1F1F25',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+    backgroundColor: 'rgba(28, 28, 35, 0.8)',
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   reactionBtn: {
-    padding: 8,
+    padding: 6,
   },
   reactionEmoji: {
-    fontSize: 24,
+    fontSize: 22,
+  },
+  reactionToggleBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  chatInputSafeArea: {
+    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
   },
   chatInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: colors.BORDER_SUBTLE || '#1F1F25',
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
   },
   chatInput: {
     flex: 1,
-    backgroundColor: colors.CARD_COLOR || '#1C1C23',
+    backgroundColor: '#1E1E24',
     color: '#FFF',
-    borderRadius: 20,
+    borderRadius: 24,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
     maxHeight: 100,
   },
   sendBtn: {
     marginLeft: 12,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: colors.PRIMARY_COLOR || '#7C3AED',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   participantsList: {
     padding: 16,
@@ -705,10 +968,13 @@ const styles = StyleSheet.create({
   participantCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.CARD_COLOR || '#1C1C23',
-    padding: 12,
-    borderRadius: 12,
+    backgroundColor: '#1E1E24',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.03)',
   },
   avatar: {
     width: 40,
@@ -731,7 +997,7 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: colors.CARD_COLOR || '#1C1C23',
+    borderColor: '#1E1E24',
   },
   participantInfo: {
     flex: 1,
@@ -761,6 +1027,78 @@ const styles = StyleSheet.create({
     bottom: 20,
     right: 20,
     zIndex: 1000,
+  },
+  notesHeader: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  notesTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFF',
+  },
+  notesSubtitle: {
+    fontSize: 12,
+    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    marginTop: 2,
+  },
+  notesList: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  noteCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E1E24',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.03)',
+  },
+  noteTimeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginRight: 12,
+  },
+  noteTimeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  noteText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#E5E7EB',
+    lineHeight: 18,
+  },
+  noteDeleteBtn: {
+    padding: 8,
+  },
+  emptyNotesContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 80,
+  },
+  emptyNotesText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFF',
+    marginTop: 12,
+  },
+  emptyNotesSubtext: {
+    fontSize: 13,
+    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    textAlign: 'center',
+    marginTop: 6,
+    paddingHorizontal: 32,
   },
 });
 
