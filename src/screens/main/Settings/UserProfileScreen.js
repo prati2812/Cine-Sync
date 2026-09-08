@@ -4,15 +4,13 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
 import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
-import Logo from '../../../components/Logo1';
+import Header from '../../../components/Header';
 import colors from '../../../theme/Colors';
 
 const UserProfileScreen = ({ navigation }) => {
@@ -52,11 +50,9 @@ const UserProfileScreen = ({ navigation }) => {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <Logo size="small" />
-      </View>
+      <Header showLogo borderBottom={false} />
 
       <ScrollView
         contentContainerStyle={{ flexGrow: 1 }}
@@ -140,7 +136,7 @@ const UserProfileScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -153,13 +149,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingRight: 24,
-  },
+
   profileSection: {
     flex: 1,
     paddingHorizontal: 24,

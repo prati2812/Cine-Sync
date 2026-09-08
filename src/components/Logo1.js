@@ -3,8 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 
 const Logo1 = ({ size = 'large' }) => {
-  const iconSize = size === 'large' ? 52 : 26;
-  const scale = size === 'large' ? 1 : 0.8;
+  const iconSize = size === 'large' ? 20 : 24;
+  const scale = size === 'large' ? 0.2 : 0.8;
 
   return (
     <View style={styles.container}>
@@ -14,7 +14,7 @@ const Logo1 = ({ size = 'large' }) => {
         </View>
         <View style={styles.textContainer}>
           <Text style={styles.logoText}>CINE</Text>
-          <Text style={styles.logoTextAccent}>SYNC</Text>
+          <Text style={styles.logoTextAccent}> SYNC</Text>
         </View>
       </View>
     </View>
@@ -47,7 +47,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   logoText: {
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: 4,
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 6,
   },
   logoTextAccent: {
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: '900',
     color: '#007AFF',
     letterSpacing: 4,

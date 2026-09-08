@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TextInput,
   TouchableOpacity,
   FlatList,
@@ -18,6 +17,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
+import Header from '../../../components/Header';
 import { auth, database } from '../../../config/firebase';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -335,7 +335,7 @@ const FriendsScreen = ({ navigation }) => {
 
   // ── Render Items ───────────────────────────────────────────
   const renderFriend = ({ item }) => {
-    const isOnline = item?.status?.state === 'online';
+    const isOnline = item?.status === 'online' || item?.status?.state === 'online';
     return (
       <View style={styles.friendCard}>
         {/* Film-strip accent */}
@@ -478,21 +478,15 @@ const FriendsScreen = ({ navigation }) => {
 
   // ── Main Render ────────────────────────────────────────────
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" />
 
       {/* ── Header ─────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.headerIconWrap}>
-            <Ionicons name="film" size={22} color={colors.FILM_GOLD} />
-          </View>
-          <View>
-            <Text style={styles.headerTitle}>My Crew</Text>
-            <Text style={styles.headerSub}>{friendsList.length} {friendsList.length === 1 ? 'friend' : 'friends'} connected</Text>
-          </View>
-        </View>
-      </View>
+      <Header
+        title="My Crew"
+        subtitle={`${friendsList.length} ${friendsList.length === 1 ? 'friend' : 'friends'} connected`}
+        leftIcon="film"
+      />
 
       {/* ── Search + Add ──────────────────────────────────── */}
       <View style={styles.searchRow}>
@@ -597,7 +591,7 @@ const FriendsScreen = ({ navigation }) => {
           )
         )}
       </View>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -610,42 +604,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.BACKGROUND_COLOR,
   },
 
-  // ── Header ────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  headerIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.FILM_GOLD_GLOW,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: colors.TITLE_COLOR,
-    letterSpacing: 0.5,
-  },
-  headerSub: {
-    fontSize: 13,
-    color: colors.SUB_TITLE_COLOR,
-    marginTop: 2,
-  },
+
 
   // ── Search ────────────────────────
   searchRow: {

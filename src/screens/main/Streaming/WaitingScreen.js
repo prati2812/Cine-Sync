@@ -5,12 +5,17 @@ import {
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
-  Animated,
   ScrollView,
   Dimensions,
-  Easing,
   Alert,
+  ImageBackground,
+  Share,
+  Animated,
+  Easing,
+  StatusBar,
+  Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, database } from '../../../config/firebase';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -18,7 +23,6 @@ import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ORBIT_SIZE = SCREEN_WIDTH * 0.78;
 
 const AVATAR_COLORS = [
   colors.PRIMARY_COLOR,
@@ -38,55 +42,64 @@ function getInitials(name) {
   return name.slice(0, 2).toUpperCase();
 }
 
-// ──────────────────────────────────────────────────────────────
-//  Pulsing Ring around the center play button
-// ──────────────────────────────────────────────────────────────
-const PulseRing = ({ delay = 0 }) => {
-  const scale = useRef(new Animated.Value(1)).current;
-  const opacity = useRef(new Animated.Value(0.5)).current;
-
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      Animated.loop(
-        Animated.parallel([
-          Animated.timing(scale, { toValue: 2.2, duration: 2000, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0, duration: 2000, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        ])
-      ).start();
-    }, delay);
-    return () => clearTimeout(timeout);
-  }, []);
-
-  return (
-    <Animated.View
-      style={[
-        styles.pulseRing,
-        { transform: [{ scale }], opacity },
-      ]}
-    />
-  );
-};
-
-// ──────────────────────────────────────────────────────────────
-//  Waiting Screen
-// ──────────────────────────────────────────────────────────────
 const WaitingScreen = ({ route, navigation }) => {
   const { roomId, roomName, streamUrl: routeStreamUrl } = route.params;
   const currentUser = auth().currentUser;
+  const insets = useSafeAreaInsets();
 
   const [participantProfiles, setParticipantProfiles] = useState([]);
   const [onlineStatuses, setOnlineStatuses] = useState({});
   const [isCreator, setIsCreator] = useState(false);
   const [resolvedStreamUrl, setResolvedStreamUrl] = useState(routeStreamUrl);
-  const statusListenersRef = useRef([]);
+  const [userMicMuted, setUserMicMuted] = useState({});
+  const [isHostReady, setIsHostReady] = useState(true);
+  const [isMicTesting, setIsMicTesting] = useState(false);
+  const [isPlayingChime, setIsPlayingChime] = useState(false);
+  const [eqHeights, setEqHeights] = useState([8, 12, 20, 16, 8, 18, 12, 6]);
 
   // Animations
-  const rotationAnim = useRef(new Animated.Value(0)).current;
-  const innerRotation = useRef(new Animated.Value(0)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const dotPulse = useRef(new Animated.Value(1)).current;
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const pulseValue = useRef(new Animated.Value(1)).current;
+  const statusListenersRef = useRef([]);
 
-  // ── Fetch room data & resolve participant profiles ─────────
+  // Loop Spinner & Pulse
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 4000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    ).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseValue, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseValue, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, []);
+
+  // Animate EQ Bars
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setEqHeights(
+        Array.from({ length: 8 }, () => Math.floor(Math.random() * 16) + 4)
+      );
+    }, 180);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch Room & Participants
   useEffect(() => {
     const roomRef = database().ref(`rooms/${roomId}`);
 
@@ -97,17 +110,16 @@ const WaitingScreen = ({ route, navigation }) => {
       setIsCreator(currentUser?.uid === data.creator?.uid);
       if (data.streamUrl) setResolvedStreamUrl(data.streamUrl);
 
-      // Navigate to streaming screen automatically if stream has started and user is not creator
+      // Auto-navigate non-creators when stream starts
       if (data.isStreaming && currentUser?.uid !== data.creator?.uid) {
         navigation.replace('Streaming', {
           roomId,
           roomName,
           streamUrl: data.streamUrl || resolvedStreamUrl,
         });
-        return; // Stop processing further to avoid state updates on unmounted component
+        return;
       }
 
-      // Creator email + invited participant emails
       const allEmails = [
         data.creator?.email,
         ...(data.participants || []),
@@ -149,13 +161,11 @@ const WaitingScreen = ({ route, navigation }) => {
     };
 
     roomRef.on('value', onValueHandler);
-
     return () => roomRef.off('value', onValueHandler);
   }, [roomId, currentUser]);
 
-  // ── Real-time status listeners for each participant ────────
+  // Real-time status listeners
   useEffect(() => {
-    // Clean up previous listeners
     statusListenersRef.current.forEach(u => u());
     statusListenersRef.current = [];
 
@@ -165,10 +175,11 @@ const WaitingScreen = ({ route, navigation }) => {
 
     participantProfiles.forEach(p => {
       if (!p.uid) return;
-      const statusRef = db.ref(`users/${p.uid}/status/state`);
+      const statusRef = db.ref(`users/${p.uid}/status`);
       const onValueHandler = snap => {
-        const state = snap.val();
-        setOnlineStatuses(prev => ({ ...prev, [p.uid]: state === 'online' }));
+        const val = snap.val();
+        const isOnline = val === 'online' || val?.state === 'online';
+        setOnlineStatuses(prev => ({ ...prev, [p.uid]: isOnline }));
       };
       statusRef.on('value', onValueHandler);
       statusListenersRef.current.push({ ref: statusRef, handler: onValueHandler });
@@ -180,43 +191,29 @@ const WaitingScreen = ({ route, navigation }) => {
     };
   }, [participantProfiles]);
 
-  // ── Combine profiles with live statuses ────────────────────
   const participants = participantProfiles.map(p => ({
     ...p,
     isOnline: onlineStatuses[p.uid] ?? false,
   }));
 
   const onlineCount = participants.filter(p => p.isOnline).length;
-  const allOnline = participants.length > 0 && onlineCount === participants.length;
+  const progressPercent = participants.length > 0
+    ? Math.round((onlineCount / participants.length) * 100)
+    : 0;
 
-  // ── Animations ─────────────────────────────────────────────
-  useEffect(() => {
-    Animated.loop(
-      Animated.timing(rotationAnim, { toValue: 1, duration: 12000, easing: Easing.linear, useNativeDriver: true })
-    ).start();
+  // Spin interpolation
+  const spinDegree = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
 
-    Animated.loop(
-      Animated.timing(innerRotation, { toValue: 1, duration: 18000, easing: Easing.linear, useNativeDriver: true })
-    ).start();
-
-    Animated.timing(fadeAnim, { toValue: 1, duration: 800, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(dotPulse, { toValue: 0.4, duration: 800, useNativeDriver: true }),
-        Animated.timing(dotPulse, { toValue: 1, duration: 800, useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
-
-  // ── Start Streaming (creator only) ─────────────────────────
+  // Start Streaming Handler
   const startStreaming = async () => {
     if (isCreator) {
       const roomRef = database().ref(`rooms/${roomId}`);
-
       try {
         await roomRef.update({
-          isStreaming: true
+          isStreaming: true,
         });
 
         navigation.replace('Streaming', {
@@ -225,231 +222,408 @@ const WaitingScreen = ({ route, navigation }) => {
           streamUrl: resolvedStreamUrl,
         });
       } catch (error) {
-        console.error("Error starting stream:", error);
-        Alert.alert("Error", "Could not start the stream. Please try again.");
+        console.error('Error starting stream:', error);
+        Alert.alert('Error', 'Could not start the stream. Please try again.');
       }
     } else {
-      Alert.alert(
-        'Not Allowed',
-        'Only the room creator can start the streaming.',
-      );
+      Alert.alert('Not Allowed', 'Only the room creator can start the stream.');
     }
   };
 
-  const outerSpin = rotationAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-  const innerSpin = innerRotation.interpolate({ inputRange: [0, 1], outputRange: ['360deg', '0deg'] });
+  // Share Room Code
+  const handleShareRoom = async () => {
+    try {
+      await Share.share({
+        message: `Join my Cine-Sync watch party! Room Code: ${roomId}`,
+      });
+    } catch (error) {
+      console.log('Error sharing room:', error);
+    }
+  };
 
-  // ── Participant dots on orbit ──────────────────────────────
-  const renderOrbitDots = () => {
-    const radius = ORBIT_SIZE / 2 - 28;
-    return participants.map((p, i) => {
-      const angle = (2 * Math.PI * i) / participants.length - Math.PI / 2;
-      const x = radius * Math.cos(angle);
-      const y = radius * Math.sin(angle);
+  // Toggle Mute Handler
+  const toggleMic = (uid) => {
+    setUserMicMuted(prev => ({ ...prev, [uid]: !prev[uid] }));
+  };
 
-      return (
-        <View key={p.id} style={[styles.orbitDot, { transform: [{ translateX: x }, { translateY: y }] }]}>
-          <View>
+  // Hardware Test Actions
+  const handleTestMic = () => {
+    setIsMicTesting(true);
+    setTimeout(() => setIsMicTesting(false), 1500);
+  };
+
+  const handlePlayChime = () => {
+    setIsPlayingChime(true);
+    setTimeout(() => setIsPlayingChime(false), 1500);
+  };
+
+  // Calculate dynamic top inset padding for Android & iOS notch safety
+  const safeTopPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
+  ) + 8;
+
+  return (
+    <View style={styles.container}>
+      <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" translucent />
+
+      {/* ── TOP HEADER ─────────────────────────────────────────── */}
+      <View style={[styles.header, { paddingTop: safeTopPadding }]}>
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="arrow-back" size={22} color={colors.TITLE_COLOR} />
+        </TouchableOpacity>
+
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle}>Room #{roomId}</Text>
+          <View style={styles.headerStatusTag}>
+            <View style={styles.statusPingDot} />
+            <Text style={styles.statusTagText}>
+              {isCreator ? 'Host Control' : 'Waiting for Host'}
+            </Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={handleShareRoom}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="ios-share" size={20} color={colors.PRIMARY_COLOR} />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* ── HERO STREAM PREVIEW CARD ───────────────────────────── */}
+        <View style={styles.heroCard}>
+          <ImageBackground
+            source={{
+              uri: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=1000&auto=format&fit=crop',
+            }}
+            style={styles.heroBgImage}
+            imageStyle={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }}
+          >
             <LinearGradient
-              colors={[p.color, shiftColor(p.color)]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[
-                styles.orbitDotGradient,
-                !p.isOnline && styles.orbitDotOffline,
-              ]}
+              colors={['transparent', colors.SURFACE_COLOR]}
+              style={styles.heroOverlay}
             >
-              <Text style={styles.orbitDotInitial}>{p.initial}</Text>
+              {/* Spinner Center */}
+              <View style={styles.loaderCenter}>
+                <Animated.View
+                  style={[
+                    styles.loaderRing,
+                    { transform: [{ scale: pulseValue }] },
+                  ]}
+                />
+                <View style={styles.loaderIconBox}>
+                  <Animated.View style={{ transform: [{ rotate: spinDegree }] }}>
+                    <MaterialIcons name="sync" size={26} color={colors.CYAN_ACCENT} />
+                  </Animated.View>
+                </View>
+              </View>
+
+              <Text style={styles.heroLoaderText}>
+                {isCreator
+                  ? 'Ready to Launch Stream...'
+                  : 'Waiting for Host to Launch Stream...'}
+              </Text>
+              <Text style={styles.heroSubText}>
+                Synchronized 4K streaming buffer ready
+              </Text>
             </LinearGradient>
+          </ImageBackground>
+
+          {/* Details Section */}
+          <View style={styles.heroDetails}>
+            <Text style={styles.movieTitle}>
+              {roomName || 'Watch Party Room'}
+            </Text>
+
+            <View style={styles.tagRow}>
+              <View style={styles.tagPill}>
+                <Text style={styles.tagTextSecondary}>Live Sync</Text>
+              </View>
+              <View style={styles.tagPill}>
+                <MaterialIcons name="hd" size={14} color={colors.CYAN_ACCENT} style={{ marginRight: 3 }} />
+                <Text style={styles.tagTextCyan}>4K Ultra HD</Text>
+              </View>
+              <View style={styles.tagPill}>
+                <MaterialIcons name="surround-sound" size={14} color={colors.PURPLE_ACCENT} style={{ marginRight: 3 }} />
+                <Text style={styles.tagTextPurple}>Spatial Audio</Text>
+              </View>
+            </View>
+
+            {/* Host Info Box */}
+            <View style={styles.hostBox}>
+              <View style={styles.hostLeft}>
+                <View style={styles.hostAvatarCircle}>
+                  <Ionicons name="person" size={20} color="#FFF" />
+                </View>
+                <View>
+                  <Text style={styles.hostRoleText}>Stream Leader</Text>
+                  <Text style={styles.hostNameText}>
+                    {isCreator ? `@${currentUser?.email?.split('@')[0]}` : 'Room Host'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.hostVipTag}>
+                <MaterialIcons name="grade" size={13} color={colors.FILM_GOLD} style={{ marginRight: 3 }} />
+                <Text style={styles.hostVipText}>Host VIP</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* ── PARTICIPANTS STATUS GRID ──────────────────────────── */}
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleWrap}>
+              <Text style={styles.sectionTitle}>Participants Ready</Text>
+              <View style={styles.countBadge}>
+                <Text style={styles.countBadgeText}>
+                  {onlineCount} / {participants.length}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.progressPercentText}>{progressPercent}% Locked In</Text>
+          </View>
+
+          {/* Progress Bar */}
+          <View style={styles.progressBarTrack}>
             <View
               style={[
-                styles.orbitStatusDot,
-                { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                styles.progressBarFill,
+                { width: `${Math.max(progressPercent, 5)}%` },
               ]}
             />
           </View>
-        </View>
-      );
-    });
-  };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      {/* ── Header ─────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Ionicons name="film" size={18} color={colors.FILM_GOLD} />
-          <Text style={styles.headerTitle}>{roomName || 'Waiting Room'}</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <View style={styles.liveIndicator}>
-            <Animated.View style={[styles.liveDot, { opacity: dotPulse }]} />
-            <Text style={styles.liveText}>LIVE</Text>
+          {/* Participant Cards */}
+          <View style={styles.participantList}>
+            {participants.map((p) => {
+              const isMuted = userMicMuted[p.uid] ?? false;
+              return (
+                <View key={p.id} style={styles.participantCard}>
+                  <View style={styles.participantLeft}>
+                    <View style={styles.avatarWrap}>
+                      <LinearGradient
+                        colors={[p.color, colors.PURPLE_ACCENT]}
+                        style={styles.avatarGradient}
+                      >
+                        <Text style={styles.avatarInitial}>{p.initial}</Text>
+                      </LinearGradient>
+                      <View
+                        style={[
+                          styles.onlineDot,
+                          { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                        ]}
+                      />
+                    </View>
+
+                    <View>
+                      <View style={styles.nameRow}>
+                        <Text style={styles.participantName}>{p.name}</Text>
+                        {p.isHost && <Text style={styles.crownIcon}>👑</Text>}
+                      </View>
+                      <View style={styles.statusRow}>
+                        <View
+                          style={[
+                            styles.statusPill,
+                            { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN_GLOW : colors.FILM_GOLD_GLOW },
+                          ]}
+                        >
+                          <MaterialIcons
+                            name={p.isOnline ? 'check' : 'hourglass-empty'}
+                            size={12}
+                            color={p.isOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD}
+                          />
+                          <Text
+                            style={[
+                              styles.statusPillText,
+                              { color: p.isOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD },
+                            ]}
+                          >
+                            {p.isOnline ? 'Ready' : 'Connecting'}
+                          </Text>
+                        </View>
+                        <Text style={styles.participantSubtext}>
+                          {p.isHost ? 'Host Ready' : p.isOnline ? 'Device Synced' : '42ms'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Mic Toggle Button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.micBtn,
+                      isMuted && styles.micBtnMuted,
+                    ]}
+                    onPress={() => toggleMic(p.uid)}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons
+                      name={isMuted ? 'mic-off' : 'mic'}
+                      size={18}
+                      color={isMuted ? colors.DELETE_RED_COLOR : colors.CYAN_ACCENT}
+                    />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         </View>
-      </View>
 
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        <Animated.View style={{ opacity: fadeAnim }}>
-          {/* ── Orbital Animation ─────────────────────────── */}
-          <View style={styles.orbitSection}>
-            {/* Outer dashed ring */}
-            <Animated.View style={[styles.orbitRing, { transform: [{ rotate: outerSpin }] }]}>
-              {[0, 1, 2, 3, 4, 5].map(i => (
-                <View key={i} style={[styles.ringDot, {
-                  transform: [
-                    { rotate: `${i * 60}deg` },
-                    { translateY: -(ORBIT_SIZE / 2) },
-                  ],
-                }]} />
-              ))}
-            </Animated.View>
+        {/* ── AUDIO & VIDEO HARDWARE SETUP ─────────────────────── */}
+        <View style={styles.hardwareCard}>
+          <View style={styles.hardwareHeader}>
+            <View style={styles.sectionTitleWrap}>
+              <MaterialIcons name="tune" size={20} color={colors.PRIMARY_COLOR} style={{ marginRight: 6 }} />
+              <Text style={styles.sectionTitle}>Audio & Video Setup</Text>
+            </View>
+            <View style={styles.fidelityTag}>
+              <Text style={styles.fidelityText}>High Fidelity</Text>
+            </View>
+          </View>
 
-            {/* Inner ring */}
-            <Animated.View style={[styles.innerRing, { transform: [{ rotate: innerSpin }] }]} />
+          {/* Input Device Box */}
+          <View style={styles.deviceBox}>
+            <View style={styles.deviceTop}>
+              <View style={styles.deviceInfoLeft}>
+                <View style={styles.deviceIconCircle}>
+                  <Ionicons name="headset" size={18} color={colors.PRIMARY_COLOR} />
+                </View>
+                <View>
+                  <Text style={styles.deviceLabel}>INPUT DEVICE</Text>
+                  <Text style={styles.deviceName}>AirPods Pro (Active)</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.testActionBtn, isMicTesting && styles.testActionActive]}
+                onPress={handleTestMic}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.testActionText}>
+                  {isMicTesting ? 'Testing...' : 'Test Mic'}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-            {/* Participant dots (counter-rotated so they stay upright) */}
-            <Animated.View style={[styles.orbitDotsContainer, { transform: [{ rotate: outerSpin }] }]}>
-              {renderOrbitDots().map((dot, i) => (
-                <Animated.View key={i} style={{ position: 'absolute', transform: [{ rotate: rotationAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] }) }] }}>
-                  {dot}
-                </Animated.View>
-              ))}
-            </Animated.View>
-
-            {/* Center play button with pulse rings */}
-            <View style={styles.centerArea}>
-              <PulseRing delay={0} />
-              <PulseRing delay={700} />
-              <TouchableOpacity activeOpacity={0.85} onPress={startStreaming} style={styles.playBtnWrap}>
-                <LinearGradient
-                  colors={isCreator
-                    ? [colors.GRADIENT_START, colors.GRADIENT_END]
-                    : [colors.MUTED_COLOR, colors.MUTED_COLOR]
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.playBtnGradient}
-                >
-                  <MaterialIcons
-                    name={isCreator ? 'play-arrow' : 'lock'}
-                    size={isCreator ? 38 : 28}
-                    color="#FFF"
+            {/* EQ Level Indicator */}
+            <View style={styles.eqRow}>
+              <Text style={styles.eqLabel}>Mic Input Level</Text>
+              <View style={styles.eqBarsContainer}>
+                {eqHeights.map((h, idx) => (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.eqBar,
+                      { height: h, backgroundColor: idx % 2 === 0 ? colors.PRIMARY_COLOR : colors.CYAN_ACCENT },
+                    ]}
                   />
-                </LinearGradient>
+                ))}
+              </View>
+            </View>
+          </View>
+
+          {/* Sound Output Box */}
+          <View style={styles.deviceBox}>
+            <View style={styles.deviceTop}>
+              <View style={styles.deviceInfoLeft}>
+                <View style={styles.deviceIconCircleCyan}>
+                  <MaterialIcons name="speaker-group" size={18} color={colors.CYAN_ACCENT} />
+                </View>
+                <View>
+                  <Text style={styles.deviceLabel}>SOUND OUTPUT</Text>
+                  <Text style={styles.deviceName}>Stereo Sound: Synced</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.chimeBtn, isPlayingChime && styles.chimeBtnActive]}
+                onPress={handlePlayChime}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.chimeBtnText}>
+                  {isPlayingChime ? '🔊 Playing...' : '🔔 Play Test Chime'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
+        </View>
 
-          {/* ── Status Tag + Waiting Text ─────────────────── */}
-          <View style={styles.waitingSection}>
-            {participants.length > 0 && (
-              <View style={[
-                styles.availabilityTag,
-                { backgroundColor: allOnline ? 'rgba(0, 200, 83, 0.15)' : 'rgba(255, 180, 0, 0.15)' },
-              ]}>
-                <View style={[
-                  styles.availabilityDot,
-                  { backgroundColor: allOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD },
-                ]} />
-                <Text style={[
-                  styles.availabilityText,
-                  { color: allOnline ? colors.ACCEPT_GREEN : colors.FILM_GOLD },
-                ]}>
-                  {allOnline ? 'All Participants Available' : `${onlineCount}/${participants.length} Online`}
+        {/* ── BOTTOM DOCK ACTIONS ───────────────────────────────── */}
+        <View style={styles.bottomDock}>
+          {isCreator ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.launchBtnWrap}
+              onPress={startStreaming}
+            >
+              <LinearGradient
+                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.launchBtnGradient}
+              >
+                <MaterialIcons name="rocket-launch" size={22} color="#FFF" />
+                <Text style={styles.launchBtnText}>
+                  Start Watch Party for Everyone
                 </Text>
-              </View>
-            )}
-            <Text style={styles.waitingTitle}>
-              {allOnline ? 'Everyone is here!' : 'Waiting for everyone'}
-            </Text>
-            <Text style={styles.waitingSub}>
-              {isCreator
-                ? allOnline
-                  ? 'All participants are online. Tap play to start!'
-                  : 'Waiting for all participants to come online'
-                : 'The screening will begin when the host starts'}
-            </Text>
-          </View>
-
-          {/* ── Participants List ─────────────────────────── */}
-          <View style={styles.listSection}>
-            <View style={styles.listHeader}>
-              <Text style={styles.listTitle}>Participants</Text>
-              <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{participants.length}</Text>
-              </View>
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.guestWaitingBox}>
+              <MaterialIcons name="sync" size={20} color={colors.CYAN_ACCENT} style={{ marginRight: 6 }} />
+              <Text style={styles.guestWaitingText}>
+                Waiting for the host to launch stream...
+              </Text>
             </View>
+          )}
 
-            {participants.map((p, index) => (
-              <View key={p.id} style={[styles.participantCard, index === participants.length - 1 && { marginBottom: 0 }]}>
-                {/* Avatar with online indicator */}
-                <View>
-                  <LinearGradient
-                    colors={[p.color, shiftColor(p.color)]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={[
-                      styles.participantAvatar,
-                      !p.isOnline && styles.avatarOffline,
-                    ]}
-                  >
-                    <Text style={styles.participantInitial}>{p.initial}</Text>
-                  </LinearGradient>
-                  <View
-                    style={[
-                      styles.statusDot,
-                      { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
-                    ]}
-                  />
-                </View>
-                <View style={styles.participantInfo}>
-                  <Text style={styles.participantName}>{p.name}</Text>
-                  <Text style={styles.participantUsername}>
-                    {p.username} · {p.isOnline ? 'Online' : 'Offline'}
-                  </Text>
-                </View>
-                {p.isHost ? (
-                  <View style={styles.hostBadge}>
-                    <Ionicons name="star" size={10} color={colors.FILM_GOLD} />
-                    <Text style={styles.hostBadgeText}>Host</Text>
-                  </View>
-                ) : (
-                  <View style={[
-                    styles.viewerBadge,
-                    p.isOnline && styles.viewerBadgeOnline,
-                  ]}>
-                    <MaterialIcons
-                      name="visibility"
-                      size={12}
-                      color={p.isOnline ? colors.CYAN_ACCENT : colors.MUTED_COLOR}
-                    />
-                    <Text style={[
-                      styles.viewerBadgeText,
-                      !p.isOnline && { color: colors.MUTED_COLOR },
-                    ]}>Viewer</Text>
-                  </View>
-                )}
-              </View>
-            ))}
+          <View style={styles.secondaryActionRow}>
+            <TouchableOpacity
+              style={[
+                styles.readyToggleBtn,
+                isHostReady ? styles.readyActive : styles.readyInactive,
+              ]}
+              onPress={() => setIsHostReady(!isHostReady)}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons
+                name={isHostReady ? 'check-circle' : 'pause-circle'}
+                size={18}
+                color={isHostReady ? colors.ACCEPT_GREEN : colors.SUB_TITLE_COLOR}
+              />
+              <Text
+                style={[
+                  styles.readyToggleText,
+                  { color: isHostReady ? colors.ACCEPT_GREEN : colors.TITLE_COLOR },
+                ]}
+              >
+                {isHostReady ? "I'm Ready" : 'Not Ready'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.leaveLobbyBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="logout" size={18} color={colors.DELETE_RED_COLOR} />
+              <Text style={styles.leaveLobbyText}>Leave Lobby</Text>
+            </TouchableOpacity>
           </View>
-        </Animated.View>
+        </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 };
-
-// Helper: slightly shift a hex color for gradient endpoint
-function shiftColor(hex) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const r = Math.min(255, ((num >> 16) & 255) + 40);
-  const g = Math.min(255, ((num >> 8) & 255) + 20);
-  const b = Math.min(255, (num & 255) + 60);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
 
 // ──────────────────────────────────────────────────────────────
 //  Styles
@@ -459,6 +633,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+  },
 
   // ── Header ────────────────────────
   header: {
@@ -466,315 +644,526 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
+    paddingBottom: 12,
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
-  backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+  headerBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
   },
-  headerCenter: {
-    flexDirection: 'row',
+  headerTitleWrap: {
     alignItems: 'center',
-    gap: 8,
   },
   headerTitle: {
-    color: colors.TITLE_COLOR,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '700',
+    color: colors.TITLE_COLOR,
   },
-  headerRight: {
-    alignItems: 'flex-end',
-  },
-  liveIndicator: {
+  headerStatusTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.LIVE_RED_GLOW,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
     borderRadius: 10,
-    gap: 5,
+    marginTop: 2,
+    gap: 4,
   },
-  liveDot: {
+  statusPingDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.LIVE_RED,
+    backgroundColor: colors.CYAN_ACCENT,
   },
-  liveText: {
-    color: colors.LIVE_RED,
+  statusTagText: {
+    color: colors.CYAN_ACCENT,
     fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 
-  // ── Scroll ────────────────────────
-  scrollContent: {
-    paddingBottom: 40,
-  },
-
-  // ── Orbit Section ─────────────────
-  orbitSection: {
-    width: ORBIT_SIZE,
-    height: ORBIT_SIZE,
-    alignSelf: 'center',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  orbitRing: {
-    position: 'absolute',
-    width: ORBIT_SIZE,
-    height: ORBIT_SIZE,
-    borderRadius: ORBIT_SIZE / 2,
-    borderWidth: 1.5,
-    borderColor: 'rgba(124, 58, 237, 0.2)',
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  ringDot: {
-    position: 'absolute',
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: colors.PURPLE_ACCENT,
-    opacity: 0.5,
-    alignSelf: 'center',
-  },
-  innerRing: {
-    position: 'absolute',
-    width: ORBIT_SIZE * 0.6,
-    height: ORBIT_SIZE * 0.6,
-    borderRadius: (ORBIT_SIZE * 0.6) / 2,
+  // ── Hero Preview Card ─────────────
+  heroCard: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginTop: 10,
     borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.12)',
-    borderStyle: 'dashed',
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
   },
-  orbitDotsContainer: {
-    position: 'absolute',
-    width: ORBIT_SIZE,
-    height: ORBIT_SIZE,
+  heroBgImage: {
+    width: '100%',
+    height: 200,
+  },
+  heroOverlay: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
-  orbitDot: {
-    position: 'absolute',
+  loaderCenter: {
+    width: 64,
+    height: 64,
+    justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 10,
   },
-  orbitDotGradient: {
+  loaderRing: {
+    position: 'absolute',
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(6, 182, 212, 0.25)',
+  },
+  loaderIconBox: {
     width: 48,
     height: 48,
     borderRadius: 24,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
   },
-  orbitDotOffline: {
-    opacity: 0.5,
+  heroLoaderText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
   },
-  orbitDotInitial: {
-    color: '#FFF',
-    fontSize: 16,
+  heroSubText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  heroDetails: {
+    padding: 16,
+    gap: 10,
+  },
+  movieTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 20,
     fontWeight: '800',
   },
-  orbitStatusDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: colors.BACKGROUND_COLOR,
-  },
-
-  // ── Center Play ───────────────────
-  centerArea: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pulseRing: {
-    position: 'absolute',
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    borderWidth: 2,
-    borderColor: colors.PRIMARY_COLOR,
-  },
-  playBtnWrap: {
-    borderRadius: 35,
-    overflow: 'hidden',
-    shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  playBtnGradient: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // ── Waiting Text ──────────────────
-  waitingSection: {
-    alignItems: 'center',
-    marginTop: 28,
-    paddingHorizontal: 40,
-  },
-  availabilityTag: {
+  tagRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    gap: 7,
-    marginBottom: 14,
+    gap: 6,
+    flexWrap: 'wrap',
   },
-  availabilityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  tagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  availabilityText: {
+  tagTextSecondary: {
+    color: colors.TEXT_SECONDARY,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  tagTextCyan: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  tagTextPurple: {
+    color: colors.PURPLE_ACCENT,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+
+  hostBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.BACKGROUND_COLOR,
+    padding: 12,
+    borderRadius: 14,
+    marginTop: 4,
+  },
+  hostLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  hostAvatarCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.PRIMARY_COLOR,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hostRoleText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+  },
+  hostNameText: {
+    color: colors.TITLE_COLOR,
     fontSize: 13,
     fontWeight: '700',
   },
-  waitingTitle: {
-    color: colors.TITLE_COLOR,
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  waitingSub: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  // ── Participants List ─────────────
-  listSection: {
-    marginTop: 28,
-    paddingHorizontal: 20,
-  },
-  listHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-    gap: 8,
-  },
-  listTitle: {
-    color: colors.TITLE_COLOR,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  countBadge: {
-    backgroundColor: colors.PURPLE_GLOW,
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-  },
-  countBadgeText: {
-    color: colors.PURPLE_ACCENT,
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  participantCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.CARD_COLOR,
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-  },
-  participantAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  avatarOffline: {
-    opacity: 0.5,
-  },
-  statusDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 10,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: colors.CARD_COLOR,
-  },
-  participantInitial: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  participantInfo: {
-    flex: 1,
-  },
-  participantName: {
-    color: colors.TITLE_COLOR,
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  participantUsername: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  hostBadge: {
+  hostVipTag: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.FILM_GOLD_GLOW,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 8,
-    gap: 4,
+    borderRadius: 10,
   },
-  hostBadgeText: {
+  hostVipText: {
     color: colors.FILM_GOLD,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '700',
   },
-  viewerBadge: {
+
+  // ── Participants Grid ─────────────
+  sectionContainer: {
+    marginTop: 18,
+    gap: 10,
+  },
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    justifyContent: 'space-between',
+  },
+  sectionTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sectionTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  countBadge: {
+    backgroundColor: colors.PURPLE_ACCENT,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  countBadgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  progressPercentText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  progressBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderRadius: 3,
+  },
+
+  participantList: {
+    gap: 8,
+    marginTop: 4,
+  },
+  participantCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.SURFACE_COLOR,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+  },
+  participantLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  avatarWrap: {
+    position: 'relative',
+  },
+  avatarGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitial: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  onlineDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.SURFACE_COLOR,
+  },
+
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
   },
-  viewerBadgeOnline: {
-    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+  participantName: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
   },
-  viewerBadgeText: {
+  crownIcon: {
+    fontSize: 12,
+  },
+
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 3,
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  participantSubtext: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+  },
+
+  micBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  micBtnMuted: {
+    backgroundColor: colors.DECLINE_RED_GLOW,
+  },
+
+  // ── Hardware Setup ────────────────
+  hardwareCard: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 20,
+    padding: 16,
+    marginTop: 18,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+  },
+  hardwareHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  fidelityTag: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  fidelityText: {
     color: colors.CYAN_ACCENT,
     fontSize: 11,
+    fontWeight: '600',
+  },
+
+  deviceBox: {
+    backgroundColor: colors.BACKGROUND_COLOR,
+    borderRadius: 14,
+    padding: 12,
+    gap: 10,
+  },
+  deviceTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deviceInfoLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  deviceIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.PRIMARY_GLOW,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deviceIconCircleCyan: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(6, 182, 212, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deviceLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  deviceName: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  testActionBtn: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  testActionActive: {
+    backgroundColor: colors.PRIMARY_COLOR,
+  },
+  testActionText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  eqRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: colors.SURFACE_ELEVATED,
+    paddingTop: 8,
+  },
+  eqLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+  },
+  eqBarsContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 3,
+    height: 20,
+  },
+  eqBar: {
+    width: 4,
+    borderRadius: 2,
+  },
+
+  chimeBtn: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  chimeBtnActive: {
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  chimeBtnText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // ── Bottom Dock ───────────────────
+  bottomDock: {
+    marginTop: 20,
+    gap: 12,
+  },
+  launchBtnWrap: {
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  launchBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    gap: 8,
+  },
+  launchBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  guestWaitingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingVertical: 14,
+    borderRadius: 20,
+  },
+  guestWaitingText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  secondaryActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  readyToggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  readyActive: {
+    backgroundColor: colors.ACCEPT_GREEN_GLOW,
+  },
+  readyInactive: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+  },
+  readyToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  leaveLobbyBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingVertical: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  leaveLobbyText: {
+    color: colors.DELETE_RED_COLOR,
+    fontSize: 13,
     fontWeight: '700',
   },
 });
