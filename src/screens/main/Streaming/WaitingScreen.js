@@ -43,10 +43,11 @@ function getInitials(name) {
 }
 
 const WaitingScreen = ({ route, navigation }) => {
-  const { roomId, roomName, streamUrl: routeStreamUrl } = route.params;
+  const { roomId, roomName, streamUrl: routeStreamUrl, thumbnail: routeThumbnail } = route?.params || {};
   const currentUser = auth().currentUser;
   const insets = useSafeAreaInsets();
 
+  const [roomData, setRoomData] = useState(null);
   const [participantProfiles, setParticipantProfiles] = useState([]);
   const [onlineStatuses, setOnlineStatuses] = useState({});
   const [isCreator, setIsCreator] = useState(false);
@@ -106,6 +107,7 @@ const WaitingScreen = ({ route, navigation }) => {
     const onValueHandler = async snapshot => {
       const data = snapshot.val();
       if (!data) return;
+      setRoomData(data);
 
       setIsCreator(currentUser?.uid === data.creator?.uid);
       if (data.streamUrl) setResolvedStreamUrl(data.streamUrl);
@@ -230,15 +232,13 @@ const WaitingScreen = ({ route, navigation }) => {
     }
   };
 
-  // Share Room Code
-  const handleShareRoom = async () => {
-    try {
-      await Share.share({
-        message: `Join my Cine-Sync watch party! Room Code: ${roomId}`,
-      });
-    } catch (error) {
-      console.log('Error sharing room:', error);
-    }
+  // Navigate to Room Details & Sharing
+  const handleShareRoom = () => {
+    navigation.navigate('StreamInfo', {
+      roomId,
+      roomName,
+      streamUrl: resolvedStreamUrl || streamUrl,
+    });
   };
 
   // Toggle Mute Handler
@@ -277,7 +277,11 @@ const WaitingScreen = ({ route, navigation }) => {
           <MaterialIcons name="arrow-back" size={22} color={colors.TITLE_COLOR} />
         </TouchableOpacity>
 
-        <View style={styles.headerTitleWrap}>
+        <TouchableOpacity
+          style={styles.headerTitleWrap}
+          onPress={handleShareRoom}
+          activeOpacity={0.8}
+        >
           <Text style={styles.headerTitle}>Room #{roomId}</Text>
           <View style={styles.headerStatusTag}>
             <View style={styles.statusPingDot} />
@@ -285,7 +289,7 @@ const WaitingScreen = ({ route, navigation }) => {
               {isCreator ? 'Host Control' : 'Waiting for Host'}
             </Text>
           </View>
-        </View>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.headerBtn}
@@ -302,42 +306,73 @@ const WaitingScreen = ({ route, navigation }) => {
       >
         {/* ── HERO STREAM PREVIEW CARD ───────────────────────────── */}
         <View style={styles.heroCard}>
-          <ImageBackground
-            source={{
-              uri: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=1000&auto=format&fit=crop',
-            }}
-            style={styles.heroBgImage}
-            imageStyle={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }}
-          >
-            <LinearGradient
-              colors={['transparent', colors.SURFACE_COLOR]}
-              style={styles.heroOverlay}
+          {(roomData?.thumbnail || routeThumbnail) ? (
+            <ImageBackground
+              source={{ uri: roomData?.thumbnail || routeThumbnail }}
+              style={styles.heroBgImage}
+              imageStyle={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }}
             >
-              {/* Spinner Center */}
-              <View style={styles.loaderCenter}>
-                <Animated.View
-                  style={[
-                    styles.loaderRing,
-                    { transform: [{ scale: pulseValue }] },
-                  ]}
-                />
-                <View style={styles.loaderIconBox}>
-                  <Animated.View style={{ transform: [{ rotate: spinDegree }] }}>
-                    <MaterialIcons name="sync" size={26} color={colors.CYAN_ACCENT} />
-                  </Animated.View>
+              <LinearGradient
+                colors={['transparent', colors.SURFACE_COLOR]}
+                style={styles.heroOverlay}
+              >
+                {/* Spinner Center */}
+                <View style={styles.loaderCenter}>
+                  <Animated.View
+                    style={[
+                      styles.loaderRing,
+                      { transform: [{ scale: pulseValue }] },
+                    ]}
+                  />
+                  <View style={styles.loaderIconBox}>
+                    <Animated.View style={{ transform: [{ rotate: spinDegree }] }}>
+                      <MaterialIcons name="sync" size={26} color={colors.CYAN_ACCENT} />
+                    </Animated.View>
+                  </View>
                 </View>
-              </View>
 
-              <Text style={styles.heroLoaderText}>
-                {isCreator
-                  ? 'Ready to Launch Stream...'
-                  : 'Waiting for Host to Launch Stream...'}
-              </Text>
-              <Text style={styles.heroSubText}>
-                Synchronized 4K streaming buffer ready
-              </Text>
-            </LinearGradient>
-          </ImageBackground>
+                <Text style={styles.heroLoaderText}>
+                  {isCreator
+                    ? 'Ready to Launch Stream...'
+                    : 'Waiting for Host to Launch Stream...'}
+                </Text>
+                <Text style={styles.heroSubText}>
+                  Synchronized 4K streaming buffer ready
+                </Text>
+              </LinearGradient>
+            </ImageBackground>
+          ) : (
+            <View style={[styles.heroBgImage, { backgroundColor: '#131326' }]}>
+              <LinearGradient
+                colors={['#1E1B4B', colors.SURFACE_COLOR]}
+                style={styles.heroOverlay}
+              >
+                {/* Spinner Center */}
+                <View style={styles.loaderCenter}>
+                  <Animated.View
+                    style={[
+                      styles.loaderRing,
+                      { transform: [{ scale: pulseValue }] },
+                    ]}
+                  />
+                  <View style={styles.loaderIconBox}>
+                    <Animated.View style={{ transform: [{ rotate: spinDegree }] }}>
+                      <MaterialIcons name="sync" size={26} color={colors.CYAN_ACCENT} />
+                    </Animated.View>
+                  </View>
+                </View>
+
+                <Text style={styles.heroLoaderText}>
+                  {isCreator
+                    ? 'Ready to Launch Stream...'
+                    : 'Waiting for Host to Launch Stream...'}
+                </Text>
+                <Text style={styles.heroSubText}>
+                  Synchronized 4K streaming buffer ready
+                </Text>
+              </LinearGradient>
+            </View>
+          )}
 
           {/* Details Section */}
           <View style={styles.heroDetails}>

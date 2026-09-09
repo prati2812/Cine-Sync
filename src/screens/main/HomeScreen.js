@@ -444,69 +444,163 @@ const HomeScreen = () => {
         </View>
 
         {/* ── HERO FEATURED WATCH PARTY ──────────────────────────── */}
-        <View style={styles.heroWrap}>
-          <ImageBackground
-            source={{
-              uri: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1000&auto=format&fit=crop',
-            }}
-            style={styles.heroBackground}
-            imageStyle={{ borderRadius: 20 }}
-          >
-            <LinearGradient
-              colors={['rgba(19, 19, 27, 0.2)', 'rgba(19, 19, 27, 0.95)']}
-              style={styles.heroGradient}
-            >
-              {/* Top Badges */}
-              <View style={styles.heroBadgeRow}>
-                <View style={styles.liveBadge}>
-                  <Animated.View style={[styles.liveDot, animatedPulseStyle]} />
-                  <Text style={styles.liveBadgeText}>LIVE SYNC</Text>
-                </View>
-                <View style={styles.spatialBadge}>
-                  <Ionicons name="headset-outline" size={13} color="#4CD7F6" />
-                  <Text style={styles.spatialBadgeText}>Spatial Audio 3D</Text>
-                </View>
-              </View>
+        {filtered.length > 0 ? (
+          (() => {
+            const featuredRoom = filtered[0];
+            const participantCount =
+              (featuredRoom?.participants?.length ||
+                (featuredRoom?.participants ? Object.keys(featuredRoom.participants).length : 0)) + 1;
+            const hostName =
+              featuredRoom.creator?.userName ||
+              featuredRoom.creator?.name ||
+              (featuredRoom.creator?.email ? featuredRoom.creator.email.split('@')[0] : 'Host');
 
-              {/* Title & Info */}
-              <View style={styles.heroDetails}>
-                <Text style={styles.heroCategory}>FEATURED SCREENING</Text>
-                <Text style={styles.heroTitle}>Inception - Live VIP Lounge</Text>
-
-                <View style={styles.heroStatsRow}>
-                  <View style={styles.heroStatItem}>
-                    <MaterialIcons name="groups" size={15} color="#93C5FD" />
-                    <Text style={styles.heroStatText}>1.2k watching</Text>
-                  </View>
-                  <Text style={styles.heroStatDivider}>•</Text>
-                  <Text style={styles.heroHostText}>Host: <Text style={styles.heroHostName}>NolanFan99</Text></Text>
-                  <Text style={styles.heroStatDivider}>•</Text>
-                  <View style={styles.heroStatItem}>
-                    <MaterialIcons name="sync" size={13} color="#4CD7F6" />
-                    <Text style={styles.heroTimeText}>01:24:18 / 02:28:00</Text>
+            const content = (
+              <LinearGradient
+                colors={['rgba(19, 19, 27, 0.4)', 'rgba(9, 10, 18, 0.96)']}
+                style={styles.heroGradient}
+              >
+                {/* Top Badges */}
+                <View style={styles.heroBadgeRow}>
+                  {featuredRoom.isStreaming ? (
+                    <View style={styles.liveBadge}>
+                      <Animated.View style={[styles.liveDot, animatedPulseStyle]} />
+                      <Text style={styles.liveBadgeText}>LIVE SYNC</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.liveBadge, { backgroundColor: 'rgba(56, 189, 248, 0.2)', borderColor: 'rgba(56, 189, 248, 0.4)' }]}>
+                      <Ionicons name="time-outline" size={12} color="#38BDF8" />
+                      <Text style={[styles.liveBadgeText, { color: '#38BDF8' }]}>READY</Text>
+                    </View>
+                  )}
+                  <View style={styles.spatialBadge}>
+                    <Ionicons name="headset-outline" size={13} color="#4CD7F6" />
+                    <Text style={styles.spatialBadgeText}>Spatial Audio 3D</Text>
                   </View>
                 </View>
 
-                {/* Primary CTA */}
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={handleHeroJoin}
-                  style={styles.heroCtaWrap}
-                >
-                  <LinearGradient
-                    colors={['#4B8EFF', '#7C3AED']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.heroCtaGradient}
+                {/* Title & Info */}
+                <View style={styles.heroDetails}>
+                  <Text style={styles.heroCategory}>
+                    {featuredRoom.isStreaming ? 'FEATURED SCREENING' : 'ACTIVE WATCH PARTY'}
+                  </Text>
+                  <Text style={styles.heroTitle} numberOfLines={1}>
+                    {featuredRoom.name}
+                  </Text>
+
+                  <View style={styles.heroStatsRow}>
+                    <View style={styles.heroStatItem}>
+                      <MaterialIcons name="groups" size={15} color="#93C5FD" />
+                      <Text style={styles.heroStatText}>
+                        {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
+                      </Text>
+                    </View>
+                    <Text style={styles.heroStatDivider}>•</Text>
+                    <Text style={styles.heroHostText}>
+                      Host: <Text style={styles.heroHostName}>{hostName}</Text>
+                    </Text>
+                    {featuredRoom.roomId ? (
+                      <>
+                        <Text style={styles.heroStatDivider}>•</Text>
+                        <View style={styles.heroStatItem}>
+                          <MaterialIcons name="tag" size={13} color="#4CD7F6" />
+                          <Text style={styles.heroTimeText}>
+                            {String(featuredRoom.roomId).substring(0, 8)}
+                          </Text>
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
+
+                  {/* Primary CTA */}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => onRoomPress(featuredRoom)}
+                    style={styles.heroCtaWrap}
                   >
-                    <Ionicons name="play" size={20} color="#FFF" />
-                    <Text style={styles.heroCtaText}>Join Party Now</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
+                    <LinearGradient
+                      colors={['#4B8EFF', '#7C3AED']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.heroCtaGradient}
+                    >
+                      <Ionicons
+                        name={featuredRoom.isStreaming ? 'play' : 'enter-outline'}
+                        size={18}
+                        color="#FFF"
+                      />
+                      <Text style={styles.heroCtaText}>
+                        {featuredRoom.isStreaming ? 'Join Party Now' : 'Enter Room'}
+                      </Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </LinearGradient>
+            );
+
+            return (
+              <View style={styles.heroWrap}>
+                {featuredRoom.thumbnail ? (
+                  <ImageBackground
+                    source={{ uri: featuredRoom.thumbnail }}
+                    style={styles.heroBackground}
+                    imageStyle={{ borderRadius: 20 }}
+                  >
+                    {content}
+                  </ImageBackground>
+                ) : (
+                  <View style={[styles.heroBackground, styles.heroFallbackBg]}>
+                    {content}
+                  </View>
+                )}
               </View>
-            </LinearGradient>
-          </ImageBackground>
-        </View>
+            );
+          })()
+        ) : (
+          <View style={styles.heroWrap}>
+            <View style={[styles.heroBackground, styles.heroFallbackBg]}>
+              <LinearGradient
+                colors={['rgba(30, 27, 75, 0.95)', 'rgba(9, 10, 18, 0.98)']}
+                style={styles.heroGradient}
+              >
+                <View style={styles.heroBadgeRow}>
+                  <View style={[styles.spatialBadge, { backgroundColor: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.3)' }]}>
+                    <Ionicons name="sparkles" size={13} color="#FBBF24" />
+                    <Text style={[styles.spatialBadgeText, { color: '#FBBF24' }]}>PREMIERE LOUNGE</Text>
+                  </View>
+                  <View style={styles.spatialBadge}>
+                    <Ionicons name="headset-outline" size={13} color="#4CD7F6" />
+                    <Text style={styles.spatialBadgeText}>Spatial Audio 3D</Text>
+                  </View>
+                </View>
+
+                <View style={styles.heroDetails}>
+                  <Text style={styles.heroCategory}>WATCH PARTY SYNC</Text>
+                  <Text style={styles.heroTitle}>Host a Live Screening</Text>
+                  <Text style={styles.heroEmptySubtext}>
+                    Stream videos in real-time sync with friends, crystal-clear audio, and interactive chat.
+                  </Text>
+
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => navigation.navigate('CreateRoom')}
+                    style={styles.heroCtaWrap}
+                  >
+                    <LinearGradient
+                      colors={['#0066FF', '#7C3AED']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.heroCtaGradient}
+                    >
+                      <Ionicons name="add-circle-outline" size={18} color="#FFF" />
+                      <Text style={styles.heroCtaText}>Create Watch Party</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </LinearGradient>
+            </View>
+          </View>
+        )}
 
         {/* ── JOIN VIA ROOM CODE ─────────────────────────────────── */}
         <View style={styles.codeSection}>
@@ -886,6 +980,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  heroFallbackBg: {
+    backgroundColor: '#0F0F1A',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  heroEmptySubtext: {
+    color: '#94A3B8',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 14,
   },
 
   // ── Code Section ──────────────────

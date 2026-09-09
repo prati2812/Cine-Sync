@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,40 +9,161 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  StatusBar,
+  Animated,
+  ActivityIndicator,
+  Dimensions,
 } from 'react-native';
-import { auth, database } from '../../../config/firebase';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSelector } from 'react-redux';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
+import Slider from '@react-native-community/slider';
+import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
-import { useSelector } from 'react-redux';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const RANDOM_TITLES = [
+  'Friday Night Sci-Fi Marathon 🚀',
+  'Cosmic 4K Deep Sync 🌌',
+  'Cyberpunk Anime Binge ⚡',
+  'Retro Classics & Popcorn 🍿',
+  'Neon Midnight Screening 🎬',
+  'Champions League Live Sync ⚽',
+  'Anime Cinema Cozy Watch 🌿',
+  'Synthwave Music Chillout 🎵',
+  'Sci-Fi Mind-Bender 🌀',
+  '4K IMAX Theater Party 🍿',
+];
+
+const ATMOSPHERE_GENRES = [
+  { icon: '🍿', label: 'Movies' },
+  { icon: '⚡', label: 'Anime' },
+  { icon: '🎵', label: 'Music Videos' },
+  { icon: '⚽', label: 'Sports' },
+  { icon: '🎮', label: 'Gaming' },
+  { icon: '✨', label: 'Custom' },
+];
 
 const CreateRoomScreen = ({ navigation, route }) => {
+  const insets = useSafeAreaInsets();
   const editingRoom = route.params?.room;
   const isEditing = !!editingRoom;
 
   const loggedInUser = useSelector(state => state.user.user);
 
-  const [roomName, setRoomName] = useState(editingRoom?.name || '');
-  const [inviteEmails, setInviteEmails] = useState(
-    editingRoom?.participants || [],
-  );
-  const [currentEmail, setCurrentEmail] = useState('');
-  const [streamUrl, setStreamUrl] = useState(editingRoom?.streamUrl || '');
-  const [selectedIcon, setSelectedIcon] = useState(
-    editingRoom?.thumbnail || '🎬',
-  );
+  // Dynamic notch protection padding
+  const safeTopPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
+  ) + 8;
 
-  const ROOM_ICONS = [
-    { icon: '🎬', label: 'Movie' },
-    { icon: '🎮', label: 'Gaming' },
-    { icon: '🎵', label: 'Music' },
-    { icon: '📺', label: 'TV Show' },
-    { icon: '🎨', label: 'Art' },
-    { icon: '📚', label: 'Study' },
-    { icon: '💬', label: 'Chat' },
-    { icon: '🎪', label: 'Event' },
-  ];
+  // Form states
+  const [streamUrl, setStreamUrl] = useState(
+    editingRoom?.streamUrl || 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+  );
+  const [roomName, setRoomName] = useState(
+    editingRoom?.name || 'Friday Night Sci-Fi Marathon 🚀'
+  );
+  const [selectedGenre, setSelectedGenre] = useState(
+    ATMOSPHERE_GENRES.find(g => g.label === editingRoom?.genre) || ATMOSPHERE_GENRES[0]
+  );
+  const [isPrivate, setIsPrivate] = useState(
+    editingRoom?.isPrivate !== undefined ? editingRoom.isPrivate : true
+  );
+  const [pin, setPin] = useState(editingRoom?.pin || '8429');
+  const [capacity, setCapacity] = useState(editingRoom?.maxCapacity || 12);
+  const [hostOnlyControl, setHostOnlyControl] = useState(
+    editingRoom?.hostOnlyControl !== undefined ? editingRoom.hostOnlyControl : true
+  );
+  const [spatialVoice, setSpatialVoice] = useState(
+    editingRoom?.spatialVoice !== undefined ? editingRoom.spatialVoice : true
+  );
+  const [floatingReactions, setFloatingReactions] = useState(
+    editingRoom?.floatingReactions !== undefined ? editingRoom.floatingReactions : true
+  );
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Email invitations (backwards compatibility)
+  const [inviteEmails, setInviteEmails] = useState(editingRoom?.participants || []);
+  const [showEmailInvite, setShowEmailInvite] = useState(false);
+  const [currentEmail, setCurrentEmail] = useState('');
+
+  // Pulsing dot animation for P2P Live Hub
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.35,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulseAnim]);
+
+  // Actions
+  const handleRandomizeTitle = () => {
+    const available = RANDOM_TITLES.filter(t => t !== roomName);
+    const chosen = available[Math.floor(Math.random() * available.length)];
+    setRoomName(chosen);
+  };
+
+  const handleRegeneratePin = () => {
+    const newPin = Math.floor(1000 + Math.random() * 9000).toString();
+    setPin(newPin);
+  };
+
+  const handlePasteUrl = async () => {
+    try {
+      let ClipboardModule = null;
+      try {
+        ClipboardModule = require('@react-native-clipboard/clipboard').default;
+      } catch (err) {
+        // Native module not registered in the currently running binary
+      }
+
+      if (ClipboardModule && typeof ClipboardModule.getString === 'function') {
+        const text = await ClipboardModule.getString();
+        if (text && text.trim().length > 0) {
+          setStreamUrl(text.trim());
+          return;
+        } else {
+          Alert.alert('Clipboard Empty', 'No text found in clipboard.');
+          return;
+        }
+      }
+
+      Alert.alert(
+        'Paste Link',
+        'Direct clipboard access requires rebuilding the app binary. You can paste your stream link directly into the input field.',
+        [{ text: 'OK' }]
+      );
+    } catch (e) {
+      console.warn('Clipboard paste error:', e);
+      Alert.alert(
+        'Paste Link',
+        'You can paste your stream link directly into the input field.'
+      );
+    }
+  };
+
+  const handleClearUrl = () => {
+    setStreamUrl('');
+  };
+
+  const decrementCapacity = () => setCapacity(c => Math.max(2, c - 1));
+  const incrementCapacity = () => setCapacity(c => Math.min(50, c + 1));
 
   const checkUserExists = async email => {
     try {
@@ -53,40 +174,40 @@ const CreateRoomScreen = ({ navigation, route }) => {
         .once('value');
       return snapshot.exists();
     } catch (error) {
-      console.log('Neww Dataabase error:', error);
+      console.log('Database verify user error:', error);
       return false;
     }
   };
 
   const addEmail = async () => {
-    if (!currentEmail) return;
+    if (!currentEmail.trim()) return;
+    const target = currentEmail.trim().toLowerCase();
 
-    if (!currentEmail.includes('@')) {
+    if (!target.includes('@')) {
       Alert.alert('Invalid Email', 'Please enter a valid email address');
       return;
     }
 
-    if (inviteEmails.includes(currentEmail)) {
+    if (inviteEmails.includes(target)) {
       Alert.alert('Duplicate Email', 'This email has already been added');
       return;
     }
 
-    if (currentEmail === auth().currentUser?.email) {
+    if (target === auth().currentUser?.email?.toLowerCase()) {
       Alert.alert('Invalid Invitation', 'You cannot invite yourself');
       return;
     }
 
     try {
-      const userExists = await checkUserExists(currentEmail);
-
+      const userExists = await checkUserExists(target);
       if (userExists) {
-        setInviteEmails([...inviteEmails, currentEmail]);
+        setInviteEmails([...inviteEmails, target]);
         setCurrentEmail('');
       } else {
         Alert.alert(
           'User Not Found',
-          'This user is not registered in the app. Only registered users can be invited.',
-          [{ text: 'OK', onPress: () => setCurrentEmail('') }],
+          'This user is not registered in Cine-Sync. Only registered users can be invited.',
+          [{ text: 'OK', onPress: () => setCurrentEmail('') }]
         );
       }
     } catch (error) {
@@ -96,12 +217,12 @@ const CreateRoomScreen = ({ navigation, route }) => {
   };
 
   const removeEmail = emailToRemove => {
-    setInviteEmails(inviteEmails.filter(email => email !== emailToRemove));
+    setInviteEmails(inviteEmails.filter(e => e !== emailToRemove));
   };
 
   const createRoom = async () => {
-    if (!roomName || !streamUrl) {
-      Alert.alert('Error', 'Please fill in all required fields');
+    if (!roomName.trim() || !streamUrl.trim()) {
+      Alert.alert('Required Fields', 'Please enter a Room Name and Stream Link.');
       return;
     }
 
@@ -109,422 +230,1207 @@ const CreateRoomScreen = ({ navigation, route }) => {
     const user = auth().currentUser;
 
     if (!user) {
-      Alert.alert('Error', 'You must be logged in to create a room');
+      Alert.alert('Authentication Error', 'You must be logged in to create a room');
       return;
     }
 
+    setIsCreating(true);
+
     try {
-      const invalidEmails = [];
-      for (const email of inviteEmails) {
-        const exists = await checkUserExists(email);
-        if (!exists) {
-          invalidEmails.push(email);
-        }
-      }
-
-      if (invalidEmails.length > 0) {
-        Alert.alert(
-          'Invalid Participants',
-          `Some invited users are no longer registered: ${invalidEmails.join(
-            ', ',
-          )}. Please remove them and try again.`,
-        );
-        return;
-      }
-
-      const roomId = isEditing
-        ? editingRoom.roomId
-        : `room_${Date.now()}`;
+      const roomId = isEditing ? editingRoom.roomId : `room_${Date.now()}`;
       const roomRef = db.ref(`rooms/${roomId}`);
 
       const roomData = {
         roomId: roomId,
-        name: roomName,
+        name: roomName.trim(),
         creator: isEditing
           ? editingRoom.creator
           : {
-            uid: user.uid,
-            email: user.email,
-            userName: loggedInUser?.username || 'Anonymous',
-          },
-        streamUrl: streamUrl,
+              uid: user.uid,
+              email: user.email,
+              userName: loggedInUser?.username || 'Host',
+            },
+        streamUrl: streamUrl.trim(),
         participants: [...inviteEmails],
-        thumbnail: selectedIcon,
-        createdAt: isEditing
-          ? editingRoom.createdAt
-          : new Date().toISOString(),
+        thumbnail: selectedGenre.icon || '🎬',
+        genre: selectedGenre.label || 'Movies',
+        isPrivate: isPrivate,
+        pin: isPrivate ? pin : null,
+        maxCapacity: capacity,
+        hostOnlyControl: hostOnlyControl,
+        spatialVoice: spatialVoice,
+        floatingReactions: floatingReactions,
+        createdAt: isEditing ? editingRoom.createdAt : new Date().toISOString(),
         status: 'active',
       };
-
-      console.log('Newwww Dataaa', roomData, loggedInUser);
 
       await roomRef.set(roomData);
 
       navigation.replace('WaitingScreen', {
         roomId: roomId,
-        roomName: roomName,
-        streamUrl: streamUrl,
+        roomName: roomName.trim(),
+        streamUrl: streamUrl.trim(),
       });
     } catch (error) {
       console.error('Error saving room:', error);
       Alert.alert(
         'Error',
-        `Failed to ${isEditing ? 'update' : 'create'} room. Please try again.`,
+        `Failed to ${isEditing ? 'update' : 'create'} screening room. Please try again.`
       );
+    } finally {
+      setIsCreating(false);
     }
   };
 
-  // ────────────────────────────────────────────────────────────
-  //  Render
-  // ────────────────────────────────────────────────────────────
+  // URL Type Detection badge helper
+  const isYouTube = streamUrl.toLowerCase().includes('youtube.com') || streamUrl.toLowerCase().includes('youtu.be');
+  const isDirectMedia = streamUrl.toLowerCase().includes('.mp4') || streamUrl.toLowerCase().includes('.m3u8') || streamUrl.toLowerCase().includes('hls');
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      {/* ── Header ─────────────────────────────────────────── */}
-      <View style={styles.header}>
+    <View style={styles.screenWrap}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+
+      {/* ── TOP HEADER BAR (Safe Area & Navigation) ── */}
+      <View style={[styles.topHeaderBar, { paddingTop: safeTopPadding }]}>
         <TouchableOpacity
-          style={styles.closeButton}
+          style={styles.headerIconButton}
           onPress={() => navigation.goBack()}
-          activeOpacity={0.7}>
-          <MaterialIcons name="close" size={20} color={colors.TITLE_COLOR} />
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="arrow-back-ios-new" size={20} color={colors.TITLE_COLOR} />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Ionicons name="film" size={18} color={colors.FILM_GOLD} />
-          <Text style={styles.headerTitle}>
-            {isEditing ? 'Edit Room' : 'New Screening Room'}
-          </Text>
-        </View>
-        <View style={{ width: 38 }} />
+
+        <Text style={styles.headerTitleText} numberOfLines={1}>
+          {isEditing ? 'Edit Party' : 'Create Party'}
+        </Text>
+
+        <TouchableOpacity
+          style={styles.headerIconButton}
+          onPress={() => Alert.alert('Options', 'Room creation shortcuts and template manager')}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="more-vert" size={22} color={colors.TITLE_COLOR} />
+        </TouchableOpacity>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}>
-        {/* ── Room Name ──────────────────────────────────── */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Room Name</Text>
-          <View style={styles.inputWrapper}>
-            <MaterialIcons
-              name="movie-creation"
-              size={20}
-              color={colors.FILM_GOLD}
-            />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Enter room name"
-              placeholderTextColor={colors.MUTED_COLOR}
-              value={roomName}
-              onChangeText={setRoomName}
-            />
-          </View>
-        </View>
-
-        {/* ── Room Icon ──────────────────────────────────── */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Room Icon</Text>
-          <View style={styles.iconGrid}>
-            {ROOM_ICONS.map(item => (
-              <TouchableOpacity
-                key={item.icon}
-                activeOpacity={0.8}
-                onPress={() => setSelectedIcon(item.icon)}>
-                {selectedIcon === item.icon ? (
-                  <LinearGradient
-                    colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.iconOptionActive}>
-                    <Text style={styles.iconEmoji}>{item.icon}</Text>
-                    <Text style={styles.iconLabelActive}>{item.label}</Text>
-                  </LinearGradient>
-                ) : (
-                  <View style={styles.iconOption}>
-                    <Text style={styles.iconEmoji}>{item.icon}</Text>
-                    <Text style={styles.iconLabel}>{item.label}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* ── Invite Users ───────────────────────────────── */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Invite Viewers</Text>
-          <View style={styles.inputWrapper}>
-            <MaterialIcons
-              name="person-add"
-              size={20}
-              color={colors.CYAN_ACCENT}
-            />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Enter email address"
-              placeholderTextColor={colors.MUTED_COLOR}
-              value={currentEmail}
-              onChangeText={setCurrentEmail}
-              keyboardType="email-address"
-              onSubmitEditing={addEmail}
-              autoCapitalize="none"
-            />
+      <KeyboardAvoidingView
+        style={styles.keyboardContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          style={styles.scrollArea}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── TOP SUB-BAR: CLOSE + P2P STATUS BADGE + DRAFTS ── */}
+          <View style={styles.subMenuBar}>
             <TouchableOpacity
+              style={styles.subCloseBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.75}
+            >
+              <MaterialIcons name="close" size={20} color={colors.TITLE_COLOR} />
+            </TouchableOpacity>
+
+            <View style={styles.p2pStatusPill}>
+              <Animated.View style={[styles.p2pPingDot, { opacity: pulseAnim }]} />
+              <Text style={styles.p2pStatusText}>P2P LOW-LATENCY HUB</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.draftsPillBtn}
+              onPress={() => Alert.alert('Drafts', 'No saved room drafts found.')}
               activeOpacity={0.8}
-              onPress={addEmail}>
-              <LinearGradient
-                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.addBtn}>
-                <Text style={styles.addBtnText}>Add</Text>
-              </LinearGradient>
+            >
+              <Text style={styles.draftsBtnText}>Drafts</Text>
             </TouchableOpacity>
           </View>
 
-          {inviteEmails.length > 0 && (
-            <View style={styles.chipsWrap}>
-              {inviteEmails.map(email => (
-                <View key={email} style={styles.emailChip}>
-                  <MaterialIcons
-                    name="person"
-                    size={14}
-                    color={colors.PRIMARY_COLOR}
-                  />
-                  <Text style={styles.emailChipText}>{email}</Text>
+          {/* ── HERO CINEMA AMBIENT CARD ── */}
+          <View style={styles.heroAmbientCard}>
+            {/* Background Ambient Glow Accents */}
+            <View style={styles.glowOrbTopRight} />
+            <View style={styles.glowOrbBottomLeft} />
+
+            <View style={styles.heroContentRow}>
+              <View style={styles.heroTextCol}>
+                <Text style={styles.heroEngineTag}>SYNC ENGINE V2.4</Text>
+                <Text style={styles.heroHeading}>Initialize VIP Screening</Text>
+                <Text style={styles.heroSubtitle}>
+                  Configure your synchronized theater room with sub-second buffer parity.
+                </Text>
+              </View>
+
+              <View style={styles.heroIconCircle}>
+                <MaterialIcons name="movie-filter" size={26} color={colors.PRIMARY_COLOR} />
+              </View>
+            </View>
+          </View>
+
+          {/* ── SECTION 1: MEDIA SOURCE URL ── */}
+          <View style={styles.formSection}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={styles.sectionHeaderLeft}>
+                <MaterialIcons name="link" size={16} color={colors.CYAN_ACCENT} />
+                <Text style={styles.sectionLabelText}>VIDEO LINK OR STREAM URL</Text>
+              </View>
+              <View style={styles.instantSyncBadge}>
+                <MaterialIcons name="bolt" size={14} color={colors.CYAN_ACCENT} />
+                <Text style={styles.instantSyncText}>Instant Sync</Text>
+              </View>
+            </View>
+
+            {/* Elevated Capsule URL Input Container */}
+            <View style={styles.urlInputCapsule}>
+              <View style={styles.urlInputIconWrap}>
+                <MaterialIcons name="smart-display" size={20} color={colors.CYAN_ACCENT} />
+              </View>
+              <TextInput
+                style={styles.urlTextInput}
+                placeholder="Paste YouTube, MP4, HLS stream link..."
+                placeholderTextColor={colors.MUTED_COLOR}
+                value={streamUrl}
+                onChangeText={setStreamUrl}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <View style={styles.urlActionRow}>
+                {streamUrl.length > 0 && (
                   <TouchableOpacity
-                    onPress={() => removeEmail(email)}
-                    style={styles.chipRemoveBtn}
-                    activeOpacity={0.7}>
-                    <MaterialIcons name="close" size={14} color={colors.SUB_TITLE_COLOR} />
+                    style={styles.urlClearBtn}
+                    onPress={handleClearUrl}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="cancel" size={18} color={colors.SUB_TITLE_COLOR} />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={styles.urlPasteBtn}
+                  onPress={handlePasteUrl}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="content-paste" size={13} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.urlPasteText}>Paste</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Platform Source Badges & Validation */}
+            <View style={styles.platformBadgeRow}>
+              <View style={styles.platformBadgeGroup}>
+                <View style={[styles.platformPill, isYouTube && styles.platformPillActive]}>
+                  <MaterialIcons name="play-circle" size={13} color={colors.LIVE_RED} />
+                  <Text style={styles.platformPillText}>YouTube</Text>
+                </View>
+                <View style={styles.platformPill}>
+                  <MaterialIcons name="live-tv" size={13} color={colors.PRIMARY_COLOR} />
+                  <Text style={styles.platformPillText}>OTT Cast</Text>
+                </View>
+                <View style={[styles.platformPill, isDirectMedia && styles.platformPillActive]}>
+                  <MaterialIcons name="code" size={13} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.platformPillText}>Direct MP4/HLS</Text>
+                </View>
+              </View>
+
+              {streamUrl.length > 5 && (
+                <View style={styles.streamSyncedBadge}>
+                  <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.streamSyncedText}>Direct Stream Synced</Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* ── SECTION 2: ROOM DETAILS & ATMOSPHERE ── */}
+          <View style={styles.formSection}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={styles.sectionHeaderLeft}>
+                <MaterialIcons name="drive-file-rename-outline" size={16} color={colors.PRIMARY_COLOR} />
+                <Text style={styles.sectionLabelText}>ROOM NAME</Text>
+              </View>
+              <Text style={styles.charCounterText}>{roomName.length} / 50</Text>
+            </View>
+
+            {/* Room Name Input with Randomize Dice */}
+            <View style={styles.roomNameCapsule}>
+              <TextInput
+                style={styles.roomNameInput}
+                placeholder="Name your party room..."
+                placeholderTextColor={colors.MUTED_COLOR}
+                value={roomName}
+                onChangeText={setRoomName}
+                maxLength={50}
+              />
+              <TouchableOpacity
+                style={styles.randomizeBtn}
+                onPress={handleRandomizeTitle}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="casino" size={22} color={colors.SUB_TITLE_COLOR} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Atmosphere Genre Carousel */}
+            <View style={styles.genreCarouselWrap}>
+              <Text style={styles.genreCarouselLabel}>SELECT ATMOSPHERE GENRE</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.genreScrollTrack}
+              >
+                {ATMOSPHERE_GENRES.map(genre => {
+                  const isSelected = selectedGenre.label === genre.label;
+                  return (
+                    <TouchableOpacity
+                      key={genre.label}
+                      style={[styles.genrePill, isSelected && styles.genrePillSelected]}
+                      onPress={() => setSelectedGenre(genre)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.genreIconEmoji}>{genre.icon}</Text>
+                      <Text style={[styles.genreLabelText, isSelected && styles.genreLabelTextSelected]}>
+                        {genre.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+
+          {/* ── SECTION 3: PRIVACY & ACCESS CONTROL CARD ── */}
+          <View style={styles.cardContainer}>
+            {/* Card Header */}
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardHeaderIconWrap}>
+                <MaterialIcons name="lock" size={18} color={colors.PRIMARY_COLOR} />
+              </View>
+              <View style={styles.cardHeaderTextCol}>
+                <Text style={styles.cardHeaderTitle}>Privacy & Security</Text>
+                <Text style={styles.cardHeaderSubtitle}>Gatekeep your party with VIP passcode</Text>
+              </View>
+            </View>
+
+            {/* Private Room Toggle Switch */}
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextCol}>
+                <Text style={styles.toggleTitle}>Private Room (PIN Required)</Text>
+                <Text style={styles.toggleSubtitle}>Only invited viewers with valid PIN can access</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.switchTrack, isPrivate ? styles.switchTrackActivePurple : styles.switchTrackInactive]}
+                onPress={() => setIsPrivate(!isPrivate)}
+              >
+                <View style={[styles.switchThumb, isPrivate && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+
+            {/* 4-Digit Security PIN Digits */}
+            {isPrivate && (
+              <View style={styles.pinSectionWrap}>
+                <View style={styles.pinHeaderRow}>
+                  <Text style={styles.pinSectionLabel}>ROOM ENTRANCE PIN</Text>
+                  <TouchableOpacity
+                    style={styles.pinRegenerateBtn}
+                    onPress={handleRegeneratePin}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="autorenew" size={14} color={colors.PRIMARY_COLOR} />
+                    <Text style={styles.pinRegenerateText}>Regenerate</Text>
                   </TouchableOpacity>
                 </View>
-              ))}
+
+                {/* 4 Digit Boxes */}
+                <View style={styles.pinDigitsRow}>
+                  {pin.slice(0, 4).padEnd(4, '0').split('').map((digit, idx) => (
+                    <View key={idx} style={styles.pinDigitBox}>
+                      <Text style={styles.pinDigitText}>{digit}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Max Capacity Stepper & Slider */}
+            <View style={styles.capacitySection}>
+              <View style={styles.capacityHeaderRow}>
+                <View>
+                  <Text style={styles.toggleTitle}>Max Room Capacity</Text>
+                  <Text style={styles.toggleSubtitle}>Recommended 10–16 for zero audio jitter</Text>
+                </View>
+
+                {/* Numeric Stepper */}
+                <View style={styles.stepperContainer}>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={decrementCapacity}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="remove" size={18} color={colors.TITLE_COLOR} />
+                  </TouchableOpacity>
+                  <Text style={styles.stepperValueText}>{capacity}</Text>
+                  <TouchableOpacity
+                    style={styles.stepperBtn}
+                    onPress={incrementCapacity}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="add" size={18} color={colors.TITLE_COLOR} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Slider Track */}
+              <View style={styles.sliderContainer}>
+                <Slider
+                  style={styles.sliderComponent}
+                  minimumValue={2}
+                  maximumValue={50}
+                  step={1}
+                  value={capacity}
+                  onValueChange={v => setCapacity(Math.round(v))}
+                  minimumTrackTintColor={colors.PRIMARY_COLOR}
+                  maximumTrackTintColor={colors.SURFACE_ELEVATED}
+                  thumbTintColor={colors.TITLE_COLOR}
+                />
+                <View style={styles.sliderLabelsRow}>
+                  <Text style={styles.sliderMinLabel}>2 Seats</Text>
+                  <Text style={styles.sliderMaxLabel}>50 Seats</Text>
+                </View>
+              </View>
             </View>
-          )}
-        </View>
-
-        {/* ── Stream URL ─────────────────────────────────── */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Stream URL</Text>
-          <View style={styles.inputWrapper}>
-            <MaterialIcons name="link" size={20} color={colors.PURPLE_ACCENT} />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Paste YouTube or stream URL"
-              placeholderTextColor={colors.MUTED_COLOR}
-              value={streamUrl}
-              onChangeText={setStreamUrl}
-            />
           </View>
-        </View>
-      </ScrollView>
 
-      {/* ── Footer ─────────────────────────────────────────── */}
-      <View style={styles.footer}>
-        <TouchableOpacity activeOpacity={0.85} onPress={createRoom}>
+          {/* ── SECTION 4: SYNC PREFERENCES & HOST PRIVILEGES ── */}
+          <View style={styles.cardContainer}>
+            {/* Card Header */}
+            <View style={styles.cardHeaderRow}>
+              <View style={[styles.cardHeaderIconWrap, { backgroundColor: 'rgba(6, 182, 212, 0.12)' }]}>
+                <MaterialIcons name="tune" size={18} color={colors.CYAN_ACCENT} />
+              </View>
+              <View style={styles.cardHeaderTextCol}>
+                <Text style={styles.cardHeaderTitle}>Playback & Room Rules</Text>
+                <Text style={styles.cardHeaderSubtitle}>Stream controls & audience permissions</Text>
+              </View>
+            </View>
+
+            {/* Toggle 1: Host-Only Playback Control */}
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextCol}>
+                <View style={styles.ruleTitleWithIcon}>
+                  <Text style={styles.toggleTitle}>Host Only Playback Control</Text>
+                  <MaterialIcons name="verified-user" size={16} color={colors.CYAN_ACCENT} style={{ marginLeft: 6 }} />
+                </View>
+                <Text style={styles.toggleSubtitle}>Only host can play, pause, seek, and shift resolution</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.switchTrack, hostOnlyControl ? styles.switchTrackActiveCyan : styles.switchTrackInactive]}
+                onPress={() => setHostOnlyControl(!hostOnlyControl)}
+              >
+                <View style={[styles.switchThumb, hostOnlyControl && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Toggle 2: Spatial Voice Audio */}
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextCol}>
+                <View style={styles.ruleTitleWithIcon}>
+                  <Text style={styles.toggleTitle}>Spatial Voice Audio</Text>
+                  <MaterialIcons name="mic" size={16} color={colors.PRIMARY_COLOR} style={{ marginLeft: 6 }} />
+                </View>
+                <Text style={styles.toggleSubtitle}>Low-latency acoustic channel with echo cancellation</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.switchTrack, spatialVoice ? styles.switchTrackActivePurple : styles.switchTrackInactive]}
+                onPress={() => setSpatialVoice(!spatialVoice)}
+              >
+                <View style={[styles.switchThumb, spatialVoice && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Toggle 3: Floating Reactions & Haptics */}
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextCol}>
+                <View style={styles.ruleTitleWithIcon}>
+                  <Text style={styles.toggleTitle}>Floating Reactions & Haptics</Text>
+                  <MaterialIcons name="celebration" size={16} color={colors.CYAN_ACCENT} style={{ marginLeft: 6 }} />
+                </View>
+                <Text style={styles.toggleSubtitle}>Render interactive live reaction cascades across overlay</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.switchTrack, floatingReactions ? styles.switchTrackActivePurple : styles.switchTrackInactive]}
+                onPress={() => setFloatingReactions(!floatingReactions)}
+              >
+                <View style={[styles.switchThumb, floatingReactions && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* ── OPTIONAL: INVITE VIEWERS DIRECTLY BY EMAIL ── */}
+          <View style={styles.cardContainer}>
+            <TouchableOpacity
+              style={styles.inviteToggleHeader}
+              onPress={() => setShowEmailInvite(!showEmailInvite)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.cardHeaderLeft}>
+                <View style={[styles.cardHeaderIconWrap, { backgroundColor: 'rgba(0, 200, 83, 0.12)' }]}>
+                  <MaterialIcons name="person-add" size={18} color={colors.ACCEPT_GREEN} />
+                </View>
+                <View>
+                  <Text style={styles.cardHeaderTitle}>Direct Invites ({inviteEmails.length})</Text>
+                  <Text style={styles.cardHeaderSubtitle}>Pre-authorize Cine-Sync members</Text>
+                </View>
+              </View>
+              <MaterialIcons
+                name={showEmailInvite ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                size={24}
+                color={colors.SUB_TITLE_COLOR}
+              />
+            </TouchableOpacity>
+
+            {showEmailInvite && (
+              <View style={styles.inviteBody}>
+                <View style={styles.emailInputRow}>
+                  <TextInput
+                    style={styles.emailTextInput}
+                    placeholder="Enter friend's registered email"
+                    placeholderTextColor={colors.MUTED_COLOR}
+                    value={currentEmail}
+                    onChangeText={setCurrentEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                  <TouchableOpacity
+                    style={styles.addEmailBtn}
+                    onPress={addEmail}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.addEmailBtnText}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {inviteEmails.map((email, idx) => (
+                  <View key={idx} style={styles.invitedEmailChip}>
+                    <MaterialIcons name="alternate-email" size={14} color={colors.CYAN_ACCENT} />
+                    <Text style={styles.invitedEmailText}>{email}</Text>
+                    <TouchableOpacity onPress={() => removeEmail(email)}>
+                      <MaterialIcons name="close" size={16} color={colors.LIVE_RED} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Bottom spacing so content never gets hidden behind sticky CTA button */}
+          <View style={{ height: 120 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* ── STICKY BOTTOM FLOATING CTA BAR ── */}
+      <View style={[styles.stickyBottomBar, { paddingBottom: Math.max(insets.bottom, 14) }]}>
+        <TouchableOpacity
+          style={styles.createCtaButton}
+          onPress={createRoom}
+          activeOpacity={0.88}
+          disabled={isCreating}
+        >
           <LinearGradient
-            colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+            colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
-            style={styles.createBtn}>
-            <Ionicons
-              name={isEditing ? 'checkmark-circle' : 'add-circle'}
-              size={22}
-              color="#FFF"
-            />
-            <Text style={styles.createBtnText}>
-              {isEditing ? 'Save Changes' : 'Create Room'}
-            </Text>
+            style={styles.createCtaGradient}
+          >
+            {isCreating ? (
+              <ActivityIndicator color={colors.TITLE_COLOR} size="small" />
+            ) : (
+              <>
+                <MaterialIcons name="theaters" size={24} color={colors.TITLE_COLOR} />
+                <Text style={styles.createCtaText}>
+                  {isEditing ? 'Update & Enter Room' : 'Create & Enter Room'}
+                </Text>
+                <MaterialIcons name="arrow-forward" size={20} color={colors.TITLE_COLOR} />
+              </>
+            )}
           </LinearGradient>
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 };
 
-// ──────────────────────────────────────────────────────────────
-//  Styles
-// ──────────────────────────────────────────────────────────────
+// ── STYLESHEET (Cine-Sync Dark Cinema Design System) ────────────
 const styles = StyleSheet.create({
-  container: {
+  screenWrap: {
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
-
-  // ── Header ────────────────────────
-  header: {
+  topHeaderBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 56 : 16,
-    paddingBottom: 16,
+    paddingBottom: 12,
+    backgroundColor: 'rgba(8, 8, 16, 0.95)',
     borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+    zIndex: 50,
   },
-  closeButton: {
+  headerIconButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitleText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  keyboardContainer: {
+    flex: 1,
+  },
+  scrollArea: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+
+  // Sub menu bar
+  subMenuBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  subCloseBtn: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 19,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  headerCenter: {
+  p2pStatusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.TITLE_COLOR,
+  p2pPingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.CYAN_ACCENT,
+    marginRight: 6,
   },
-
-  // ── Scroll Content ────────────────
-  content: {
-    padding: 20,
-    paddingBottom: 30,
+  p2pStatusText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
-
-  // ── Sections ──────────────────────
-  section: {
-    marginBottom: 26,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.TITLE_COLOR,
-    marginBottom: 10,
-    marginLeft: 2,
-    letterSpacing: 0.3,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
+  draftsPillBtn: {
     paddingHorizontal: 14,
-    height: 52,
-    gap: 10,
+    paddingVertical: 6,
+    borderRadius: 18,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  textInput: {
+  draftsBtnText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // Hero Card
+  heroAmbientCard: {
+    position: 'relative',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    overflow: 'hidden',
+  },
+  glowOrbTopRight: {
+    position: 'absolute',
+    top: -24,
+    right: -24,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(124, 58, 237, 0.2)',
+  },
+  glowOrbBottomLeft: {
+    position: 'absolute',
+    bottom: -24,
+    left: -24,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+  },
+  heroContentRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    zIndex: 2,
+  },
+  heroTextCol: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  heroEngineTag: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  heroHeading: {
+    color: colors.TITLE_COLOR,
+    fontSize: 19,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  heroSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  heroIconCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Section Headers
+  formSection: {
+    marginBottom: 20,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sectionLabelText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginLeft: 6,
+  },
+  instantSyncBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  instantSyncText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // URL Input Capsule
+  urlInputCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 24,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    height: 52,
+  },
+  urlInputIconWrap: {
+    paddingLeft: 4,
+    paddingRight: 8,
+  },
+  urlTextInput: {
     flex: 1,
     color: colors.TITLE_COLOR,
-    fontSize: 15,
-    fontWeight: '400',
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  urlActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  urlClearBtn: {
+    padding: 4,
+  },
+  urlPasteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    gap: 4,
+  },
+  urlPasteText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
   },
 
-  // ── Icon Grid ─────────────────────
-  iconGrid: {
+  // Platform Badges
+  platformBadgeRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingHorizontal: 4,
   },
-  iconOption: {
-    width: 76,
-    height: 76,
+  platformBadgeGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  platformPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
   },
-  iconOptionActive: {
-    width: 76,
-    height: 76,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
+  platformPillActive: {
+    borderColor: colors.PRIMARY_COLOR,
+    backgroundColor: 'rgba(0, 122, 255, 0.12)',
   },
-  iconEmoji: {
-    fontSize: 24,
-    marginBottom: 3,
-  },
-  iconLabel: {
+  platformPillText: {
     color: colors.SUB_TITLE_COLOR,
     fontSize: 10,
     fontWeight: '600',
-    textAlign: 'center',
   },
-  iconLabelActive: {
-    color: '#FFF',
+  streamSyncedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    gap: 4,
+  },
+  streamSyncedText: {
+    color: colors.CYAN_ACCENT,
     fontSize: 10,
     fontWeight: '700',
-    textAlign: 'center',
   },
 
-  // ── Add Button ────────────────────
-  addBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 10,
+  // Room Name
+  charCounterText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
   },
-  addBtnText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  // ── Email Chips ───────────────────
-  chipsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 12,
-    gap: 8,
-  },
-  emailChip: {
+  roomNameCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.CARD_COLOR,
-    paddingVertical: 7,
-    paddingLeft: 10,
-    paddingRight: 6,
-    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 24,
+    paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    height: 52,
+  },
+  roomNameInput: {
+    flex: 1,
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  randomizeBtn: {
+    padding: 4,
+  },
+
+  // Genre Carousel
+  genreCarouselWrap: {
+    marginTop: 14,
+  },
+  genreCarouselLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  genreScrollTrack: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 4,
+  },
+  genrePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     gap: 6,
   },
-  emailChipText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 13,
-    fontWeight: '500',
+  genrePillSelected: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    elevation: 4,
   },
-  chipRemoveBtn: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    justifyContent: 'center',
-    alignItems: 'center',
+  genreIconEmoji: {
+    fontSize: 14,
+  },
+  genreLabelText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  genreLabelTextSelected: {
+    color: colors.TITLE_COLOR,
+    fontWeight: '700',
   },
 
-  // ── Footer ────────────────────────
-  footer: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 36 : 20,
-    borderTopWidth: 1,
-    borderTopColor: colors.BORDER_SUBTLE,
+  // Cards (Privacy & Rules)
+  cardContainer: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  createBtn: {
-    height: 54,
-    borderRadius: 16,
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  cardHeaderIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(124, 58, 237, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
+    marginRight: 12,
   },
-  createBtnText: {
-    color: '#FFF',
+  cardHeaderTextCol: {
+    flex: 1,
+  },
+  cardHeaderTitle: {
+    color: colors.TITLE_COLOR,
     fontSize: 16,
     fontWeight: '700',
-    letterSpacing: 0.3,
+  },
+  cardHeaderSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    marginTop: 1,
+  },
+
+  // Toggles
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  toggleTextCol: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  ruleTitleWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  toggleTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  toggleSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  switchTrack: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  switchTrackActivePurple: {
+    backgroundColor: colors.PURPLE_ACCENT,
+    shadowColor: colors.PURPLE_ACCENT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  switchTrackActiveCyan: {
+    backgroundColor: colors.CYAN_ACCENT,
+    shadowColor: colors.CYAN_ACCENT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  switchTrackInactive: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  switchThumb: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.TITLE_COLOR,
+    shadowColor: colors.BACKGROUND_COLOR,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  switchThumbActive: {
+    alignSelf: 'flex-end',
+  },
+
+  // 4-Digit PIN
+  pinSectionWrap: {
+    marginTop: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  pinHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  pinSectionLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  pinRegenerateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  pinRegenerateText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  pinDigitsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  pinDigitBox: {
+    flex: 1,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(124, 58, 237, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pinDigitText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 22,
+    fontWeight: '800',
+  },
+
+  // Capacity
+  capacitySection: {
+    marginTop: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  capacityHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  stepperContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 20,
+    padding: 3,
+  },
+  stepperBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.SURFACE_COLOR,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stepperValueText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 16,
+    fontWeight: '800',
+    width: 36,
+    textAlign: 'center',
+  },
+  sliderContainer: {
+    marginTop: 4,
+  },
+  sliderComponent: {
+    width: '100%',
+    height: 36,
+  },
+  sliderLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -4,
+  },
+  sliderMinLabel: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  sliderMaxLabel: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+
+  // Invites Collapsible
+  inviteToggleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  inviteBody: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  emailInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  emailTextInput: {
+    flex: 1,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    height: 42,
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+  },
+  addEmailBtn: {
+    backgroundColor: colors.ACCEPT_GREEN,
+    paddingHorizontal: 16,
+    height: 42,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addEmailBtnText: {
+    color: colors.BACKGROUND_COLOR,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  invitedEmailChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginBottom: 6,
+    gap: 8,
+  },
+  invitedEmailText: {
+    flex: 1,
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+  },
+
+  // Sticky Bottom CTA Bar
+  stickyBottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: 'rgba(8, 8, 16, 0.92)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  createCtaButton: {
+    borderRadius: 28,
+    overflow: 'hidden',
+    shadowColor: colors.PURPLE_ACCENT,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  createCtaGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 56,
+    paddingHorizontal: 20,
+    gap: 10,
+  },
+  createCtaText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
   },
 });
 

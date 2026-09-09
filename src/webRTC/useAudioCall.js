@@ -5,6 +5,7 @@ import {
   RTCIceCandidate,
   RTCSessionDescription,
   mediaDevices,
+  MediaStream,
 } from 'react-native-webrtc';
 import { auth, database } from '../config/firebase';
 
@@ -13,6 +14,8 @@ const ICE_SERVERS = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
 };
 
@@ -30,6 +33,7 @@ export function useAudioCall(chatId) {
   const durationTimerRef = useRef(null);
   const callStateRef = useRef('idle'); // mirrors callState for closures
   const answerProcessedRef = useRef(false); // prevents duplicate setRemoteDescription
+  const candidateQueueRef = useRef([]); // holds ICE candidates received before remoteDescription is ready
 
   const [callState, setCallStateRaw] = useState('idle'); // idle | calling | incoming | connected
   const [callType, setCallType] = useState('audio'); // 'audio' | 'video'
@@ -80,13 +84,25 @@ export function useAudioCall(chatId) {
     const constraints = {
       audio: true,
       video: type === 'video'
-        ? { facingMode: 'user', width: 640, height: 480, frameRate: 30 }
+        ? { facingMode: 'user', frameRate: 30 }
         : false,
     };
     const stream = await mediaDevices.getUserMedia(constraints);
     localStreamRef.current = stream;
     setLocalStream(stream);
     return stream;
+  }, []);
+
+  const processCandidateQueue = useCallback(() => {
+    if (pc.current && pc.current.remoteDescription && candidateQueueRef.current.length > 0) {
+      console.log('[WebRTC] Flushing queued ICE candidates:', candidateQueueRef.current.length);
+      candidateQueueRef.current.forEach((candidate) => {
+        pc.current
+          .addIceCandidate(new RTCIceCandidate(candidate))
+          .catch(err => console.warn('[WebRTC] Failed to add queued ICE candidate:', err));
+      });
+      candidateQueueRef.current = [];
+    }
   }, []);
 
   const createPeerConnection = useCallback(() => {
@@ -96,17 +112,17 @@ export function useAudioCall(chatId) {
       const state = peer.connectionState;
       console.log('[WebRTC] Connection state:', state);
       if (state === 'connected') {
-        // Clear the timeout — we're connected
         if (callTimerRef.current) {
           clearTimeout(callTimerRef.current);
           callTimerRef.current = null;
         }
         setCallState('connected');
-        durationTimerRef.current = setInterval(() => {
-          setCallDuration(prev => prev + 1);
-        }, 1000);
+        if (!durationTimerRef.current) {
+          durationTimerRef.current = setInterval(() => {
+            setCallDuration(prev => prev + 1);
+          }, 1000);
+        }
       }
-      // Only cleanup on truly terminal states, NOT 'disconnected' (which can be transient)
       if (state === 'failed') {
         console.log('[WebRTC] Connection failed, cleaning up');
         setCallError('Connection failed');
@@ -115,14 +131,43 @@ export function useAudioCall(chatId) {
     };
 
     peer.oniceconnectionstatechange = () => {
-      console.log('[WebRTC] ICE state:', peer.iceConnectionState);
+      const iceState = peer.iceConnectionState;
+      console.log('[WebRTC] ICE state:', iceState);
+      if (iceState === 'connected' || iceState === 'completed') {
+        if (callTimerRef.current) {
+          clearTimeout(callTimerRef.current);
+          callTimerRef.current = null;
+        }
+        setCallState('connected');
+        if (!durationTimerRef.current) {
+          durationTimerRef.current = setInterval(() => {
+            setCallDuration(prev => prev + 1);
+          }, 1000);
+        }
+      }
     };
 
-    // Handle remote stream (for both audio and video)
+    // Both onaddstream and ontrack for maximum cross-platform compatibility
+    peer.onaddstream = (event) => {
+      console.log('[WebRTC] Received remote stream via onaddstream:', event.stream?.id);
+      if (event.stream) {
+        setRemoteStream(event.stream);
+      }
+    };
+
     peer.ontrack = (event) => {
-      console.log('[WebRTC] Received remote track:', event.track?.kind);
+      console.log('[WebRTC] Received remote track:', event.track?.kind, 'streams:', event.streams?.length);
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
+      } else if (event.track) {
+        setRemoteStream(prev => {
+          let stream = prev;
+          if (!stream) {
+            stream = new MediaStream();
+          }
+          stream.addTrack(event.track);
+          return stream;
+        });
       }
     };
 
@@ -135,12 +180,16 @@ export function useAudioCall(chatId) {
   const setupICECandidateSending = useCallback((peer) => {
     if (!chatId) return;
     const db = database();
-    const myUid = auth.currentUser?.uid;
+    const myUid = auth().currentUser?.uid;
+    if (!myUid) {
+      console.warn('[WebRTC] Cannot setup ICE candidate sending: no auth().currentUser');
+      return;
+    }
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('[WebRTC] Sending ICE candidate');
-        const candidateRef = db.ref(`calls/${chatId}/candidates/${myUid}`).push();
+        console.log('[WebRTC] Sending ICE candidate to Firebase');
+        const candidateRef = db.ref(`chats/${chatId}/call/candidates/${myUid}`).push();
         candidateRef.set(event.candidate.toJSON());
       }
     };
@@ -149,15 +198,20 @@ export function useAudioCall(chatId) {
   const listenForRemoteCandidates = useCallback((remoteUid) => {
     if (!chatId) return;
     const db = database();
-    const candidatesRef = db.ref(`calls/${chatId}/candidates/${remoteUid}`);
+    const candidatesRef = db.ref(`chats/${chatId}/call/candidates/${remoteUid}`);
 
     addFirebaseListener(candidatesRef, 'child_added', (snapshot) => {
       const candidate = snapshot.val();
-      if (candidate && pc.current) {
+      if (!candidate) return;
+
+      if (pc.current && pc.current.remoteDescription) {
         console.log('[WebRTC] Adding remote ICE candidate');
         pc.current
           .addIceCandidate(new RTCIceCandidate(candidate))
           .catch(err => console.warn('[WebRTC] Failed to add ICE candidate:', err));
+      } else {
+        console.log('[WebRTC] Queuing ICE candidate (remoteDescription pending)');
+        candidateQueueRef.current.push(candidate);
       }
     });
   }, [chatId, addFirebaseListener]);
@@ -184,6 +238,7 @@ export function useAudioCall(chatId) {
     if (pc.current) {
       pc.current.onicecandidate = null;
       pc.current.ontrack = null;
+      pc.current.onaddstream = null;
       pc.current.onconnectionstatechange = null;
       pc.current.oniceconnectionstatechange = null;
       pc.current.close();
@@ -192,6 +247,7 @@ export function useAudioCall(chatId) {
 
     removeAllListeners();
 
+    candidateQueueRef.current = [];
     answerProcessedRef.current = false;
     setCallState('idle');
     setCallDuration(0);
@@ -212,16 +268,15 @@ export function useAudioCall(chatId) {
     if (chatId && myUid) {
       try {
         // Write ended signal
-        await db.ref(`calls/${chatId}/ended`).set({
+        await db.ref(`chats/${chatId}/call/ended`).set({
           by: myUid,
           reason,
           timestamp: database.ServerValue.TIMESTAMP,
         });
-        // DO NOT remove the call node here — let the remote side see the 'ended'
-        // signal first. Schedule cleanup of Firebase data after a delay.
+        // Schedule cleanup of Firebase call data after a delay
         setTimeout(async () => {
           try {
-            await db.ref(`calls/${chatId}`).remove();
+            await db.ref(`chats/${chatId}/call`).remove();
           } catch (_) {}
         }, 3000);
       } catch (e) {
@@ -246,7 +301,7 @@ export function useAudioCall(chatId) {
       setCallState('calling');
 
       const db = database();
-      await db.ref(`calls/${chatId}`).remove();
+      await db.ref(`chats/${chatId}/call`).remove();
 
       // Get microphone (+ camera for video)
       const stream = await getLocalMediaStream(type);
@@ -269,7 +324,7 @@ export function useAudioCall(chatId) {
 
       // Write offer to Firebase (include callType so callee knows)
       console.log('[WebRTC] Saving offer to Firebase...');
-      await db.ref(`calls/${chatId}/offer`).set({
+      await db.ref(`chats/${chatId}/call/offer`).set({
         type: offer.type,
         sdp: offer.sdp,
         from: auth().currentUser.uid,
@@ -279,7 +334,7 @@ export function useAudioCall(chatId) {
 
       // Listen for answer
       answerProcessedRef.current = false;
-      const answerRef = db.ref(`calls/${chatId}/answer`);
+      const answerRef = db.ref(`chats/${chatId}/call/answer`);
       addFirebaseListener(answerRef, 'value', async (snapshot) => {
         const answerData = snapshot.val();
         if (!answerData || !answerData.sdp) return;
@@ -288,14 +343,26 @@ export function useAudioCall(chatId) {
         if (answerProcessedRef.current) return;
         answerProcessedRef.current = true;
 
-        console.log('[WebRTC] Received answer, setting remote description...');
+        console.log('[WebRTC] Received answer, setting remote description & connecting...');
         try {
+          if (callTimerRef.current) {
+            clearTimeout(callTimerRef.current);
+            callTimerRef.current = null;
+          }
+          setCallState('connected');
+          if (!durationTimerRef.current) {
+            durationTimerRef.current = setInterval(() => {
+              setCallDuration(prev => prev + 1);
+            }, 1000);
+          }
+
           await pc.current.setRemoteDescription(
             new RTCSessionDescription({
               type: answerData.type,
               sdp: answerData.sdp,
             })
           );
+          processCandidateQueue();
           listenForRemoteCandidates(answerData.from);
         } catch (err) {
           console.error('[WebRTC] Error setting remote description:', err);
@@ -306,7 +373,7 @@ export function useAudioCall(chatId) {
       });
 
       // Listen for call-ended / declined signal from remote
-      const endedRef = db.ref(`calls/${chatId}/ended`);
+      const endedRef = db.ref(`chats/${chatId}/call/ended`);
       addFirebaseListener(endedRef, 'value', (snapshot) => {
         const data = snapshot.val();
         if (data && data.by !== auth().currentUser?.uid) {
@@ -332,7 +399,7 @@ export function useAudioCall(chatId) {
       setCallError(error.message || 'Failed to start call');
       cleanupLocal();
     }
-  }, [chatId, getLocalMediaStream, createPeerConnection, setupICECandidateSending, addFirebaseListener, listenForRemoteCandidates, endCall, cleanupLocal, setCallState]);
+  }, [chatId, getLocalMediaStream, createPeerConnection, setupICECandidateSending, addFirebaseListener, processCandidateQueue, listenForRemoteCandidates, endCall, cleanupLocal, setCallState]);
 
   // ─── Listen for Incoming Calls (Callee) ───────────────────
 
@@ -343,9 +410,9 @@ export function useAudioCall(chatId) {
     }
 
     const db = database();
-    const offerRef = db.ref(`calls/${chatId}/offer`);
+    const offerRef = db.ref(`chats/${chatId}/call/offer`);
 
-    console.log('[WebRTC] Listening for incoming calls on', `calls/${chatId}/offer`);
+    console.log('[WebRTC] Listening for incoming calls on', `chats/${chatId}/call/offer`);
 
     offerRef.on('value', (snapshot) => {
       const offerData = snapshot.val();
@@ -355,9 +422,15 @@ export function useAudioCall(chatId) {
         offerData.from !== auth().currentUser?.uid &&
         offerData.sdp
       ) {
+        // Ignore stale offers older than 60 seconds
+        if (offerData.timestamp && Date.now() - offerData.timestamp > 60000) {
+          console.log('[WebRTC] Ignoring stale offer:', offerData.timestamp);
+          return;
+        }
+
         // Only show incoming if we're not already in a call
         if (callStateRef.current === 'idle') {
-          console.log('[WebRTC] Incoming call detected from:', offerData.from);
+          console.log('[WebRTC] Incoming call detected from:', offerData.from, 'type:', offerData.callType);
           setCallType(offerData.callType || 'audio');
           setCallState('incoming');
           setCallerName(offerData.from);
@@ -380,7 +453,7 @@ export function useAudioCall(chatId) {
       setCallError(null);
       const db = database();
 
-      const offerSnapshot = await db.ref(`calls/${chatId}/offer`).once('value');
+      const offerSnapshot = await db.ref(`chats/${chatId}/call/offer`).once('value');
       const offerData = offerSnapshot.val();
 
       if (!offerData || !offerData.sdp) {
@@ -411,6 +484,7 @@ export function useAudioCall(chatId) {
           sdp: offerData.sdp,
         })
       );
+      processCandidateQueue();
 
       // Create and set local description (answer)
       console.log('[WebRTC] Creating answer...');
@@ -419,7 +493,7 @@ export function useAudioCall(chatId) {
 
       // Write answer to Firebase
       console.log('[WebRTC] Saving answer to Firebase...');
-      await db.ref(`calls/${chatId}/answer`).set({
+      await db.ref(`chats/${chatId}/call/answer`).set({
         type: answer.type,
         sdp: answer.sdp,
         from: auth().currentUser.uid,
@@ -430,7 +504,7 @@ export function useAudioCall(chatId) {
       listenForRemoteCandidates(offerData.from);
 
       // Listen for call-ended signal from remote
-      const endedRef = db.ref(`calls/${chatId}/ended`);
+      const endedRef = db.ref(`chats/${chatId}/call/ended`);
       addFirebaseListener(endedRef, 'value', (snapshot) => {
         const data = snapshot.val();
         if (data && data.by !== auth().currentUser?.uid) {
@@ -439,14 +513,23 @@ export function useAudioCall(chatId) {
         }
       });
 
+      if (callTimerRef.current) {
+        clearTimeout(callTimerRef.current);
+        callTimerRef.current = null;
+      }
       setCallState('connected');
+      if (!durationTimerRef.current) {
+        durationTimerRef.current = setInterval(() => {
+          setCallDuration(prev => prev + 1);
+        }, 1000);
+      }
 
     } catch (error) {
       console.error('[WebRTC] answerCall error:', error);
       setCallError(error.message || 'Failed to answer call');
       cleanupLocal();
     }
-  }, [chatId, getLocalMediaStream, createPeerConnection, setupICECandidateSending, listenForRemoteCandidates, addFirebaseListener, cleanupLocal, setCallState]);
+  }, [chatId, getLocalMediaStream, createPeerConnection, setupICECandidateSending, processCandidateQueue, listenForRemoteCandidates, addFirebaseListener, cleanupLocal, setCallState]);
 
   // ─── Decline Call (Callee) ────────────────────────────────
 
@@ -454,7 +537,7 @@ export function useAudioCall(chatId) {
     const db = database();
     if (chatId && auth().currentUser) {
       // Write ended signal with reason — do NOT remove the node immediately
-      await db.ref(`calls/${chatId}/ended`).set({
+      await db.ref(`chats/${chatId}/call/ended`).set({
         by: auth().currentUser.uid,
         reason: 'declined',
         timestamp: database.ServerValue.TIMESTAMP,

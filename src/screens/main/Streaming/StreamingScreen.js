@@ -5,22 +5,24 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  SafeAreaView,
   FlatList,
   TextInput,
   KeyboardAvoidingView,
   Platform,
   Animated,
   StatusBar,
+  ScrollView,
   useWindowDimensions,
+  Share,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import LinearGradient from 'react-native-linear-gradient';
 import Orientation from 'react-native-orientation-locker';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
-
 
 const AVATAR_COLORS = [
   colors.PRIMARY_COLOR,
@@ -40,6 +42,18 @@ function getInitials(name) {
   return name.slice(0, 2).toUpperCase();
 }
 
+function formatTime(secs) {
+  if (isNaN(secs) || secs < 0) return '00:00';
+  const totalSecs = Math.floor(secs);
+  const hrs = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const remSecs = totalSecs % 60;
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${remSecs.toString().padStart(2, '0')}`;
+  }
+  return `${mins.toString().padStart(2, '0')}:${remSecs.toString().padStart(2, '0')}`;
+}
+
 const FloatingEmoji = ({ emoji }) => {
   const translateY = useRef(new Animated.Value(0)).current;
   const opacity = useRef(new Animated.Value(1)).current;
@@ -47,7 +61,7 @@ const FloatingEmoji = ({ emoji }) => {
   useEffect(() => {
     Animated.parallel([
       Animated.timing(translateY, {
-        toValue: -150,
+        toValue: -180,
         duration: 2000,
         useNativeDriver: true,
       }),
@@ -61,24 +75,82 @@ const FloatingEmoji = ({ emoji }) => {
 
   return (
     <Animated.View style={[styles.floatingEmoji, { transform: [{ translateY }], opacity }]}>
-      <Text style={{ fontSize: 32 }}>{emoji}</Text>
+      <Text style={{ fontSize: 30 }}>{emoji}</Text>
     </Animated.View>
   );
 };
 
 const StreamingScreen = ({ route, navigation }) => {
-  const { streamUrl, roomName, roomId } = route.params;
+  const insets = useSafeAreaInsets();
+  const { streamUrl, roomName: initialRoomName, roomId } = route.params || {};
+
+  const safeTopPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
+  ) + 8;
 
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
   const VIDEO_HEIGHT = width * (9 / 16);
 
+  // Video State
+  const [playing, setPlaying] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimeoutRef = useRef(null);
+  const playerRef = useRef(null);
+  const [isCreator, setIsCreator] = useState(false);
+  const [roomData, setRoomData] = useState(null);
+
+  // Adaptive Switcher: 'notes' (Solo) vs 'chat' (Party)
+  const [activeMode, setActiveMode] = useState('notes');
+  const hasAutoSetDefaultModeRef = useRef(false);
+
+  // Chat State
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isMicActive, setIsMicActive] = useState(true);
+
+  // Participants State
+  const [participantProfiles, setParticipantProfiles] = useState([]);
+  const [onlineStatuses, setOnlineStatuses] = useState({});
+
+  // Reactions State
+  const [floatingEmojis, setFloatingEmojis] = useState([]);
+
+  // Notes State
+  const [notes, setNotes] = useState([]);
+  const [newNoteText, setNewNoteText] = useState('');
+
+  // Pulsing Animations
+  const livePulseAnim = useRef(new Animated.Value(1)).current;
+  const syncPulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const liveLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(livePulseAnim, { toValue: 0.35, duration: 800, useNativeDriver: true }),
+        Animated.timing(livePulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    const syncLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(syncPulseAnim, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+        Animated.timing(syncPulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    liveLoop.start();
+    syncLoop.start();
+    return () => {
+      liveLoop.stop();
+      syncLoop.stop();
+    };
+  }, [livePulseAnim, syncPulseAnim]);
+
   useEffect(() => {
     return () => {
       Orientation.lockToPortrait();
-      if (reactionTimerRef.current) {
-        clearTimeout(reactionTimerRef.current);
-      }
     };
   }, []);
 
@@ -90,68 +162,80 @@ const StreamingScreen = ({ route, navigation }) => {
     }
   };
 
-  // Video State
-  const [playing, setPlaying] = useState(true);
-  const playerRef = useRef(null);
-  const [isCreator, setIsCreator] = useState(false);
-
-  // Tabs
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'participants'
-
-  // Chat State
-  const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState('');
-
-  // Participants State
-  const [participantProfiles, setParticipantProfiles] = useState([]);
-  const [onlineStatuses, setOnlineStatuses] = useState({});
-
-  // Reactions State
-  const [floatingEmojis, setFloatingEmojis] = useState([]);
-  const [showReactions, setShowReactions] = useState(false);
-  const reactionTimerRef = useRef(null);
-
-  // Notes State
-  const [notes, setNotes] = useState([]);
-  const [newNoteText, setNewNoteText] = useState('');
-
-  const getYoutubeVideoId = (url) => {
+  const getYoutubeVideoId = url => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
     const match = url?.match(regExp);
-    return (match && match[7].length === 11) ? match[7] : false;
+    return match && match[7].length === 11 ? match[7] : false;
   };
 
   const videoId = getYoutubeVideoId(streamUrl);
 
   useEffect(() => {
     if (!videoId) {
-      Alert.alert('Invalid URL', 'The provided YouTube URL is not valid.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      Alert.alert('Invalid URL', 'The provided YouTube URL is not valid.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
     }
   }, [videoId, navigation]);
 
   const [creatorLeft, setCreatorLeft] = useState(false);
 
-  // Fetch Room & Participants
+  // Track playback time & duration periodically
+  useEffect(() => {
+    let interval;
+    if (playing) {
+      interval = setInterval(async () => {
+        if (!playerRef.current) return;
+        try {
+          const t = await playerRef.current.getCurrentTime();
+          const d = await playerRef.current.getDuration();
+          if (typeof t === 'number') setCurrentTime(t);
+          if (typeof d === 'number' && d > 0) setDuration(d);
+        } catch (e) {
+          // ignore
+        }
+      }, 500);
+    }
+    return () => interval && clearInterval(interval);
+  }, [playing]);
+
+  // Auto-hide controls overlay after 3.5s
+  const resetControlsTimeout = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      setShowControls(false);
+    }, 3500);
+  };
+
+  useEffect(() => {
+    resetControlsTimeout();
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, []);
+
+  // Fetch Room & Participants from RTDB
   useEffect(() => {
     const roomRef = database().ref(`rooms/${roomId}`);
 
-    const onRoomHandler = async (snapshot) => {
-      const roomData = snapshot.val();
-      if (!roomData) return;
+    const onRoomHandler = async snapshot => {
+      const data = snapshot.val();
+      if (!data) return;
+      setRoomData(data);
 
-      const userIsCreator = roomData.creator?.email === auth().currentUser?.email;
+      const userIsCreator = data.creator?.email === auth().currentUser?.email;
       setIsCreator(userIsCreator);
 
-      // If the stream is stopped by creator, pause video and show message to viewers
-      if (!userIsCreator && roomData.isStreaming === false) {
+      if (!userIsCreator && data.isStreaming === false) {
         setCreatorLeft(true);
         setPlaying(false);
-      } else if (roomData.isStreaming === true) {
+      } else if (data.isStreaming === true) {
         setCreatorLeft(false);
       }
 
       // Fetch participants
-      const allEmails = [roomData.creator?.email, ...(roomData.participants || [])].filter(Boolean);
+      const allEmails = [data.creator?.email, ...(data.participants || [])].filter(Boolean);
       const uniqueEmails = [...new Set(allEmails)];
       const profiles = [];
 
@@ -176,7 +260,7 @@ const StreamingScreen = ({ route, navigation }) => {
               username: `@${name.toLowerCase().replace(/\s/g, '')}`,
               color: AVATAR_COLORS[i % AVATAR_COLORS.length],
               initial: getInitials(name),
-              isHost: email === roomData.creator?.email,
+              isHost: email.toLowerCase() === data.creator?.email?.toLowerCase(),
             });
           }
         } catch (error) {
@@ -184,6 +268,16 @@ const StreamingScreen = ({ route, navigation }) => {
         }
       }
       setParticipantProfiles(profiles);
+
+      // Adaptive default: only set ONCE on initial load so user can freely switch tabs
+      if (!hasAutoSetDefaultModeRef.current) {
+        hasAutoSetDefaultModeRef.current = true;
+        if (uniqueEmails.length <= 1) {
+          setActiveMode('notes');
+        } else {
+          setActiveMode('chat');
+        }
+      }
     };
 
     roomRef.on('value', onRoomHandler);
@@ -194,7 +288,6 @@ const StreamingScreen = ({ route, navigation }) => {
     if (participantProfiles.length === 0) return;
     const db = database();
     const unsubs = participantProfiles.map(p => {
-      // Listen at /status (supports both string "online" and object {state:"online"})
       const statusRef = db.ref(`users/${p.uid}/status`);
       const handler = snap => {
         const val = snap.val();
@@ -215,19 +308,17 @@ const StreamingScreen = ({ route, navigation }) => {
   // ──────────────────────────────────────────────────────────────
   // Sync Playback Logic
   // ──────────────────────────────────────────────────────────────
+  const syncDebounceRef = useRef(null);
+  const isSyncingRef = useRef(false);
+  const lastPlaybackRef = useRef(null);
 
-  const syncDebounceRef = useRef(null); // debounce host pushes after seek
-  const isSyncingRef = useRef(false);   // prevent viewer re-triggering sync
-  const lastPlaybackRef = useRef(null); // last snapshot from Firebase
-
-  // Push current host state to Firebase (debounced after seek)
-  const pushPlaybackState = async (isPlaying) => {
+  const pushPlaybackState = async isCurrentPlaying => {
     if (!isCreator) return;
     try {
-      const currentTime = await playerRef.current?.getCurrentTime() || 0;
+      const curTime = (await playerRef.current?.getCurrentTime()) || 0;
       await database().ref(`rooms/${roomId}/playback`).set({
-        isPlaying,
-        currentTime,
+        isPlaying: isCurrentPlaying,
+        currentTime: curTime,
         updatedAt: Date.now(),
       });
     } catch (e) {
@@ -235,24 +326,22 @@ const StreamingScreen = ({ route, navigation }) => {
     }
   };
 
-  // Debounced version – waits 600ms after last call (covers rapid scrubbing)
   const debouncedPushRef = useRef(null);
-  const debouncedPushPlaybackState = (isPlaying) => {
+  const debouncedPushPlaybackState = isCurrentPlaying => {
     if (debouncedPushRef.current) clearTimeout(debouncedPushRef.current);
     debouncedPushRef.current = setTimeout(() => {
-      pushPlaybackState(isPlaying);
+      pushPlaybackState(isCurrentPlaying);
     }, 600);
   };
 
-  // ── HOST: heartbeat every 3 s while playing ──
   useEffect(() => {
     if (!isCreator || !playing) return;
     const intervalId = setInterval(async () => {
       if (!playerRef.current) return;
       try {
-        const currentTime = await playerRef.current.getCurrentTime();
+        const curTime = await playerRef.current.getCurrentTime();
         await database().ref(`rooms/${roomId}/playback`).update({
-          currentTime: currentTime || 0,
+          currentTime: curTime || 0,
           updatedAt: Date.now(),
         });
       } catch (e) {
@@ -262,39 +351,32 @@ const StreamingScreen = ({ route, navigation }) => {
     return () => clearInterval(intervalId);
   }, [isCreator, playing, roomId]);
 
-  // ── VIEWER: listen to Firebase playback changes ──
+  // Viewer playback listener
   useEffect(() => {
-    if (isCreator) return; // host doesn't listen to its own writes
+    if (isCreator) return;
     const playbackRef = database().ref(`rooms/${roomId}/playback`);
 
-    const onPlaybackHandler = async (snapshot) => {
+    const onPlaybackHandler = async snapshot => {
       const data = snapshot.val();
       if (!data || isSyncingRef.current) return;
       lastPlaybackRef.current = data;
 
       isSyncingRef.current = true;
-
-      // Apply play / pause
       setPlaying(data.isPlaying);
 
       if (playerRef.current) {
         if (data.isPlaying) {
-          // Compute where the host is NOW, accounting for network delay
           const elapsed = (Date.now() - data.updatedAt) / 1000;
           const targetTime = data.currentTime + elapsed;
-
-          playerRef.current.getCurrentTime().then((viewerTime) => {
-            // Only seek if drift > 1.5 s to avoid constant micro-seeks
+          playerRef.current.getCurrentTime().then(viewerTime => {
             if (Math.abs(viewerTime - targetTime) > 1.5) {
               playerRef.current.seekTo(targetTime, true);
             }
           });
         } else {
-          // Host paused – snap to the exact paused position
           await playerRef.current.seekTo(data.currentTime, true);
         }
       }
-
       isSyncingRef.current = false;
     };
 
@@ -302,42 +384,78 @@ const StreamingScreen = ({ route, navigation }) => {
     return () => playbackRef.off('value', onPlaybackHandler);
   }, [roomId, isCreator]);
 
-  // ── VIEWER: periodic drift correction every 10 s ──
+  // ──────────────────────────────────────────────────────────────
+  // Notes Logic
+  // ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isCreator) return;
-    const driftCheckId = setInterval(async () => {
-      const data = lastPlaybackRef.current;
-      if (!data || !data.isPlaying || !playerRef.current) return;
-      try {
-        const elapsed = (Date.now() - data.updatedAt) / 1000;
-        const targetTime = data.currentTime + elapsed;
-        const viewerTime = await playerRef.current.getCurrentTime();
-        if (Math.abs(viewerTime - targetTime) > 2) {
-          playerRef.current.seekTo(targetTime, true);
-        }
-      } catch (e) {
-        // silently ignore
+    const user = auth().currentUser;
+    if (!user || !roomId) return;
+
+    const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
+    const onNotesHandler = snapshot => {
+      const data = snapshot.val();
+      if (data) {
+        const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
+        list.sort((a, b) => (b.seconds || 0) - (a.seconds || 0));
+        setNotes(list);
+      } else {
+        setNotes([]);
       }
-    }, 10000);
-    return () => clearInterval(driftCheckId);
-  }, [isCreator]);
-
-  // Cleanup debounce refs on unmount
-  useEffect(() => {
-    return () => {
-      if (debouncedPushRef.current) clearTimeout(debouncedPushRef.current);
-      if (syncDebounceRef.current) clearTimeout(syncDebounceRef.current);
     };
-  }, []);
+    notesRef.on('value', onNotesHandler);
+    return () => notesRef.off('value', onNotesHandler);
+  }, [roomId]);
 
-  // Chat
+  const addNote = async (customText = null) => {
+    const user = auth().currentUser;
+    if (!user) return;
+    const textToSave = (typeof customText === 'string' ? customText : newNoteText).trim();
+    if (!textToSave) return;
+    try {
+      const secs = (await playerRef.current?.getCurrentTime()) || currentTime || 0;
+      const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
+      await notesRef.push({
+        text: textToSave,
+        seconds: Math.floor(secs),
+        tag: 'Storyboard Note',
+        author: user.email?.split('@')[0] || 'Me',
+        timestamp: database.ServerValue.TIMESTAMP,
+      });
+      setNewNoteText('');
+    } catch (e) {
+      console.log('Error adding note:', e);
+    }
+  };
+
+  const deleteNote = async noteId => {
+    const user = auth().currentUser;
+    if (!user) return;
+    try {
+      await database().ref(`notes/${user.uid}/${roomId}/${noteId}`).remove();
+    } catch (e) {
+      console.log('Error deleting note:', e);
+    }
+  };
+
+  const handleSeekToNote = seconds => {
+    if (!playerRef.current) return;
+    playerRef.current.seekTo(seconds, true);
+    setCurrentTime(seconds);
+    if (isCreator) {
+      debouncedPushPlaybackState(playing);
+    }
+  };
+
+  // ──────────────────────────────────────────────────────────────
+  // Chat & Reactions Logic
+  // ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const messagesRef = database().ref(`rooms/${roomId}/messages`);
     const onMessagesHandler = snapshot => {
       const data = snapshot.val();
       if (data) {
         const msgs = Object.keys(data).map(key => ({ id: key, ...data[key] }));
-        msgs.sort((a, b) => b.timestamp - a.timestamp);
+        msgs.sort((a, b) => a.timestamp - b.timestamp);
         setMessages(msgs);
       } else {
         setMessages([]);
@@ -350,8 +468,10 @@ const StreamingScreen = ({ route, navigation }) => {
   const sendMessage = async () => {
     if (!newMessage.trim()) return;
     const messagesRef = database().ref(`rooms/${roomId}/messages`);
-    const currentUserProfile = participantProfiles.find(p => p.email === auth().currentUser?.email) || {
-      name: auth().currentUser?.email.split('@')[0],
+    const currentUserProfile = participantProfiles.find(
+      p => p.email === auth().currentUser?.email
+    ) || {
+      name: auth().currentUser?.email?.split('@')[0] || 'Me',
       color: colors.PRIMARY_COLOR,
     };
 
@@ -365,15 +485,13 @@ const StreamingScreen = ({ route, navigation }) => {
     setNewMessage('');
   };
 
-  // Reactions
   useEffect(() => {
     const reactionsRef = database().ref(`rooms/${roomId}/reactions`);
     const now = Date.now();
 
-    const reactionsQuery = reactionsRef.limitToLast(1);
-    const onChildAddedHandler = (snapshot) => {
+    const onChildAddedHandler = snapshot => {
       const data = snapshot.val();
-      if (data && data.timestamp > now - 5000) { // Only show recent ones
+      if (data && data.timestamp > now - 4000) {
         const id = Math.random().toString();
         setFloatingEmojis(prev => [...prev, { id, emoji: data.emoji }]);
         setTimeout(() => {
@@ -381,171 +499,144 @@ const StreamingScreen = ({ route, navigation }) => {
         }, 2000);
       }
     };
-    reactionsQuery.on('child_added', onChildAddedHandler);
-    return () => reactionsQuery.off('child_added', onChildAddedHandler);
+
+    reactionsRef.limitToLast(1).on('child_added', onChildAddedHandler);
+    return () => reactionsRef.limitToLast(1).off('child_added', onChildAddedHandler);
   }, [roomId]);
 
-  const sendReaction = async (emoji) => {
-    const reactionsRef = database().ref(`rooms/${roomId}/reactions`);
-    await reactionsRef.push({
-      emoji,
-      senderId: auth().currentUser?.uid,
-      timestamp: Date.now(),
-    });
-  };
-
-  const triggerReactions = () => {
-    setShowReactions(true);
-    resetReactionTimeout();
-  };
-
-  const resetReactionTimeout = () => {
-    if (reactionTimerRef.current) {
-      clearTimeout(reactionTimerRef.current);
-    }
-    reactionTimerRef.current = setTimeout(() => {
-      setShowReactions(false);
-    }, 4000);
-  };
-
-  const handleEmojiPress = (emoji) => {
-    sendReaction(emoji);
-    resetReactionTimeout();
-  };
-
-  // Video Notes Logic
-  const formatTime = (secs) => {
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = Math.floor(secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  useEffect(() => {
-    if (participants.length > 1) return;
-    const notesRef = database().ref(`rooms/${roomId}/notes`);
-    const onNotesHandler = snapshot => {
-      const data = snapshot.val();
-      if (data) {
-        const list = Object.keys(data).map(key => ({ id: key, ...data[key] }));
-        list.sort((a, b) => a.seconds - b.seconds);
-        setNotes(list);
-      } else {
-        setNotes([]);
-      }
-    };
-    notesRef.on('value', onNotesHandler);
-    return () => notesRef.off('value', onNotesHandler);
-  }, [roomId, participants.length]);
-
-  const addNote = async () => {
-    if (!newNoteText.trim()) return;
+  const sendReaction = async emoji => {
     try {
-      const secs = await playerRef.current?.getCurrentTime() || 0;
-      const notesRef = database().ref(`rooms/${roomId}/notes`);
-      await notesRef.push({
-        text: newNoteText.trim(),
-        seconds: secs,
+      await database().ref(`rooms/${roomId}/reactions`).push({
+        emoji,
+        senderId: auth().currentUser?.uid,
         timestamp: database.ServerValue.TIMESTAMP,
       });
-      setNewNoteText('');
     } catch (e) {
-      console.log("Error adding note:", e);
+      console.log('Error sending reaction:', e);
     }
   };
 
-  const deleteNote = async (noteId) => {
+  // ──────────────────────────────────────────────────────────────
+  // Playback Control Handlers
+  // ──────────────────────────────────────────────────────────────
+  const togglePlayPause = () => {
+    const next = !playing;
+    setPlaying(next);
+    if (isCreator) {
+      pushPlaybackState(next);
+    }
+  };
+
+  const handleRewind10 = async () => {
+    if (!playerRef.current) return;
     try {
-      await database().ref(`rooms/${roomId}/notes/${noteId}`).remove();
-    } catch (e) {
-      console.log("Error deleting note:", e);
-    }
+      const t = await playerRef.current.getCurrentTime();
+      const target = Math.max(0, t - 10);
+      playerRef.current.seekTo(target, true);
+      setCurrentTime(target);
+      if (isCreator) debouncedPushPlaybackState(playing);
+    } catch (e) {}
   };
 
-  const renderNote = ({ item }) => {
-    return (
-      <View style={styles.noteCard}>
-        <TouchableOpacity
-          style={styles.noteTimeBadge}
-          onPress={() => playerRef.current?.seekTo(item.seconds)}
-        >
-          <Ionicons name="play" size={12} color="#FFF" style={{ marginRight: 4 }} />
-          <Text style={styles.noteTimeText}>{formatTime(item.seconds)}</Text>
-        </TouchableOpacity>
-        <Text style={styles.noteText}>{item.text}</Text>
-        <TouchableOpacity
-          style={styles.noteDeleteBtn}
-          onPress={() => deleteNote(item.id)}
-        >
-          <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.4)" />
-        </TouchableOpacity>
-      </View>
-    );
+  const handleForward10 = async () => {
+    if (!playerRef.current) return;
+    try {
+      const t = await playerRef.current.getCurrentTime();
+      const target = t + 10;
+      playerRef.current.seekTo(target, true);
+      setCurrentTime(target);
+      if (isCreator) debouncedPushPlaybackState(playing);
+    } catch (e) {}
   };
-
-  const renderMessage = ({ item }) => {
-    const isMe = item.senderId === auth().currentUser?.uid;
-    return (
-      <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleThem]}>
-        {!isMe && <Text style={[styles.messageSender, { color: item.senderColor || colors.PRIMARY_COLOR }]}>{item.senderName}</Text>}
-        <Text style={styles.messageText}>{item.text}</Text>
-      </View>
-    );
-  };
-
-  const renderParticipant = ({ item }) => (
-    <View style={styles.participantCard}>
-      <View style={[styles.avatar, { backgroundColor: item.color }]}>
-        <Text style={styles.avatarText}>{item.initial}</Text>
-        <View style={[styles.statusIndicator, { backgroundColor: item.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR }]} />
-      </View>
-      <View style={styles.participantInfo}>
-        <Text style={styles.participantName}>{item.name}</Text>
-        <Text style={styles.participantUsername}>{item.username}</Text>
-      </View>
-      {item.isHost && (
-        <View style={styles.hostBadge}>
-          <Text style={styles.hostBadgeText}>Host</Text>
-        </View>
-      )}
-    </View>
-  );
 
   const handleGoBack = async () => {
     if (isCreator) {
       try {
         await database().ref(`rooms/${roomId}`).update({
-          isStreaming: false
+          isStreaming: false,
         });
       } catch (error) {
-        console.error("Error resetting stream state:", error);
+        console.error('Error resetting stream state:', error);
       }
     }
     navigation.goBack();
   };
 
+  const roomTitle = roomData?.name || initialRoomName || 'Screening Room';
+  const shortRoomId = (roomId ? roomId.replace('room_', '') : '842').slice(-4);
+  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
   return (
     <View style={[styles.container, isLandscape && styles.containerLandscape]}>
-      <StatusBar hidden={isLandscape} barStyle="light-content" />
+      <StatusBar hidden={isLandscape} barStyle="light-content" translucent backgroundColor="transparent" />
 
+      {/* ── TOP HEADER BAR ── */}
       {!isLandscape && (
-        <SafeAreaView style={styles.safeHeader}>
-          <View style={styles.header}>
-            <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
-              <MaterialIcons name="arrow-back-ios" size={20} color={colors.TITLE_COLOR || '#FFF'} />
+        <View style={[styles.topHeader, { paddingTop: safeTopPadding }]}>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              onPress={handleGoBack}
+              style={styles.backBtnCircle}
+              activeOpacity={0.75}
+            >
+              <MaterialIcons name="arrow-back-ios-new" size={17} color={colors.TITLE_COLOR} />
             </TouchableOpacity>
-            <Text style={styles.headerTitle} numberOfLines={1}>{roomName || 'Streaming Room'}</Text>
-            <View style={styles.liveBadge}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
+
+            <View style={styles.headerTitleCol}>
+              <View style={styles.titleWithBadgeRow}>
+                <Text style={styles.headerTitleText} numberOfLines={1}>
+                  {roomTitle}
+                </Text>
+                <View style={styles.hdrTag}>
+                  <Text style={styles.hdrTagText}>4K HDR</Text>
+                </View>
+              </View>
+              <Text style={styles.headerSubtitleText}>
+                Live Sync Theater #{shortRoomId}
+              </Text>
             </View>
           </View>
-        </SafeAreaView>
+
+          {/* Right Action Icons */}
+          <View style={styles.headerRightActions}>
+            <View style={styles.liveStreamBadge}>
+              <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
+              <Text style={styles.liveStreamText}>LIVE</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
+              activeOpacity={0.75}
+            >
+              <MaterialIcons name="screen-share" size={18} color={colors.SUB_TITLE_COLOR} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
+              activeOpacity={0.75}
+            >
+              <MaterialIcons name="tune" size={18} color={colors.CYAN_ACCENT} />
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
 
-      {/* VIDEO PLAYER SECTION */}
-      <View style={[styles.videoSection, isLandscape && styles.videoSectionLandscape, { height: isLandscape ? height : VIDEO_HEIGHT }]}>
-        {videoId ? (
-          <View style={{ flex: 1, position: 'relative' }}>
+      {/* ── CINEMA VIDEO PLAYER HERO (16:9 Aspect Ratio) ── */}
+      <View
+        style={[
+          styles.videoSection,
+          isLandscape && styles.videoSectionLandscape,
+          { height: isLandscape ? height : VIDEO_HEIGHT },
+        ]}
+      >
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={resetControlsTimeout}
+        >
+          {videoId ? (
             <YoutubePlayer
               ref={playerRef}
               height={isLandscape ? height : VIDEO_HEIGHT}
@@ -553,41 +644,118 @@ const StreamingScreen = ({ route, navigation }) => {
               play={playing}
               videoId={videoId}
               initialPlayerParams={{
-                controls: 1,
+                controls: 0,
                 modestbranding: 1,
                 preventFullScreen: false,
                 rel: 0,
               }}
-              onChangeState={(state) => {
+              onChangeState={state => {
                 if (state === 'playing') {
                   setPlaying(true);
-                  if (isCreator) {
-                    debouncedPushPlaybackState(true);
-                  }
+                  if (isCreator) debouncedPushPlaybackState(true);
                 } else if (state === 'paused') {
                   setPlaying(false);
-                  if (isCreator) {
-                    // Push immediately on pause so viewers stop right away
-                    pushPlaybackState(false);
-                  }
-                } else if (state === 'unstarted' || state === 'buffering') {
-                  // no-op – don't push mid-buffer events
+                  if (isCreator) pushPlaybackState(false);
                 }
               }}
             />
+          ) : (
+            <View style={styles.errorVideo}>
+              <Text style={{ color: colors.TITLE_COLOR }}>Invalid Video Stream</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* Live Sync Telemetry Watermarks */}
+        <View style={styles.telemetryWatermarkBar} pointerEvents="none">
+          <View style={styles.syncBufferBadge}>
+            <Animated.View style={[styles.syncBufferDot, { opacity: syncPulseAnim }]} />
+            <Text style={styles.syncBufferText}>SYNC BUFFER: 0.08s</Text>
           </View>
-        ) : (
-          <View style={styles.errorVideo}>
-            <Text style={{ color: '#fff' }}>Invalid Video URL</Text>
+          <View style={styles.spatialAudioBadge}>
+            <Text style={styles.spatialAudioText}>SPATIAL 3D</Text>
+          </View>
+        </View>
+
+        <View style={styles.resolutionTag} pointerEvents="none">
+          <Text style={styles.resolutionText}>1080p 60fps</Text>
+        </View>
+
+        {/* Video Overlays: Host Paused */}
+        {creatorLeft && (
+          <View style={styles.creatorLeftOverlay}>
+            <Ionicons name="pause-circle" size={46} color={colors.TITLE_COLOR} />
+            <Text style={styles.creatorLeftTitle}>Host Paused Stream</Text>
+            <Text style={styles.creatorLeftText}>Waiting for host to resume...</Text>
           </View>
         )}
 
-        {/* Video Overlays */}
-        {creatorLeft && (
-          <View style={styles.creatorLeftOverlay}>
-            <Ionicons name="pause-circle" size={48} color="#FFF" />
-            <Text style={styles.creatorLeftTitle}>Host Left</Text>
-            <Text style={styles.creatorLeftText}>The host has paused the stream.</Text>
+        {/* Player Controls Overlay */}
+        {showControls && (
+          <View style={styles.controlsOverlay} pointerEvents="box-none">
+            <View style={styles.centerControlsRow}>
+              {/* -10s */}
+              <TouchableOpacity
+                style={styles.seekStepBtn}
+                onPress={handleRewind10}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="replay-10" size={20} color={colors.TITLE_COLOR} />
+              </TouchableOpacity>
+
+              {/* Play / Pause with Gradient */}
+              <TouchableOpacity
+                style={styles.playPauseGlowBtn}
+                onPress={togglePlayPause}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                  style={styles.playPauseGradient}
+                >
+                  <MaterialIcons
+                    name={playing ? 'pause' : 'play-arrow'}
+                    size={28}
+                    color={colors.TITLE_COLOR}
+                  />
+                </LinearGradient>
+              </TouchableOpacity>
+
+              {/* +10s */}
+              <TouchableOpacity
+                style={styles.seekStepBtn}
+                onPress={handleForward10}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="forward-10" size={20} color={colors.TITLE_COLOR} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Bottom Scrubber & Time Counter */}
+            <View style={styles.bottomScrubberRow}>
+              <View style={styles.scrubberTrack}>
+                <View style={[styles.scrubberBuffered, { width: '55%' }]} />
+                <View style={[styles.scrubberFill, { width: `${progressPercent}%` }]} />
+              </View>
+
+              <View style={styles.scrubberMetaRow}>
+                <View style={styles.timeCounterGroup}>
+                  <Text style={styles.timeCurrentText}>{formatTime(currentTime)}</Text>
+                  <Text style={styles.timeDivider}>/</Text>
+                  <Text style={styles.timeTotalText}>{formatTime(duration)}</Text>
+                  <View style={styles.syncLockBadge}>
+                    <Animated.View style={[styles.syncLockDot, { opacity: syncPulseAnim }]} />
+                    <Text style={styles.syncLockText}>Sync Lock</Text>
+                  </View>
+                </View>
+
+                <View style={styles.telemetryQuickBtns}>
+                  <TouchableOpacity onPress={toggleFullscreen} activeOpacity={0.75}>
+                    <MaterialIcons name="fullscreen" size={18} color={colors.CYAN_ACCENT} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
           </View>
         )}
 
@@ -597,115 +765,363 @@ const StreamingScreen = ({ route, navigation }) => {
         ))}
       </View>
 
-      {/* CONTENT SECTION */}
+      {/* ── STATE SWITCHER DOCK (Interactive Mode Toggle) ── */}
       {!isLandscape && (
-        <View style={styles.contentSection}>
-          {participants.length <= 1 ? (
-            <View style={{ flex: 1 }}>
-              <View style={styles.notesHeader}>
-                <Text style={styles.notesTitle}>My Stream Notes</Text>
-                <Text style={styles.notesSubtitle}>Capture notes at specific timestamps</Text>
+        <View style={styles.stateSwitcherDock}>
+          <View style={styles.stateSwitcherContainer}>
+            {/* Solo Notes Tab */}
+            <TouchableOpacity
+              style={[
+                styles.switcherTabBtn,
+                activeMode === 'notes' && styles.switcherTabActive,
+              ]}
+              onPress={() => setActiveMode('notes')}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name="edit-note"
+                size={18}
+                color={activeMode === 'notes' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
+              />
+              <Text
+                style={[
+                  styles.switcherTabText,
+                  activeMode === 'notes' && styles.switcherTabTextActive,
+                ]}
+              >
+                Personal Notes
+              </Text>
+              <View style={styles.switcherBadgeSolo}>
+                <Text style={styles.switcherBadgeSoloText}>{notes.length}</Text>
               </View>
+            </TouchableOpacity>
+
+            {/* Party Chat Tab */}
+            <TouchableOpacity
+              style={[
+                styles.switcherTabBtn,
+                activeMode === 'chat' && styles.switcherTabActive,
+              ]}
+              onPress={() => setActiveMode('chat')}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name="forum"
+                size={16}
+                color={activeMode === 'chat' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
+              />
+              <Text
+                style={[
+                  styles.switcherTabText,
+                  activeMode === 'chat' && styles.switcherTabTextActive,
+                ]}
+              >
+                Party Live Chat
+              </Text>
+              <View style={styles.switcherBadgeParty}>
+                <View style={styles.partyLiveMiniDot} />
+                <Text style={styles.switcherBadgePartyText}>{participants.length}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ── DYNAMIC ADAPTIVE VIEW CONTAINER ── */}
+      {!isLandscape && (
+        <View style={styles.adaptiveContentWrap}>
+          {/* ============================================================== */}
+          {/* VIEW A: SOLO VIEWER MODE (Personal Notes / Storyboard)        */}
+          {/* ============================================================== */}
+          {activeMode === 'notes' ? (
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ flex: 1 }}
+            >
+              <View style={styles.storyboardHeaderRow}>
+                <View>
+                  <View style={styles.storyboardTitleGroup}>
+                    <Text style={styles.storyboardTitle}>My Stream Storyboard</Text>
+                    <View style={styles.privateVaultBadge}>
+                      <Text style={styles.privateVaultText}>Private Vault</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.storyboardSubtitle}>
+                    Capture insights & bookmarks at current timestamp
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.quickBookmarkBtn}
+                  onPress={() => addNote(`Key milestone saved at ${formatTime(currentTime)}`)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="bookmark-add" size={14} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.quickBookmarkText}>
+                    + Bookmark @ {formatTime(currentTime)}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Notes List */}
               <FlatList
                 data={notes}
                 keyExtractor={item => item.id}
-                renderItem={renderNote}
-                contentContainerStyle={styles.notesList}
+                contentContainerStyle={styles.notesListContainer}
                 showsVerticalScrollIndicator={false}
                 ListEmptyComponent={
-                  <View style={styles.emptyNotesContainer}>
-                    <Ionicons name="document-text-outline" size={48} color="rgba(255,255,255,0.2)" />
-                    <Text style={styles.emptyNotesText}>No notes saved yet</Text>
-                    <Text style={styles.emptyNotesSubtext}>Type a note below to save it at the current video time.</Text>
+                  <View style={styles.emptyNotesBox}>
+                    <MaterialIcons name="bookmark-outline" size={42} color={colors.CYAN_ACCENT} />
+                    <Text style={styles.emptyNotesTitle}>Personal Notes & Bookmarks</Text>
+                    <Text style={styles.emptyNotesSubtitle}>
+                      Save your thoughts linked to timestamps while watching:
+                      {'\n'}• Tap "+ Bookmark" above to mark this exact second.
+                      {'\n'}• Or type any note below and tap Save.
+                      {'\n'}• Tap any saved [▶ MM:SS] pill to immediately jump the video to that moment!
+                    </Text>
                   </View>
                 }
+                renderItem={({ item }) => (
+                  <View style={styles.noteCard}>
+                    <View style={styles.noteCardTopRow}>
+                      <View style={styles.noteTimestampGroup}>
+                        <TouchableOpacity
+                          style={styles.jumpTimePill}
+                          onPress={() => handleSeekToNote(item.seconds || 0)}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons name="play-arrow" size={12} color={colors.CYAN_ACCENT} />
+                          <Text style={styles.jumpTimeText}>{formatTime(item.seconds || 0)}</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.noteActTag}>{item.tag || 'Storyboard Bookmark'}</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.noteDeleteBtn}
+                        onPress={() => deleteNote(item.id)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="delete-outline" size={16} color={colors.SUB_TITLE_COLOR} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <Text style={styles.noteContentText}>{item.text}</Text>
+
+                    {/* Frame Snapshot Pill */}
+                    <View style={styles.frameSnapshotRow}>
+                      <MaterialIcons name="photo-camera" size={12} color={colors.ACCEPT_GREEN} />
+                      <Text style={styles.frameSnapshotText}>
+                        Captured Frame: {formatTime(item.seconds || 0)} • 4K HDR Color Grade
+                      </Text>
+                    </View>
+                  </View>
+                )}
               />
-              <SafeAreaView style={styles.chatInputSafeArea}>
-                <View style={styles.chatInputContainer}>
+
+              {/* Solo Mode: Quick Frame Capture Bottom Dock */}
+              <View style={styles.soloBottomDock}>
+                <TouchableOpacity
+                  style={styles.cameraSnapBtn}
+                  onPress={() => addNote(`Captured 4K frame at ${formatTime(currentTime)}`)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="photo-camera" size={20} color={colors.CYAN_ACCENT} />
+                  <View style={styles.cameraSnapDot} />
+                </TouchableOpacity>
+
+                <View style={styles.soloInputWrap}>
                   <TextInput
-                    style={styles.chatInput}
-                    placeholder="Add note at current time..."
+                    style={styles.soloTextInput}
+                    placeholder={`Type a note at ${formatTime(currentTime)}...`}
                     placeholderTextColor={colors.SUB_TITLE_COLOR}
                     value={newNoteText}
                     onChangeText={setNewNoteText}
-                    onSubmitEditing={addNote}
+                    onSubmitEditing={() => addNote()}
                   />
-                  <TouchableOpacity onPress={addNote} style={styles.sendBtn}>
-                    <Ionicons name="add" size={24} color="#FFF" />
-                  </TouchableOpacity>
+                  <Text style={styles.soloInputTimestamp}>{formatTime(currentTime)}</Text>
                 </View>
-              </SafeAreaView>
-            </View>
-          ) : (
-            <View style={{ flex: 1 }}>
-              <View style={styles.tabsContainer}>
+
                 <TouchableOpacity
-                  style={[styles.tab, activeTab === 'chat' && styles.activeTab]}
-                  onPress={() => setActiveTab('chat')}
+                  style={styles.saveNoteBtn}
+                  onPress={() => addNote()}
+                  activeOpacity={0.85}
                 >
-                  <Text style={[styles.tabText, activeTab === 'chat' && styles.activeTabText]}>Live Chat</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.tab, activeTab === 'participants' && styles.activeTab]}
-                  onPress={() => setActiveTab('participants')}
-                >
-                  <Text style={[styles.tabText, activeTab === 'participants' && styles.activeTabText]}>Participants ({participants.length})</Text>
+                  <LinearGradient
+                    colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                    style={styles.saveNoteGradient}
+                  >
+                    <MaterialIcons name="bookmark-add" size={16} color={colors.TITLE_COLOR} />
+                    <Text style={styles.saveNoteBtnText}>Save</Text>
+                  </LinearGradient>
                 </TouchableOpacity>
               </View>
+            </KeyboardAvoidingView>
+          ) : (
+            /* ============================================================== */
+            /* VIEW B: MULTI-PARTICIPANT MODE (Social Party)                  */
+            /* ============================================================== */
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ flex: 1 }}
+            >
+              {/* Connected Audience Presence Row */}
+              <View style={styles.audiencePresenceRow}>
+                <View style={styles.audiencePresenceHeader}>
+                  <View style={styles.audienceLeftTitle}>
+                    <Text style={styles.audienceTitleText}>CONNECTED THEATER</Text>
+                    <View style={styles.liveAudiencePill}>
+                      <Text style={styles.liveAudiencePillText}>{participants.length} LIVE</Text>
+                    </View>
+                  </View>
 
-              {activeTab === 'chat' ? (
-                <KeyboardAvoidingView
-                  style={{ flex: 1 }}
-                  behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={styles.inviteFriendsLink}>+ Invite Friends</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Audience Avatar Scroll Reel */}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.avatarScrollTrack}
                 >
-                  <FlatList
-                    data={messages}
-                    keyExtractor={item => item.id}
-                    renderItem={renderMessage}
-                    inverted
-                    contentContainerStyle={styles.chatList}
-                    showsVerticalScrollIndicator={false}
+                  {participants.map(p => (
+                    <View key={p.id} style={styles.audienceItemCol}>
+                      <View style={[styles.audienceAvatarWrap, { borderColor: p.color }]}>
+                        <Text style={styles.audienceInitialText}>{p.initial}</Text>
+                        {p.isHost && (
+                          <View style={styles.hostCrownBadge}>
+                            <Text style={styles.hostCrownStar}>★</Text>
+                          </View>
+                        )}
+                        <View
+                          style={[
+                            styles.audienceMicBeacon,
+                            { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                          ]}
+                        >
+                          <MaterialIcons
+                            name={p.isOnline ? 'mic' : 'mic-off'}
+                            size={7}
+                            color={colors.BACKGROUND_COLOR}
+                          />
+                        </View>
+                      </View>
+                      <Text style={styles.audienceNameText} numberOfLines={1}>
+                        {p.name}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Chat Stream */}
+              <FlatList
+                data={messages}
+                keyExtractor={item => item.id}
+                contentContainerStyle={styles.chatListContainer}
+                showsVerticalScrollIndicator={false}
+                ListHeaderComponent={
+                  <View style={styles.systemChatEventPill}>
+                    <Text style={styles.systemChatEventText}>
+                      ✨ Spatial Audio synchronized for all {participants.length} viewers
+                    </Text>
+                  </View>
+                }
+                renderItem={({ item }) => {
+                  const isMe = item.senderId === auth().currentUser?.uid;
+
+                  return (
+                    <View style={[styles.chatRowItem, isMe && styles.chatRowItemMe]}>
+                      {!isMe && (
+                        <View style={[styles.chatAvatarThumb, { backgroundColor: item.senderColor || colors.PRIMARY_COLOR }]}>
+                          <Text style={styles.chatAvatarThumbText}>
+                            {getInitials(item.senderName)}
+                          </Text>
+                        </View>
+                      )}
+
+                      <View style={[styles.chatBubbleCol, isMe && styles.chatBubbleColMe]}>
+                        <View style={[styles.chatMetaRow, isMe && styles.chatMetaRowMe]}>
+                          <Text style={[styles.chatSenderName, { color: item.senderColor || colors.CYAN_ACCENT }]}>
+                            {isMe ? 'You' : item.senderName}
+                          </Text>
+                          <Text style={styles.chatTimeText}>
+                            {item.timestamp ? formatTime(Math.floor((Date.now() - item.timestamp) / 1000)) : ''}
+                          </Text>
+                        </View>
+
+                        <View style={[styles.chatBubbleBody, isMe ? styles.chatBubbleMe : styles.chatBubbleThem]}>
+                          <Text style={[styles.chatMessageText, isMe && styles.chatMessageTextMe]}>
+                            {item.text}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                }}
+              />
+
+              {/* Floating Reaction Emojis Dock */}
+              <View style={styles.floatingReactionsDock}>
+                {['🔥', '🍿', '😱', '🚀', '❤️', '👏'].map(emoji => (
+                  <TouchableOpacity
+                    key={emoji}
+                    style={styles.reactionEmojiBtn}
+                    onPress={() => sendReaction(emoji)}
+                    activeOpacity={0.65}
+                  >
+                    <Text style={styles.reactionEmojiText}>{emoji}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Party Chat Input Bar */}
+              <View style={styles.partyBottomInputBar}>
+                {/* Mic Toggle Button */}
+                <TouchableOpacity
+                  style={[
+                    styles.partyMicBtn,
+                    isMicActive ? styles.partyMicBtnActive : styles.partyMicBtnMuted,
+                  ]}
+                  onPress={() => setIsMicActive(prev => !prev)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons
+                    name={isMicActive ? 'mic' : 'mic-off'}
+                    size={19}
+                    color={isMicActive ? colors.CYAN_ACCENT : colors.DELETE_RED_COLOR}
                   />
+                </TouchableOpacity>
 
-                  {/* Emoji Reaction Bar */}
-                  {showReactions && (
-                    <View style={styles.reactionBar}>
-                      {['❤️', '😂', '🔥', '👏', '🎉', '😮'].map(emoji => (
-                        <TouchableOpacity key={emoji} onPress={() => handleEmojiPress(emoji)} style={styles.reactionBtn}>
-                          <Text style={styles.reactionEmoji}>{emoji}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-
-                  <SafeAreaView style={styles.chatInputSafeArea}>
-                    <View style={styles.chatInputContainer}>
-                      <TouchableOpacity onPress={triggerReactions} style={styles.reactionToggleBtn}>
-                        <Ionicons name="happy-outline" size={24} color={colors.SUB_TITLE_COLOR || '#9CA3AF'} />
-                      </TouchableOpacity>
-                      <TextInput
-                        style={styles.chatInput}
-                        placeholder="Say something..."
-                        placeholderTextColor={colors.SUB_TITLE_COLOR}
-                        value={newMessage}
-                        onChangeText={setNewMessage}
-                        onSubmitEditing={sendMessage}
-                      />
-                      <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
-                        <Ionicons name="send" size={18} color="#FFF" />
-                      </TouchableOpacity>
-                    </View>
-                  </SafeAreaView>
-                </KeyboardAvoidingView>
-              ) : (
-                <FlatList
-                  data={participants}
-                  keyExtractor={item => item.id}
-                  renderItem={renderParticipant}
-                  contentContainerStyle={styles.participantsList}
+                {/* Message Input */}
+                <TextInput
+                  style={styles.partyTextInput}
+                  placeholder="Say something to the room..."
+                  placeholderTextColor={colors.SUB_TITLE_COLOR}
+                  value={newMessage}
+                  onChangeText={setNewMessage}
+                  onSubmitEditing={sendMessage}
                 />
-              )}
-            </View>
+
+                {/* Send Button */}
+                <TouchableOpacity
+                  style={styles.partySendBtn}
+                  onPress={sendMessage}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                    style={styles.partySendGradient}
+                  >
+                    <MaterialIcons name="send" size={17} color={colors.TITLE_COLOR} />
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </KeyboardAvoidingView>
           )}
         </View>
       )}
@@ -716,55 +1132,115 @@ const StreamingScreen = ({ route, navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
   containerLandscape: {
-    backgroundColor: '#000',
+    backgroundColor: colors.BACKGROUND_COLOR,
   },
-  safeHeader: {
-    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE || '#1F1F25',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12,
-  },
-  header: {
+
+  // ── Top Header ──
+  topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingBottom: 10,
+    backgroundColor: colors.BACKGROUND_COLOR,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
-  backButton: {
-    padding: 8,
-    marginRight: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    color: colors.TITLE_COLOR || '#FFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  liveBadge: {
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    gap: 10,
+    flex: 1,
+  },
+  backBtnCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  headerTitleCol: {
+    flex: 1,
+  },
+  titleWithBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  headerTitleText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 15,
+    fontWeight: '700',
+    maxWidth: '75%',
+  },
+  hdrTag: {
+    backgroundColor: colors.FILM_GOLD_GLOW,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.3)',
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  hdrTagText: {
+    color: colors.FILM_GOLD,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  headerSubtitleText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveStreamBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.LIVE_RED_GLOW,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
   },
-  liveDot: {
+  liveDotSolid: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.LIVE_RED || '#EF4444',
-    marginRight: 4,
+    backgroundColor: colors.LIVE_RED,
   },
-  liveText: {
-    color: colors.LIVE_RED || '#EF4444',
+  liveStreamText: {
+    color: colors.LIVE_RED,
     fontSize: 10,
-    fontWeight: 'bold',
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
+  headerActionBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+
+  // ── Video Section ──
   videoSection: {
-    backgroundColor: '#000',
+    width: '100%',
+    backgroundColor: colors.BACKGROUND_COLOR,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -777,328 +1253,755 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  telemetryWatermarkBar: {
+    position: 'absolute',
+    top: 10,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  syncBufferBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(8, 8, 16, 0.75)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+  },
+  syncBufferDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  syncBufferText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 9,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  spatialAudioBadge: {
+    backgroundColor: 'rgba(8, 8, 16, 0.75)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(124, 58, 237, 0.3)',
+  },
+  spatialAudioText: {
+    color: colors.PURPLE_ACCENT,
+    fontSize: 9,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  resolutionTag: {
+    position: 'absolute',
+    top: 10,
+    right: 12,
+    backgroundColor: 'rgba(8, 8, 16, 0.75)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  resolutionText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 9,
+    fontWeight: '600',
+  },
   creatorLeftOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(8, 8, 16, 0.88)',
     alignItems: 'center',
-    zIndex: 25,
+    justifyContent: 'center',
+    zIndex: 30,
   },
   creatorLeftTitle: {
-    color: '#FFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 12,
+    color: colors.TITLE_COLOR,
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 10,
   },
   creatorLeftText: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-    marginTop: 6,
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    marginTop: 4,
   },
+
+  // Controls Overlay
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 15,
+    backgroundColor: 'rgba(8, 8, 16, 0.45)',
+    justifyContent: 'space-between',
+    zIndex: 25,
   },
-  controlsRow: {
+  centerControlsRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '70%',
+    gap: 24,
   },
-  controlBtn: {
-    padding: 10,
-    marginHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 30,
-  },
-  playPauseBtn: {
-    padding: 12,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 40,
+  seekStepBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(8, 8, 16, 0.65)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  overlayBackButton: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 44 : 20,
-    left: 20,
-    padding: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    zIndex: 20,
+  playPauseGlowBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    overflow: 'hidden',
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 14,
+    elevation: 6,
   },
-  fullscreenBtn: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    padding: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    zIndex: 20,
-  },
-  contentSection: {
+  playPauseGradient: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  tabsContainer: {
+
+  // Bottom Scrubber Bar
+  bottomScrubberRow: {
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    backgroundColor: 'rgba(8, 8, 16, 0.7)',
+  },
+  scrubberTrack: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  scrubberBuffered: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  scrubberFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  scrubberMetaRow: {
     flexDirection: 'row',
-    backgroundColor: colors.CARD_COLOR || '#1E1E24',
-    borderRadius: 25,
-    padding: 4,
-    marginHorizontal: 16,
-    marginVertical: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.03)',
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: 21,
+    justifyContent: 'space-between',
+    marginTop: 6,
   },
-  activeTab: {
-    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
+  timeCounterGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
-  tabText: {
-    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  activeTabText: {
-    color: '#FFF',
-  },
-  chatList: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  messageBubble: {
-    maxWidth: '80%',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 18,
-    marginBottom: 10,
-  },
-  messageBubbleMe: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#6366F1',
-    borderBottomRightRadius: 2,
-  },
-  messageBubbleThem: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#1E1E24',
-    borderBottomLeftRadius: 2,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.03)',
-  },
-  messageSender: {
+  timeCurrentText: {
+    color: colors.CYAN_ACCENT,
     fontSize: 11,
     fontWeight: '700',
-    marginBottom: 3,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  messageText: {
-    color: '#E5E7EB',
-    fontSize: 14,
-    lineHeight: 18,
+  timeDivider: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
   },
-  reactionBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    alignItems: 'center',
-    backgroundColor: 'rgba(28, 28, 35, 0.8)',
-    borderRadius: 20,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+  timeTotalText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  reactionBtn: {
-    padding: 6,
-  },
-  reactionEmoji: {
-    fontSize: 22,
-  },
-  reactionToggleBtn: {
-    padding: 8,
-    marginRight: 4,
-  },
-  chatInputSafeArea: {
-    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
-  },
-  chatInputContainer: {
+  syncLockBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 3,
+    marginLeft: 6,
+  },
+  syncLockDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.ACCEPT_GREEN,
+  },
+  syncLockText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  telemetryQuickBtns: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  // ── State Switcher Dock ──
+  stateSwitcherDock: {
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.05)',
-    backgroundColor: colors.BACKGROUND_COLOR || '#0F0F13',
+    backgroundColor: colors.BACKGROUND_COLOR,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
-  chatInput: {
-    flex: 1,
-    backgroundColor: '#1E1E24',
-    color: '#FFF',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 15,
+  stateSwitcherContainer: {
+    flexDirection: 'row',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 16,
+    padding: 3,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    maxHeight: 100,
+    borderColor: colors.BORDER_SUBTLE,
   },
-  sendBtn: {
-    marginLeft: 12,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: colors.PRIMARY_COLOR || '#7C3AED',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  participantsList: {
-    padding: 16,
-  },
-  participantCard: {
+  switcherTabBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1E1E24',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.03)',
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
     justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: 13,
   },
-  avatarText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: 'bold',
+  switcherTabActive: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.4)',
   },
-  statusIndicator: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#1E1E24',
-  },
-  participantInfo: {
-    flex: 1,
-  },
-  participantName: {
-    color: '#FFF',
-    fontSize: 16,
+  switcherTabText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
     fontWeight: '600',
   },
-  participantUsername: {
-    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
-    fontSize: 13,
+  switcherTabTextActive: {
+    color: colors.TITLE_COLOR,
+    fontWeight: '700',
   },
-  hostBadge: {
-    backgroundColor: 'rgba(250, 204, 21, 0.2)',
+  switcherBadgeSolo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+  },
+  switcherBadgeSoloText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  switcherBadgeParty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.ACCEPT_GREEN_GLOW,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+  },
+  partyLiveMiniDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.ACCEPT_GREEN,
+  },
+  switcherBadgePartyText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+
+  // ── Adaptive Content Wrap ──
+  adaptiveContentWrap: {
+    flex: 1,
+  },
+
+  // ── VIEW A: Solo Storyboard ──
+  storyboardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  storyboardTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  storyboardTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  privateVaultBadge: {
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  privateVaultText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  storyboardSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  quickBookmarkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  quickBookmarkText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  notesListContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    gap: 10,
+  },
+  noteCard: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  noteCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  noteTimestampGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  jumpTimePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+  },
+  jumpTimeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  noteActTag: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+  },
+  noteDeleteBtn: {
+    padding: 4,
+  },
+  noteContentText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 8,
+  },
+  frameSnapshotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+    backgroundColor: colors.SURFACE_ELEVATED,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  hostBadgeText: {
-    color: colors.FILM_GOLD || '#FACC15',
+  frameSnapshotText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  emptyNotesBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 36,
+    gap: 6,
+  },
+  emptyNotesTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  emptyNotesSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
     fontSize: 12,
-    fontWeight: 'bold',
+    textAlign: 'center',
+    paddingHorizontal: 30,
   },
-  floatingEmoji: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    zIndex: 1000,
-  },
-  notesHeader: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  notesTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFF',
-  },
-  notesSubtitle: {
-    fontSize: 12,
-    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
-    marginTop: 2,
-  },
-  notesList: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  noteCard: {
+
+  // Solo Bottom Dock
+  soloBottomDock: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1E1E24',
+    gap: 8,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.03)',
+    paddingVertical: 10,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE,
   },
-  noteTimeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.PRIMARY_COLOR || '#7C3AED',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  cameraSnapBtn: {
+    width: 40,
+    height: 40,
     borderRadius: 12,
-    marginRight: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
-  noteTimeText: {
+  cameraSnapDot: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  soloInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.BACKGROUND_COLOR,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    paddingHorizontal: 10,
+    height: 40,
+  },
+  soloTextInput: {
+    flex: 1,
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    paddingVertical: 0,
+  },
+  soloInputTimestamp: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  saveNoteBtn: {
+    height: 40,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  saveNoteGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+  },
+  saveNoteBtnText: {
+    color: colors.TITLE_COLOR,
     fontSize: 12,
     fontWeight: '700',
-    color: '#FFF',
   },
-  noteText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#E5E7EB',
-    lineHeight: 18,
+
+  // ── VIEW B: Multi-Participant Party ──
+  audiencePresenceRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.BORDER_SUBTLE,
   },
-  noteDeleteBtn: {
-    padding: 8,
-  },
-  emptyNotesContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  audiencePresenceHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 80,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  emptyNotesText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginTop: 12,
+  audienceLeftTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  emptyNotesSubtext: {
+  audienceTitleText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  liveAudiencePill: {
+    backgroundColor: colors.ACCEPT_GREEN_GLOW,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  liveAudiencePillText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  inviteFriendsLink: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  avatarScrollTrack: {
+    gap: 12,
+  },
+  audienceItemCol: {
+    alignItems: 'center',
+    gap: 4,
+    width: 48,
+  },
+  audienceAvatarWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  audienceInitialText: {
+    color: colors.TITLE_COLOR,
     fontSize: 13,
-    color: colors.SUB_TITLE_COLOR || '#9CA3AF',
+    fontWeight: '700',
+  },
+  hostCrownBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: colors.FILM_GOLD,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hostCrownStar: {
+    color: colors.BACKGROUND_COLOR,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  audienceMicBeacon: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audienceNameText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '500',
     textAlign: 'center',
-    marginTop: 6,
-    paddingHorizontal: 32,
+  },
+
+  // Chat Stream
+  chatListContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  systemChatEventPill: {
+    alignSelf: 'center',
+    backgroundColor: colors.SURFACE_COLOR,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    marginBottom: 6,
+  },
+  systemChatEventText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  chatRowItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    maxWidth: '85%',
+  },
+  chatRowItemMe: {
+    alignSelf: 'flex-end',
+    flexDirection: 'row-reverse',
+  },
+  chatAvatarThumb: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  chatAvatarThumbText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  chatBubbleCol: {
+    gap: 2,
+  },
+  chatBubbleColMe: {
+    alignItems: 'flex-end',
+  },
+  chatMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  chatMetaRowMe: {
+    flexDirection: 'row-reverse',
+  },
+  chatSenderName: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  chatTimeText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  chatBubbleBody: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  chatBubbleMe: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderTopRightRadius: 2,
+  },
+  chatBubbleThem: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderTopLeftRadius: 2,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  chatMessageText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  chatMessageTextMe: {
+    color: colors.TITLE_COLOR,
+  },
+
+  // Floating Reactions Dock
+  floatingReactionsDock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE,
+  },
+  reactionEmojiBtn: {
+    padding: 4,
+  },
+  reactionEmojiText: {
+    fontSize: 20,
+  },
+
+  // Party Bottom Input Bar
+  partyBottomInputBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE,
+  },
+  partyMicBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  partyMicBtnActive: {
+    borderColor: colors.CYAN_ACCENT,
+  },
+  partyMicBtnMuted: {
+    borderColor: colors.DELETE_RED_COLOR,
+  },
+  partyTextInput: {
+    flex: 1,
+    height: 38,
+    backgroundColor: colors.BACKGROUND_COLOR,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    paddingHorizontal: 12,
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+  },
+  partySendBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  partySendGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Floating Emoji particle
+  floatingEmoji: {
+    position: 'absolute',
+    bottom: 30,
+    right: 25,
+    zIndex: 60,
   },
 });
 

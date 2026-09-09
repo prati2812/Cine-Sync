@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   Alert,
@@ -12,159 +11,417 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   ScrollView,
+  TextInput,
   ActivityIndicator,
   Dimensions,
 } from 'react-native';
-import Logo from '../../components/Logo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, database } from '../../config/firebase';
 import colors from '../../theme/Colors';
-import CustomInput from '../../components/UI/CustomInput';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
 
 const SignUpScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Focus states
+  const [focusedField, setFocusedField] = useState(null);
+
+  // Dynamic notch & status bar padding
+  const safeTopPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
+  ) + 8;
+
+  // Password Strength Calculation (0 - 4)
+  const getPasswordStrength = pass => {
+    if (!pass) return 0;
+    let score = 0;
+    if (pass.length >= 6) score += 1;
+    if (pass.length >= 8) score += 1;
+    if (/[0-9]/.test(pass)) score += 1;
+    if (/[^A-Za-z0-9]/.test(pass)) score += 1;
+    return score;
+  };
+
+  const strength = getPasswordStrength(password);
+  const passwordsMatch =
+    confirmPassword.length > 0 && password === confirmPassword;
 
   const handleSignUp = async () => {
-    setIsLoading(true);
-    if (!username || !email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
-      setIsLoading(false);
+    if (isLoading) return;
+
+    if (!username.trim() || !email.trim() || !password.trim()) {
+      Alert.alert('Incomplete Form', 'Please complete all required fields.');
       return;
     }
 
+    if (password !== confirmPassword) {
+      Alert.alert('Password Mismatch', 'Passwords do not match. Please verify.');
+      return;
+    }
+
+    if (!agreedToTerms) {
+      Alert.alert('Terms Required', 'Please agree to the Cine-Sync Terms of Screening.');
+      return;
+    }
+
+    setIsLoading(true);
     try {
       const userCredential = await auth().createUserWithEmailAndPassword(
-        email,
+        email.trim(),
         password,
       );
 
       await userCredential.user.sendEmailVerification();
 
       const userData = {
-        username: username,
-        email: email,
+        username: username.trim(),
+        email: email.trim(),
         userId: userCredential.user.uid,
         createdAt: new Date().toISOString(),
       };
 
-      await database().ref('users/' + userCredential.user.uid).set(userData);
-
-      console.log('User account created & signed in!');
-      setIsLoading(false);
+      await database().ref(`users/${userCredential.user.uid}`).set(userData);
+      console.log('User account created & registered in RTDB!');
     } catch (error) {
-      setIsLoading(false);
+      console.log('SignUp Error:', error);
       if (error.code === 'auth/email-already-in-use') {
-        Alert.alert('Error', 'That email address is already in use!');
+        Alert.alert('Email In Use', 'That email address is already registered.');
       } else if (error.code === 'auth/invalid-email') {
-        Alert.alert('Error', 'That email address is invalid!');
+        Alert.alert('Invalid Email', 'Please provide a valid email address.');
       } else if (error.code === 'auth/weak-password') {
-        Alert.alert('Error', 'Password should be at least 6 characters');
+        Alert.alert('Weak Password', 'Password must be at least 6 characters.');
       } else {
-        Alert.alert('Error', error.message);
+        Alert.alert('Registration Failed', error.message);
       }
-      console.log('New Error', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar
-        backgroundColor={colors.STATUSBAR_BG_COLOR}
+        backgroundColor={colors.BACKGROUND_COLOR}
         barStyle="light-content"
+        translucent
       />
+
+      {/* Ambient Radial Top Glows - exact match to LoginScreen */}
+      <View style={styles.ambientTopGlow} pointerEvents="none">
+        <LinearGradient
+          colors={['rgba(124, 58, 237, 0.18)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </View>
 
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}>
+          style={styles.keyboardView}
+        >
+          {/* Header Navigation Bar */}
+          <View style={[styles.headerBar, { paddingTop: safeTopPadding }]}>
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.75}
+            >
+              <MaterialIcons name="chevron-left" size={24} color="#CBD5E1" />
+            </TouchableOpacity>
+
+            {/* Mini Live VIP Lounge Badge */}
+            <View style={styles.vipBadge}>
+              <View style={styles.livePulseDot} />
+              <Text style={styles.vipBadgeText}>VIP Screening Access</Text>
+            </View>
+
+            <View style={{ width: 40 }} />
+          </View>
+
           <ScrollView
-            contentContainerStyle={{ flexGrow: 1 }}
-            showsVerticalScrollIndicator={false}>
-            <View style={styles.contentContainer}>
-              <Animated.View
-                entering={FadeInDown.duration(800).delay(200)}
-                style={styles.headerContainer}>
-                <Logo size="large" />
-                <Text style={styles.title}>Create Account</Text>
-                <Text style={styles.subtitle}>
-                  Join the community of movie enthusiasts
-                </Text>
-              </Animated.View>
+            contentContainerStyle={[
+              styles.scrollContent,
+              { paddingBottom: Math.max(insets.bottom, 20) + 20 },
+            ]}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Header Section */}
+            <Animated.View
+              entering={FadeInDown.duration(600).delay(100)}
+              style={styles.headerSection}
+            >
+              <View style={styles.startBadge}>
+                <MaterialIcons name="auto-awesome" size={13} color={colors.FILM_GOLD} />
+                <Text style={styles.startBadgeText}>START STREAMING</Text>
+              </View>
 
-              <Animated.View
-                entering={FadeInDown.duration(800).delay(400)}
-                style={styles.formCard}>
-                <View style={styles.formContainer}>
-                  <CustomInput
-                    label={'Username'}
-                    leftIcon={'person-outline'}
-                    placeholder="Choose a username"
-                    value={username}
-                    onChangeText={setUsername}
-                    iconColor={colors.PRIMARY_COLOR}
+              <Text style={styles.pageTitle}>Create VIP Account</Text>
+              <Text style={styles.pageSubtext}>
+                Watch movies in perfect real-time sync with spatial audio
+              </Text>
+            </Animated.View>
+
+            {/* Form Fields */}
+            <Animated.View
+              entering={FadeInDown.duration(600).delay(250)}
+              style={styles.formContainer}
+            >
+              {/* 1. Username Field */}
+              <View
+                style={[
+                  styles.glassInputBox,
+                  focusedField === 'username' && styles.glassInputBoxFocused,
+                ]}
+              >
+                <MaterialIcons
+                  name="person-outline"
+                  size={20}
+                  color={colors.CYAN_ACCENT}
+                  style={styles.inputLeftIcon}
+                />
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Choose cinema handle (e.g. NolanFan)"
+                  placeholderTextColor="#64748B"
+                  value={username}
+                  onChangeText={setUsername}
+                  autoCapitalize="none"
+                  onFocus={() => setFocusedField('username')}
+                  onBlur={() => setFocusedField(null)}
+                />
+                {username.trim().length >= 3 && (
+                  <View style={styles.availabilityBadge}>
+                    <MaterialIcons name="check-circle" size={12} color={colors.ACCEPT_GREEN} />
+                    <Text style={styles.availabilityText}>Available</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* 2. Email Field */}
+              <View
+                style={[
+                  styles.glassInputBox,
+                  focusedField === 'email' && styles.glassInputBoxFocused,
+                ]}
+              >
+                <MaterialIcons
+                  name="mail-outline"
+                  size={20}
+                  color={colors.PRIMARY_COLOR}
+                  style={styles.inputLeftIcon}
+                />
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Enter your email address"
+                  placeholderTextColor="#64748B"
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  onFocus={() => setFocusedField('email')}
+                  onBlur={() => setFocusedField(null)}
+                />
+              </View>
+
+              {/* 3. Password Field with Strength Meter */}
+              <View>
+                <View
+                  style={[
+                    styles.glassInputBox,
+                    focusedField === 'password' && styles.glassInputBoxFocused,
+                  ]}
+                >
+                  <MaterialIcons
+                    name="lock-outline"
+                    size={20}
+                    color={colors.PURPLE_ACCENT}
+                    style={styles.inputLeftIcon}
                   />
-
-                  <CustomInput
-                    label={'Email'}
-                    leftIcon={'mail-outline'}
-                    placeholder="Enter your email"
-                    value={email}
-                    onChangeText={setEmail}
-                    iconColor={colors.PRIMARY_COLOR}
-                  />
-
-                  <CustomInput
-                    label="Password"
-                    leftIcon="lock-closed-outline"
-                    rightIcon={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                    placeholder="Enter password"
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Create master password"
+                    placeholderTextColor="#64748B"
                     secureTextEntry={!showPassword}
                     value={password}
                     onChangeText={setPassword}
-                    onRightIconPress={() => setShowPassword(!showPassword)}
-                    iconColor={colors.PRIMARY_COLOR}
+                    onFocus={() => setFocusedField('password')}
+                    onBlur={() => setFocusedField(null)}
                   />
-
                   <TouchableOpacity
-                    onPress={handleSignUp}
-                    disabled={isLoading}
-                    activeOpacity={0.8}>
-                    <LinearGradient
-                      colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={[
-                        styles.button,
-                        isLoading && styles.buttonDisabled,
-                      ]}>
-                      {isLoading ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : (
-                        <Text style={styles.buttonText}>Create Account</Text>
-                      )}
-                    </LinearGradient>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.linkContainer}
-                    onPress={() => navigation.navigate('Login')}>
-                    <Text style={styles.linkText}>Already have an account? </Text>
-                    <Text style={styles.link}>Login</Text>
+                    onPress={() => setShowPassword(!showPassword)}
+                    activeOpacity={0.7}
+                    style={styles.eyeBtn}
+                  >
+                    <MaterialIcons
+                      name={showPassword ? 'visibility' : 'visibility-off'}
+                      size={20}
+                      color="#94A3B8"
+                    />
                   </TouchableOpacity>
                 </View>
-              </Animated.View>
-            </View>
+
+                {/* Password Strength Meter Bar */}
+                {password.length > 0 && (
+                  <View style={styles.strengthWrap}>
+                    <View style={styles.strengthBarRow}>
+                      {[1, 2, 3, 4].map(idx => {
+                        const isFilled = strength >= idx;
+                        let barColor = colors.DELETE_RED_COLOR;
+                        if (strength === 2) barColor = colors.FILM_GOLD;
+                        if (strength >= 3) barColor = colors.ACCEPT_GREEN;
+
+                        return (
+                          <View
+                            key={idx}
+                            style={[
+                              styles.strengthSegment,
+                              isFilled
+                                ? { backgroundColor: barColor }
+                                : { backgroundColor: 'rgba(255, 255, 255, 0.08)' },
+                            ]}
+                          />
+                        );
+                      })}
+                    </View>
+                    <View style={styles.strengthLabelRow}>
+                      <Text
+                        style={[
+                          styles.strengthText,
+                          {
+                            color:
+                              strength >= 3
+                                ? colors.ACCEPT_GREEN
+                                : strength === 2
+                                ? colors.FILM_GOLD
+                                : colors.DELETE_RED_COLOR,
+                          },
+                        ]}
+                      >
+                        {strength >= 4
+                          ? 'Very Strong'
+                          : strength === 3
+                          ? 'Strong Password'
+                          : strength === 2
+                          ? 'Medium'
+                          : 'Weak'}
+                      </Text>
+                      <Text style={styles.strengthTip}>8+ chars, numbers & symbol</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* 4. Confirm Password Field */}
+              <View
+                style={[
+                  styles.glassInputBox,
+                  focusedField === 'confirm' && styles.glassInputBoxFocused,
+                ]}
+              >
+                <MaterialIcons
+                  name="check-circle-outline"
+                  size={20}
+                  color={colors.ACCEPT_GREEN}
+                  style={styles.inputLeftIcon}
+                />
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Confirm your password"
+                  placeholderTextColor="#64748B"
+                  secureTextEntry={!showPassword}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  onFocus={() => setFocusedField('confirm')}
+                  onBlur={() => setFocusedField(null)}
+                />
+                {passwordsMatch && (
+                  <View style={styles.matchedBadge}>
+                    <MaterialIcons name="done-all" size={14} color={colors.ACCEPT_GREEN} />
+                    <Text style={styles.matchedText}>Matched</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Terms Checkbox */}
+              <TouchableOpacity
+                style={styles.termsRow}
+                onPress={() => setAgreedToTerms(!agreedToTerms)}
+                activeOpacity={0.8}
+              >
+                <View
+                  style={[
+                    styles.checkboxBox,
+                    agreedToTerms && styles.checkboxBoxChecked,
+                  ]}
+                >
+                  {agreedToTerms && (
+                    <MaterialIcons name="check" size={14} color="#FFFFFF" />
+                  )}
+                </View>
+                <Text style={styles.termsText}>
+                  I agree to Cine-Sync{' '}
+                  <Text style={styles.termsLink}>Terms of Screening</Text> &{' '}
+                  <Text style={styles.termsLink}>Community Guidelines</Text>
+                </Text>
+              </TouchableOpacity>
+
+              {/* Primary Action CTA */}
+              <TouchableOpacity
+                style={styles.submitBtn}
+                onPress={handleSignUp}
+                disabled={isLoading}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[colors.PURPLE_ACCENT, '#5939E6', colors.PRIMARY_COLOR]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.submitGradient}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="local-activity" size={20} color="#FFFFFF" />
+                      <Text style={styles.submitText}>Create Account & Enter Lounge</Text>
+                    </>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+            </Animated.View>
+
+            {/* Footer */}
+            <Animated.View
+              entering={FadeInDown.duration(600).delay(350)}
+              style={styles.footerWrap}
+            >
+              <Text style={styles.footerText}>
+                Already have a VIP ticket?{' '}
+                <Text
+                  style={styles.logInLink}
+                  onPress={() => navigation.navigate('Login')}
+                >
+                  Log In
+                </Text>
+              </Text>
+            </Animated.View>
           </ScrollView>
         </KeyboardAvoidingView>
       </TouchableWithoutFeedback>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -173,82 +430,264 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+  ambientTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 350,
+  },
   keyboardView: {
     flex: 1,
   },
-  contentContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  headerContainer: {
-    marginBottom: 40,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: colors.TITLE_COLOR,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: colors.SUB_TITLE_COLOR,
-    textAlign: 'center',
-    paddingHorizontal: 20,
-    lineHeight: 22,
-  },
-  formCard: {
-    backgroundColor: colors.CARD_COLOR,
-    borderRadius: 24,
-    padding: 24,
-    width: '100%',
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  formContainer: {
-    width: '100%',
-  },
-  button: {
-    padding: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-    shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  linkContainer: {
+
+  // Header Nav
+  headerBar: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    zIndex: 10,
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
-    marginTop: 24,
+    alignItems: 'center',
   },
-  linkText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 15,
+  vipBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  link: {
-    color: colors.PRIMARY_COLOR,
-    fontSize: 15,
+  livePulseDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: colors.ACCEPT_GREEN,
+  },
+  vipBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#CBD5E1',
+  },
+
+  scrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 10,
+  },
+
+  // Header Section
+  headerSection: {
+    marginBottom: 20,
+  },
+  startBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255, 180, 0, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.3)',
+    marginBottom: 10,
+  },
+  startBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.FILM_GOLD,
+    letterSpacing: 1,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  pageSubtext: {
+    fontSize: 13,
+    color: '#94A3B8',
+    lineHeight: 18,
+  },
+
+  // Form Container
+  formContainer: {
+    gap: 13,
+  },
+  glassInputBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 52,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  glassInputBoxFocused: {
+    borderColor: colors.PURPLE_ACCENT,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    shadowColor: colors.PURPLE_ACCENT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+  },
+  inputLeftIcon: {
+    marginRight: 12,
+  },
+  textInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#F8FAFC',
+    fontWeight: '500',
+  },
+  availabilityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0, 200, 83, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.3)',
+  },
+  availabilityText: {
+    fontSize: 10,
     fontWeight: '700',
+    color: colors.ACCEPT_GREEN,
+  },
+  eyeBtn: {
+    padding: 6,
+  },
+
+  // Strength Bar
+  strengthWrap: {
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+  strengthBarRow: {
+    flexDirection: 'row',
+    gap: 6,
+    height: 4,
+    marginBottom: 6,
+  },
+  strengthSegment: {
+    flex: 1,
+    borderRadius: 2,
+  },
+  strengthLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  strengthText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  strengthTip: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+
+  // Match Badge
+  matchedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  matchedText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.ACCEPT_GREEN,
+  },
+
+  // Terms Checkbox
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingTop: 4,
+  },
+  checkboxBox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 1,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: colors.PURPLE_ACCENT,
+    borderColor: colors.PURPLE_ACCENT,
+  },
+  termsText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#94A3B8',
+    lineHeight: 17,
+  },
+  termsLink: {
+    color: colors.CYAN_ACCENT,
+    textDecorationLine: 'underline',
+  },
+
+  // Submit Button
+  submitBtn: {
+    height: 52,
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginTop: 8,
+    shadowColor: colors.PURPLE_ACCENT,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  submitGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+  },
+  submitText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+
+  // Footer
+  footerWrap: {
+    alignItems: 'center',
+    marginTop: 22,
+  },
+  footerText: {
+    fontSize: 13,
+    color: '#94A3B8',
+  },
+  logInLink: {
+    fontWeight: '700',
+    color: colors.CYAN_ACCENT,
   },
 });
 
