@@ -21,6 +21,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
+import { getYouTubeThumbnailDetails } from '../../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -41,6 +42,64 @@ function getInitials(name) {
   }
   return name.slice(0, 2).toUpperCase();
 }
+
+// ──────────────────────────────────────────────────────────────
+//  Waiting Hero Preview with YouTube & Fallback Support
+// ──────────────────────────────────────────────────────────────
+const WaitingHeroPreview = ({ streamUrl, thumbnail, content }) => {
+  const thumbDetails = getYouTubeThumbnailDetails(streamUrl);
+  const maxresUrl = thumbDetails?.maxresUrl || null;
+  const fallbackUri = thumbDetails?.fallbackUrl || null;
+  const initialUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+    ? thumbnail
+    : maxresUrl;
+
+  const [imgUri, setImgUri] = useState(initialUri);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    const nextUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+      ? thumbnail
+      : maxresUrl;
+    setImgUri(nextUri);
+    setHasError(false);
+  }, [maxresUrl, thumbnail]);
+
+  if (imgUri && !hasError) {
+    return (
+      <ImageBackground
+        source={{ uri: imgUri }}
+        style={styles.heroBgImage}
+        imageStyle={styles.heroBgImageRadius}
+        onError={() => {
+          if (fallbackUri && imgUri !== fallbackUri) {
+            setImgUri(fallbackUri);
+          } else {
+            setHasError(true);
+          }
+        }}
+      >
+        <LinearGradient
+          colors={['rgba(0, 0, 0, 0.45)', colors.SURFACE_COLOR]}
+          style={styles.heroOverlay}
+        >
+          {content}
+        </LinearGradient>
+      </ImageBackground>
+    );
+  }
+
+  return (
+    <View style={[styles.heroBgImage, { backgroundColor: '#131326' }]}>
+      <LinearGradient
+        colors={['#1E1B4B', colors.SURFACE_COLOR]}
+        style={styles.heroOverlay}
+      >
+        {content}
+      </LinearGradient>
+    </View>
+  );
+};
 
 const WaitingScreen = ({ route, navigation }) => {
   const { roomId, roomName, streamUrl: routeStreamUrl, thumbnail: routeThumbnail } = route?.params || {};
@@ -306,16 +365,11 @@ const WaitingScreen = ({ route, navigation }) => {
       >
         {/* ── HERO STREAM PREVIEW CARD ───────────────────────────── */}
         <View style={styles.heroCard}>
-          {(roomData?.thumbnail || routeThumbnail) ? (
-            <ImageBackground
-              source={{ uri: roomData?.thumbnail || routeThumbnail }}
-              style={styles.heroBgImage}
-              imageStyle={{ borderTopLeftRadius: 20, borderTopRightRadius: 20 }}
-            >
-              <LinearGradient
-                colors={['transparent', colors.SURFACE_COLOR]}
-                style={styles.heroOverlay}
-              >
+          <WaitingHeroPreview
+            streamUrl={roomData?.streamUrl || routeStreamUrl}
+            thumbnail={roomData?.thumbnail || routeThumbnail}
+            content={
+              <>
                 {/* Spinner Center */}
                 <View style={styles.loaderCenter}>
                   <Animated.View
@@ -339,40 +393,9 @@ const WaitingScreen = ({ route, navigation }) => {
                 <Text style={styles.heroSubText}>
                   Synchronized 4K streaming buffer ready
                 </Text>
-              </LinearGradient>
-            </ImageBackground>
-          ) : (
-            <View style={[styles.heroBgImage, { backgroundColor: '#131326' }]}>
-              <LinearGradient
-                colors={['#1E1B4B', colors.SURFACE_COLOR]}
-                style={styles.heroOverlay}
-              >
-                {/* Spinner Center */}
-                <View style={styles.loaderCenter}>
-                  <Animated.View
-                    style={[
-                      styles.loaderRing,
-                      { transform: [{ scale: pulseValue }] },
-                    ]}
-                  />
-                  <View style={styles.loaderIconBox}>
-                    <Animated.View style={{ transform: [{ rotate: spinDegree }] }}>
-                      <MaterialIcons name="sync" size={26} color={colors.CYAN_ACCENT} />
-                    </Animated.View>
-                  </View>
-                </View>
-
-                <Text style={styles.heroLoaderText}>
-                  {isCreator
-                    ? 'Ready to Launch Stream...'
-                    : 'Waiting for Host to Launch Stream...'}
-                </Text>
-                <Text style={styles.heroSubText}>
-                  Synchronized 4K streaming buffer ready
-                </Text>
-              </LinearGradient>
-            </View>
-          )}
+              </>
+            }
+          />
 
           {/* Details Section */}
           <View style={styles.heroDetails}>
@@ -733,6 +756,10 @@ const styles = StyleSheet.create({
   heroBgImage: {
     width: '100%',
     height: 200,
+  },
+  heroBgImageRadius: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
   },
   heroOverlay: {
     flex: 1,

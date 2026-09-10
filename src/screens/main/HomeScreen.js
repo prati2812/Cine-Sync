@@ -29,8 +29,118 @@ import Animated, {
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../theme/Colors';
+import { getYouTubeThumbnailDetails } from '../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// ──────────────────────────────────────────────────────────────
+//  Room Thumbnail Component with YouTube & Fallback Support
+// ──────────────────────────────────────────────────────────────
+const RoomCardThumbnail = ({ streamUrl, thumbnail, isCreator }) => {
+  const thumbDetails = getYouTubeThumbnailDetails(streamUrl);
+  const maxresUrl = thumbDetails?.maxresUrl || null;
+  const fallbackUri = thumbDetails?.fallbackUrl || null;
+  const initialUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+    ? thumbnail
+    : maxresUrl;
+
+  const [imgUri, setImgUri] = useState(initialUri);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    const nextUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+      ? thumbnail
+      : maxresUrl;
+    setImgUri(nextUri);
+    setHasError(false);
+  }, [maxresUrl, thumbnail]);
+
+  if (imgUri && !hasError) {
+    return (
+      <View style={styles.roomThumbnailWrap}>
+        <Image
+          source={{ uri: imgUri }}
+          style={styles.roomThumbnailImage}
+          resizeMode="cover"
+          onError={() => {
+            if (fallbackUri && imgUri !== fallbackUri) {
+              setImgUri(fallbackUri);
+            } else {
+              setHasError(true);
+            }
+          }}
+        />
+        <View style={styles.roomThumbnailOverlay}>
+          <Ionicons name="play" size={10} color="#FFF" />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.roomThumbnailWrap}>
+      <LinearGradient
+        colors={isCreator ? ['#F59E0B', '#D97706'] : ['#2563EB', '#7C3AED']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.roomThumbnailGradient}
+      >
+        <Ionicons name="film" size={22} color="#FFF" />
+      </LinearGradient>
+    </View>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────
+//  Hero Room Banner with YouTube & Fallback Support
+// ──────────────────────────────────────────────────────────────
+const HeroRoomBanner = ({ featuredRoom, content }) => {
+  const thumbDetails = getYouTubeThumbnailDetails(featuredRoom?.streamUrl);
+  const maxresUrl = thumbDetails?.maxresUrl || null;
+  const fallbackUri = thumbDetails?.fallbackUrl || null;
+  const thumbnail = featuredRoom?.thumbnail;
+  const initialUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+    ? thumbnail
+    : maxresUrl;
+
+  const [imgUri, setImgUri] = useState(initialUri);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    const nextUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+      ? thumbnail
+      : maxresUrl;
+    setImgUri(nextUri);
+    setHasError(false);
+  }, [maxresUrl, thumbnail]);
+
+  const hasImage = imgUri && !hasError;
+
+  return (
+    <View style={styles.heroWrap}>
+      {hasImage ? (
+        <ImageBackground
+          source={{ uri: imgUri }}
+          style={styles.heroBackground}
+          imageStyle={styles.heroBackgroundImage}
+          onError={() => {
+            if (fallbackUri && imgUri !== fallbackUri) {
+              setImgUri(fallbackUri);
+            } else {
+              setHasError(true);
+            }
+          }}
+        >
+          {content}
+        </ImageBackground>
+      ) : (
+        <View style={[styles.heroBackground, styles.heroFallbackBg]}>
+          {content}
+        </View>
+      )}
+    </View>
+  );
+};
 
 // ──────────────────────────────────────────────────────────────
 //  Room Card Component
@@ -71,16 +181,11 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
 
         <View style={styles.roomCardInner}>
           {/* Thumbnail */}
-          <View style={styles.roomThumbnailWrap}>
-            <LinearGradient
-              colors={isCreator ? ['#F59E0B', '#D97706'] : ['#2563EB', '#7C3AED']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.roomThumbnailGradient}
-            >
-              <Ionicons name="film" size={22} color="#FFF" />
-            </LinearGradient>
-          </View>
+          <RoomCardThumbnail
+            streamUrl={item?.streamUrl}
+            thumbnail={item?.thumbnail}
+            isCreator={isCreator}
+          />
 
           {/* Info */}
           <View style={styles.roomInfo}>
@@ -539,21 +644,11 @@ const HomeScreen = () => {
             );
 
             return (
-              <View style={styles.heroWrap}>
-                {featuredRoom.thumbnail ? (
-                  <ImageBackground
-                    source={{ uri: featuredRoom.thumbnail }}
-                    style={styles.heroBackground}
-                    imageStyle={{ borderRadius: 20 }}
-                  >
-                    {content}
-                  </ImageBackground>
-                ) : (
-                  <View style={[styles.heroBackground, styles.heroFallbackBg]}>
-                    {content}
-                  </View>
-                )}
-              </View>
+              <HeroRoomBanner
+                key={featuredRoom.roomId || featuredRoom.name}
+                featuredRoom={featuredRoom}
+                content={content}
+              />
             );
           })()
         ) : (
@@ -862,6 +957,9 @@ const styles = StyleSheet.create({
     height: 240,
     justifyContent: 'flex-end',
   },
+  heroBackgroundImage: {
+    borderRadius: 20,
+  },
   heroGradient: {
     flex: 1,
     justifyContent: 'space-between',
@@ -1085,6 +1183,23 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roomThumbnailImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#1E1B4B',
+  },
+  roomThumbnailOverlay: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
   },

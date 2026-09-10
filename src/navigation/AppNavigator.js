@@ -25,6 +25,8 @@ import SetupPINScreen from '../screens/main/Settings/SetupPINScreen';
 import StreamInfoScreen from '../screens/main/Streaming/StreamInfoScreen';
 import MainTabs from './MainTabs';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
+import { navigationRef } from './navigationRef';
+import GlobalIncomingCallNotifier from '../components/GlobalIncomingCallNotifier';
 
 const Stack = createNativeStackNavigator();
 
@@ -131,7 +133,7 @@ const AppNavigator = () => {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <BottomSheetModalProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
             {user ? (
               <>
@@ -160,6 +162,7 @@ const AppNavigator = () => {
             )}
           </Stack.Navigator>
         </NavigationContainer>
+        {user && <GlobalIncomingCallNotifier currentUser={user} />}
       </BottomSheetModalProvider>
     </GestureHandlerRootView>
   );

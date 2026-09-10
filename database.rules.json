@@ -1,0 +1,75 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth != null",
+      ".indexOn": ["username", "email", "userId"],
+      "$userId": {
+        ".write": "auth != null && (auth.uid === $userId || !data.exists())"
+      }
+    },
+    "user_chats": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null",
+        ".indexOn": ["lastMessageTimestamp"]
+      }
+    },
+    "user_calls": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null"
+      }
+    },
+    "chats": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "messages": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["timestamp", "senderId", "seen", "type"]
+        }
+      }
+    },
+    "rooms": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["createdAt", "isStreaming", "status", "roomId"],
+      "$roomId": {
+        "messages": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["timestamp", "senderId"]
+        },
+        "reactions": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          ".indexOn": ["timestamp"]
+        }
+      }
+    },
+    "media_blobs": {
+      ".read": "auth != null",
+      ".indexOn": ["senderId", "createdAt"],
+      "$mediaId": {
+        ".write": "auth != null"
+      }
+    },
+    "friends": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null",
+        ".indexOn": [".value"]
+      }
+    },
+    "notes": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$key1": {
+        "$key2": {
+          ".indexOn": ["timestamp", "seconds"]
+        }
+      }
+    }
+  }
+}

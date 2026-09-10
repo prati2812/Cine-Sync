@@ -29,6 +29,7 @@ import { auth, database } from '../../../config/firebase';
 import { useAudioCall } from '../../../webRTC/useAudioCall';
 import { RTCView } from 'react-native-webrtc';
 import colors from '../../../theme/Colors';
+import { uploadMediaBlob, resolveMediaUri, deleteMediaBlob } from '../../../functions/mediaService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -58,12 +59,109 @@ const getDateLabel = (date) => {
   }
 };
 
+/**
+ * Lightweight, decoupled image bubble that loads cached Base64 from local disk
+ * or fetches from RTDB media_blobs on-demand to keep messages under 1KB.
+ */
+const ChatImageThumbnail = ({ item, isMyMessage, onOpenFullscreen, onLongPress }) => {
+  const [resolvedUri, setResolvedUri] = useState(item.imageUri || null);
+  const [loading, setLoading] = useState(!item.imageUri && Boolean(item.mediaId));
+
+  useEffect(() => {
+    let isMounted = true;
+    if (item.imageUri) {
+      setResolvedUri(item.imageUri);
+      setLoading(false);
+      return;
+    }
+
+    if (item.mediaId) {
+      setLoading(true);
+      resolveMediaUri(item.mediaId, item.imageUri)
+        .then((uri) => {
+          if (isMounted) {
+            setResolvedUri(uri);
+            setLoading(false);
+          }
+        })
+        .catch(() => {
+          if (isMounted) setLoading(false);
+        });
+    } else {
+      setLoading(false);
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [item.mediaId, item.imageUri]);
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={() => {
+        if (resolvedUri) {
+          onOpenFullscreen(resolvedUri, item.caption);
+        }
+      }}
+      onLongPress={() => onLongPress && onLongPress(item)}
+      style={[
+        styles.imageMessageCard,
+        isMyMessage ? styles.myImageMessageCard : styles.theirImageMessageCard,
+      ]}
+    >
+      {loading ? (
+        <View style={styles.imagePlaceholder}>
+          <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
+          <Text style={styles.imagePlaceholderText}>Loading photo...</Text>
+        </View>
+      ) : resolvedUri ? (
+        <Image
+          source={{ uri: resolvedUri }}
+          style={styles.imageThumbnail}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={styles.imagePlaceholder}>
+          <MaterialIcons name="broken-image" size={32} color="rgba(255, 255, 255, 0.4)" />
+          <Text style={styles.imagePlaceholderText}>Photo unavailable</Text>
+        </View>
+      )}
+
+      {/* Optional Caption */}
+      {Boolean(item.caption) && (
+        <Text style={styles.imageCaptionText}>{item.caption}</Text>
+      )}
+
+      {/* Image Card Footer */}
+      <View style={styles.imageCardFooter}>
+        <Text style={styles.imageTimestamp}>
+          {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          })}
+        </Text>
+        {isMyMessage && (
+          <View style={styles.seenReceiptRow}>
+            <MaterialIcons
+              name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+              size={14}
+              color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.7)'}
+              style={{ marginLeft: 4 }}
+            />
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const ChatScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
   const [message, setMessage] = useState('');
   const [showAttachments, setShowAttachments] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [chatId, setChatId] = useState(null);
+  const [chatId, setChatId] = useState(route.params?.chatId || null);
   const [otherUserStatus, setOtherUserStatus] = useState('offline');
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [showMessageActionModal, setShowMessageActionModal] = useState(false);
@@ -77,7 +175,7 @@ const ChatScreen = ({ route, navigation }) => {
   const flatListRef = useRef(null);
 
   const otherUsername = route.params?.username || 'Chat';
-  const otherUserId = route.params?.userId;
+  const otherUserId = route.params?.userId || route.params?.id || route.params?.friendId;
   const otherAvatar = route.params?.avatar || null;
 
   // Dynamic safe area top inset for Android & iOS notch protection
@@ -124,12 +222,24 @@ const ChatScreen = ({ route, navigation }) => {
     toggleCamera,
     switchCamera,
     formatDuration,
-  } = useAudioCall(chatId);
+  } = useAudioCall(chatId, otherUserId);
+
+  const autoAnswerTriggeredRef = useRef(false);
+
+  // Auto-answer incoming call if routed from GlobalIncomingCallNotifier Accept button
+  useEffect(() => {
+    if (route.params?.autoAnswer && callState === 'incoming' && !autoAnswerTriggeredRef.current) {
+      autoAnswerTriggeredRef.current = true;
+      console.log('[ChatScreen] Auto-answering call triggered from global incoming notification');
+      answerCall();
+    }
+  }, [route.params?.autoAnswer, callState, answerCall]);
 
   // Reset minimize state when call ends
   useEffect(() => {
     if (callState === 'idle') {
       setIsCallMinimized(false);
+      autoAnswerTriggeredRef.current = false;
     }
   }, [callState]);
 
@@ -246,6 +356,11 @@ const ChatScreen = ({ route, navigation }) => {
     const currentUser = auth().currentUser;
     if (!currentUser || !otherUserId) return;
 
+    if (route.params?.chatId) {
+      setChatId(route.params.chatId);
+      listenToMessages(route.params.chatId);
+    }
+
     const userChatsRef = database().ref(`user_chats/${currentUser.uid}`);
     userChatsRef.on('value', (snapshot) => {
       const chats = snapshot.val();
@@ -256,10 +371,10 @@ const ChatScreen = ({ route, navigation }) => {
         if (existingChatId) {
           setChatId(existingChatId);
           listenToMessages(existingChatId);
-        } else {
+        } else if (!route.params?.chatId) {
           createNewChat(currentUser.uid, otherUserId);
         }
-      } else {
+      } else if (!route.params?.chatId) {
         createNewChat(currentUser.uid, otherUserId);
       }
     });
@@ -632,7 +747,7 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
-  // Send photo to chat (persisted in RTDB without external cloud storage)
+  // Send photo to chat (decoupled media_blobs in RTDB + local disk cache)
   const handleSendPhoto = async () => {
     if (!selectedPhoto || !chatId || isSendingPhoto) return;
     const currentUser = auth().currentUser;
@@ -650,13 +765,17 @@ const ChatScreen = ({ route, navigation }) => {
     setIsViewOnce(false);
 
     try {
+      // Decouple heavy Base64 image into media_blobs node + local disk cache
+      const mediaId = await uploadMediaBlob(photoDataUri, currentUser.uid);
+
       const messagesRef = database().ref(`chats/${chatId}/messages`);
       const newMsgRef = messagesRef.push();
 
       const messagePayload = {
         id: newMsgRef.key,
         type: 'image',
-        imageUri: photoDataUri,
+        mediaId: mediaId || '',
+        imageUri: '', // Decoupled from message payload: keeps messages under 1KB
         caption: caption,
         viewOnce: sendAsViewOnce,
         opened: false,
@@ -690,7 +809,7 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   // Handle tapping on a View-Once ephemeral photo
-  const handleViewOncePhotoPress = (item) => {
+  const handleViewOncePhotoPress = async (item) => {
     const currentUid = auth().currentUser?.uid;
     const isMyMessage = item.senderId === currentUid;
 
@@ -710,30 +829,50 @@ const ChatScreen = ({ route, navigation }) => {
       return;
     }
 
-    if (!item.imageUri) {
+    if (!item.imageUri && !item.mediaId) {
       Alert.alert('Unavailable', 'This photo is no longer available.');
+      return;
+    }
+
+    // Resolve media URI on-demand (checks local disk cache first, else fetches once from media_blobs)
+    let uri = item.imageUri;
+    if (item.mediaId) {
+      uri = await resolveMediaUri(item.mediaId, item.imageUri);
+    }
+
+    if (!uri) {
+      Alert.alert('Unavailable', 'This photo is no longer available or has expired.');
       return;
     }
 
     // Recipient opens the view-once photo
     setFullscreenImage({
-      uri: item.imageUri,
+      uri: uri,
       caption: item.caption,
       isViewOnce: true,
       messageId: item.id,
+      mediaId: item.mediaId || null,
     });
   };
 
-  // Close fullscreen photo viewer (if view-once, marks opened and wipes imageUri)
+  // Close fullscreen photo viewer (if view-once, marks opened, wipes imageUri, and purges blob)
   const handleCloseFullscreenImage = () => {
     if (fullscreenImage && fullscreenImage.isViewOnce && fullscreenImage.messageId && chatId) {
       const msgId = fullscreenImage.messageId;
-      // Mark opened and clear imageUri to enforce single viewing and save RTDB bandwidth
+      const mediaId = fullscreenImage.mediaId;
+
+      // Mark opened and clear references to enforce single viewing and save RTDB bandwidth
       database().ref(`chats/${chatId}/messages/${msgId}`).update({
         opened: true,
         openedAt: database.ServerValue.TIMESTAMP,
         imageUri: '',
+        mediaId: '',
       }).catch((e) => console.warn('Error marking view-once opened:', e));
+
+      // Purge heavy Base64 from RTDB and local disk cache to reclaim free quota
+      if (mediaId) {
+        deleteMediaBlob(mediaId).catch((e) => console.warn('Error deleting media blob:', e));
+      }
     }
     setFullscreenImage(null);
   };
@@ -787,6 +926,129 @@ const ChatScreen = ({ route, navigation }) => {
                 minute: '2-digit',
               })}
             </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // ── CALL LOG MESSAGE TILE (WhatsApp Style) ──
+    if (item.type === 'call') {
+      const isCaller = item.callerId === auth().currentUser?.uid;
+      const isVideo = item.callType === 'video';
+      const isMissed =
+        item.callStatus === 'missed' ||
+        item.callStatus === 'declined' ||
+        item.callStatus === 'cancelled';
+
+      const mins = Math.floor((item.duration || 0) / 60);
+      const secs = (item.duration || 0) % 60;
+      const durationLabel = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+      let title = isVideo ? 'Video call' : 'Voice call';
+      let subtitle = durationLabel;
+      let iconName = isVideo ? 'videocam' : 'call';
+      let iconColor = colors.ACCEPT_GREEN;
+      let badgeBg = 'rgba(0, 200, 83, 0.15)';
+
+      if (isMissed) {
+        iconColor = colors.LIVE_RED;
+        badgeBg = 'rgba(239, 68, 68, 0.15)';
+        if (!isCaller) {
+          title = isVideo ? 'Missed video call' : 'Missed voice call';
+          subtitle = 'Tap to call back';
+          iconName = isVideo ? 'videocam-off' : 'call-missed';
+        } else {
+          title = isVideo ? 'Video call' : 'Voice call';
+          subtitle = item.callStatus === 'declined' ? 'Declined' : 'No answer';
+          iconName = isVideo ? 'videocam' : 'call-made';
+        }
+      }
+
+      return (
+        <View style={styles.messageOuterWrap}>
+          {dateSeparator}
+          <TouchableOpacity
+            activeOpacity={0.88}
+            onPress={() => {
+              Alert.alert(
+                isVideo ? 'Video Call' : 'Voice Call',
+                `Call ${otherUsername}?`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Call',
+                    onPress: () => startCall(isVideo ? 'video' : 'audio'),
+                  },
+                ]
+              );
+            }}
+            onLongPress={() => handleMessageLongPress(item)}
+            style={[
+              styles.callTileCard,
+              isMyMessage ? styles.myCallTileCard : styles.theirCallTileCard,
+            ]}
+          >
+            <View style={styles.callTileMainRow}>
+              {/* Call Icon Badge */}
+              <View style={[styles.callTileIconBadge, { backgroundColor: badgeBg }]}>
+                <MaterialIcons name={iconName} size={22} color={iconColor} />
+              </View>
+
+              {/* Text Info */}
+              <View style={styles.callTileTextCol}>
+                <Text
+                  style={[
+                    styles.callTileTitle,
+                    isMissed && !isCaller && { color: colors.LIVE_RED },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {title}
+                </Text>
+                <Text
+                  style={[
+                    styles.callTileSubtitle,
+                    isMissed && !isCaller && { color: colors.CYAN_ACCENT },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {subtitle}
+                </Text>
+              </View>
+
+              {/* Direct Call Back Button */}
+              <TouchableOpacity
+                style={styles.callTileCallbackBtn}
+                onPress={() => startCall(isVideo ? 'video' : 'audio')}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons
+                  name={isVideo ? 'videocam' : 'call'}
+                  size={18}
+                  color={colors.CYAN_ACCENT}
+                />
+              </TouchableOpacity>
+            </View>
+
+            {/* Footer with Timestamp & Seen Status */}
+            <View style={styles.callTileFooter}>
+              <Text style={styles.callTileTimestamp}>
+                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+              {isMyMessage && (
+                <View style={styles.seenReceiptRow}>
+                  <MaterialIcons
+                    name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+                    size={14}
+                    color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.65)'}
+                    style={{ marginLeft: 4 }}
+                  />
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         </View>
       );
@@ -996,60 +1258,18 @@ const ChatScreen = ({ route, navigation }) => {
       return (
         <View style={styles.messageOuterWrap}>
           {dateSeparator}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() =>
-              item.imageUri &&
+          <ChatImageThumbnail
+            item={item}
+            isMyMessage={isMyMessage}
+            onOpenFullscreen={(uri, caption) =>
               setFullscreenImage({
-                uri: item.imageUri,
-                caption: item.caption,
+                uri,
+                caption,
                 isViewOnce: false,
               })
             }
-            onLongPress={() => handleMessageLongPress(item)}
-            style={[
-              styles.imageMessageCard,
-              isMyMessage ? styles.myImageMessageCard : styles.theirImageMessageCard,
-            ]}
-          >
-            {item.imageUri ? (
-              <Image
-                source={{ uri: item.imageUri }}
-                style={styles.imageThumbnail}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.imagePlaceholder}>
-                <MaterialIcons name="broken-image" size={32} color="rgba(255, 255, 255, 0.4)" />
-                <Text style={styles.imagePlaceholderText}>Photo unavailable</Text>
-              </View>
-            )}
-
-            {/* Optional Caption */}
-            {Boolean(item.caption) && (
-              <Text style={styles.imageCaptionText}>{item.caption}</Text>
-            )}
-
-            {/* Image Card Footer */}
-            <View style={styles.imageCardFooter}>
-              <Text style={styles.imageTimestamp}>
-                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </Text>
-              {isMyMessage && (
-                <View style={styles.seenReceiptRow}>
-                  <MaterialIcons
-                    name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
-                    size={14}
-                    color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.7)'}
-                    style={{ marginLeft: 4 }}
-                  />
-                </View>
-              )}
-            </View>
-          </TouchableOpacity>
+            onLongPress={handleMessageLongPress}
+          />
         </View>
       );
     }
@@ -1735,16 +1955,10 @@ const ChatScreen = ({ route, navigation }) => {
 
     return (
       <View style={StyleSheet.absoluteFillObject}>
-        {/* Atmospheric Ambient Backdrop for Audio Call */}
-        <View style={callStyles.audioAtmosphere}>
-          <View style={callStyles.glowOrbBlue} />
-          <View style={callStyles.glowOrbPurple} />
-          <View style={callStyles.glowOrbCyan} />
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={callStyles.blurredBgImage} blurRadius={30} />
-          ) : null}
+        {/* Ambient Top Glow matching LoginScreen */}
+        <View style={callStyles.ambientTopGlow} pointerEvents="none">
           <LinearGradient
-            colors={['rgba(8, 8, 16, 0.65)', 'rgba(8, 8, 16, 0.94)', colors.BACKGROUND_COLOR]}
+            colors={['rgba(124, 58, 237, 0.22)', 'rgba(0, 122, 255, 0.10)', 'transparent']}
             style={StyleSheet.absoluteFillObject}
           />
         </View>
@@ -1850,34 +2064,37 @@ const ChatScreen = ({ route, navigation }) => {
             </Text>
           </View>
 
-          <View style={callStyles.equalizerPill}>
-            <View style={callStyles.timerRow}>
-              <View style={callStyles.timerDot} />
-              <Text style={callStyles.timerText}>{formatDuration(callDuration)}</Text>
+          {/* Timer and Equalizer only displayed once call is connected/received */}
+          {callState === 'connected' && (
+            <View style={callStyles.equalizerPill}>
+              <View style={callStyles.timerRow}>
+                <View style={callStyles.timerDot} />
+                <Text style={callStyles.timerText}>{formatDuration(callDuration)}</Text>
+              </View>
+              <View style={callStyles.equalizerDivider} />
+              <View style={callStyles.equalizerBarsRow}>
+                {eqBars.map((bar, i) => (
+                  <Animated.View
+                    key={i}
+                    style={[
+                      callStyles.eqBar,
+                      {
+                        height: bar,
+                        backgroundColor:
+                          i % 3 === 0
+                            ? colors.CYAN_ACCENT
+                            : i % 2 === 0
+                            ? colors.PURPLE_ACCENT
+                            : colors.PRIMARY_COLOR,
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+              <View style={callStyles.equalizerDivider} />
+              <Text style={callStyles.opusTag}>96kbps Opus</Text>
             </View>
-            <View style={callStyles.equalizerDivider} />
-            <View style={callStyles.equalizerBarsRow}>
-              {eqBars.map((bar, i) => (
-                <Animated.View
-                  key={i}
-                  style={[
-                    callStyles.eqBar,
-                    {
-                      height: bar,
-                      backgroundColor:
-                        i % 3 === 0
-                          ? colors.CYAN_ACCENT
-                          : i % 2 === 0
-                          ? colors.PURPLE_ACCENT
-                          : colors.PRIMARY_COLOR,
-                    },
-                  ]}
-                />
-              ))}
-            </View>
-            <View style={callStyles.equalizerDivider} />
-            <Text style={callStyles.opusTag}>96kbps Opus</Text>
-          </View>
+          )}
 
           <View style={callStyles.syncPartyCard}>
             <LinearGradient
@@ -3167,6 +3384,82 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.65)',
   },
 
+  // ── CALL LOG MESSAGE TILE (WhatsApp Style) ──
+  callTileCard: {
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 8,
+    marginVertical: 4,
+    minWidth: SCREEN_WIDTH * 0.62,
+    maxWidth: SCREEN_WIDTH * 0.78,
+    borderWidth: 1,
+  },
+  myCallTileCard: {
+    alignSelf: 'flex-end',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderColor: 'rgba(0, 122, 255, 0.28)',
+    borderBottomRightRadius: 4,
+  },
+  theirCallTileCard: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderBottomLeftRadius: 4,
+  },
+  callTileMainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  callTileIconBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  callTileTextCol: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  callTileTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+    marginBottom: 2,
+  },
+  callTileSubtitle: {
+    fontSize: 12,
+    color: colors.SUB_TITLE_COLOR,
+    fontWeight: '500',
+  },
+  callTileCallbackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.25)',
+  },
+  callTileFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: 6,
+    paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  callTileTimestamp: {
+    fontSize: 10,
+    color: colors.SUB_TITLE_COLOR,
+  },
+
   // ── REGULAR IMAGE MESSAGE CARDS ──
   imageMessageCard: {
     borderRadius: 16,
@@ -3540,46 +3833,13 @@ const callStyles = StyleSheet.create({
     backgroundColor: colors.BACKGROUND_COLOR,
   },
 
-  // ── Atmospheric Ambient Backdrop ──
-  audioAtmosphere: {
-    ...StyleSheet.absoluteFillObject,
-    overflow: 'hidden',
-  },
-  glowOrbBlue: {
+  // ── Ambient Background matching LoginScreen ──
+  ambientTopGlow: {
     position: 'absolute',
-    top: '15%',
-    left: '10%',
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: colors.PRIMARY_COLOR,
-    opacity: 0.16,
-  },
-  glowOrbPurple: {
-    position: 'absolute',
-    bottom: '22%',
-    right: '-12%',
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: colors.PURPLE_ACCENT,
-    opacity: 0.2,
-  },
-  glowOrbCyan: {
-    position: 'absolute',
-    top: '35%',
-    right: '10%',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: colors.CYAN_ACCENT,
-    opacity: 0.12,
-  },
-  blurredBgImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
-    opacity: 0.22,
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 380,
   },
 
   // ── Video Stream Views ──
@@ -3664,7 +3924,7 @@ const callStyles = StyleSheet.create({
     backgroundColor: colors.ACCEPT_GREEN,
   },
   encryptionText: {
-    color: '#E2E8F0',
+    color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '600',
     letterSpacing: 0.2,
@@ -3672,13 +3932,19 @@ const callStyles = StyleSheet.create({
   hdAudioBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(6, 182, 212, 0.35)',
     gap: 5,
+  },
+  hdBadgeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
   hdAudioText: {
     color: colors.CYAN_ACCENT,
@@ -3808,8 +4074,8 @@ const callStyles = StyleSheet.create({
     marginBottom: 2,
   },
   callerNameTitle: {
-    color: colors.TITLE_COLOR,
-    fontSize: 23,
+    color: '#FFFFFF',
+    fontSize: 24,
     fontWeight: '800',
     letterSpacing: 0.2,
   },
@@ -3817,9 +4083,9 @@ const callStyles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: 'rgba(255, 180, 0, 0.15)',
+    backgroundColor: 'rgba(255, 180, 0, 0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 180, 0, 0.4)',
+    borderColor: 'rgba(255, 180, 0, 0.5)',
   },
   hostBadgeText: {
     color: colors.FILM_GOLD,
@@ -3828,21 +4094,22 @@ const callStyles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   callerSubtitle: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 13,
     fontWeight: '500',
+    marginTop: 2,
   },
 
   // ── Equalizer & Timer ──
   equalizerPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: 'rgba(22, 22, 37, 0.88)',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     gap: 10,
     marginBottom: 16,
   },
@@ -3858,7 +4125,7 @@ const callStyles = StyleSheet.create({
     backgroundColor: colors.PRIMARY_COLOR,
   },
   timerText: {
-    color: colors.TITLE_COLOR,
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
@@ -3866,7 +4133,7 @@ const callStyles = StyleSheet.create({
   equalizerDivider: {
     width: 1,
     height: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
   },
   equalizerBarsRow: {
     flexDirection: 'row',
@@ -3879,7 +4146,7 @@ const callStyles = StyleSheet.create({
     borderRadius: 2,
   },
   opusTag: {
-    color: colors.SUB_TITLE_COLOR,
+    color: colors.CYAN_ACCENT,
     fontSize: 11,
     fontWeight: '600',
   },
@@ -4003,9 +4270,9 @@ const callStyles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 2,
@@ -4020,8 +4287,8 @@ const callStyles = StyleSheet.create({
     borderColor: colors.PRIMARY_COLOR,
   },
   dockBtnText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 9,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 10,
     fontWeight: '600',
   },
   chatNotifyDot: {

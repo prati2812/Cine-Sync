@@ -23,6 +23,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
+import { getYouTubeThumbnailDetails } from '../../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -78,6 +79,161 @@ const PulsingRing = () => {
         },
       ]}
     />
+  );
+};
+
+// ──────────────────────────────────────────────────────────────
+//  Watching Now Card with Transforming Cinematic Fade UI
+// ──────────────────────────────────────────────────────────────
+const WatchingNowCard = ({
+  item,
+  handleJoin,
+  avatarBg,
+  initial,
+  hostName,
+  participantCount,
+}) => {
+  const thumbDetails = getYouTubeThumbnailDetails(item?.streamUrl);
+  const maxresUrl = thumbDetails?.maxresUrl || null;
+  const fallbackUri = thumbDetails?.fallbackUrl || null;
+  const thumbnail = item?.thumbnail;
+  const initialUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+    ? thumbnail
+    : maxresUrl;
+
+  const [imgUri, setImgUri] = useState(initialUri);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    const nextUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
+      ? thumbnail
+      : maxresUrl;
+    setImgUri(nextUri);
+    setHasError(false);
+  }, [maxresUrl, thumbnail]);
+
+  const hasImage = imgUri && !hasError;
+
+  const cardContent = (
+    <LinearGradient
+      colors={
+        hasImage
+          ? [
+              'rgba(9, 10, 18, 0.05)',
+              'rgba(9, 10, 18, 0.28)',
+              'rgba(15, 15, 26, 0.82)',
+              colors.SURFACE_COLOR,
+            ]
+          : ['#1E1B4B', colors.SURFACE_COLOR]
+      }
+      locations={hasImage ? [0, 0.32, 0.65, 1.0] : undefined}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={styles.carouselGradient}
+    >
+      {/* Top Section: Starting with clear, vibrant thumbnail view */}
+      <View style={styles.carouselTopSection}>
+        <View style={styles.carouselTopBadge}>
+          <View
+            style={[
+              styles.pingDot,
+              item?.isStreaming && { backgroundColor: colors.LIVE_RED },
+            ]}
+          />
+          <Text style={styles.carouselTagText}>
+            {item?.isStreaming ? 'LIVE SYNC' : 'READY'}
+          </Text>
+        </View>
+
+        {!hasImage && (
+          <View style={styles.carouselFallbackIconWrap}>
+            <Ionicons name="film" size={24} color={colors.CYAN_ACCENT} />
+          </View>
+        )}
+      </View>
+
+      {/* Bottom Section: Transforming smoothly into deep dark surface */}
+      <View style={styles.carouselCardBody}>
+        <View style={styles.carouselMetaRow}>
+          <View style={styles.carouselMetaLeft}>
+            <View style={[styles.carouselMiniAvatar, { backgroundColor: avatarBg }]}>
+              <Text style={styles.carouselMiniAvatarText}>{initial}</Text>
+            </View>
+            <Text style={styles.carouselHostName} numberOfLines={1}>
+              {hostName}
+            </Text>
+          </View>
+          {item.roomId ? (
+            <Text style={styles.carouselRoomCode}>
+              #{String(item.roomId).substring(0, 8)}
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={styles.carouselMovieRow}>
+          <MaterialIcons
+            name="movie"
+            size={14}
+            color={colors.PRIMARY_COLOR}
+            style={styles.carouselMovieIcon}
+          />
+          <Text style={styles.carouselMovieText} numberOfLines={1}>
+            {item.name}
+          </Text>
+        </View>
+
+        <View style={styles.carouselSyncCountRow}>
+          <MaterialIcons
+            name="groups"
+            size={13}
+            color="#93C5FD"
+            style={styles.carouselMovieIcon}
+          />
+          <Text style={styles.carouselSyncCountText}>
+            {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.quickJoinBtn}
+          onPress={handleJoin}
+        >
+          <LinearGradient
+            colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.quickJoinGradient}
+          >
+            <MaterialIcons name="bolt" size={16} color="#FFF" />
+            <Text style={styles.quickJoinText}>Quick Join</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+    </LinearGradient>
+  );
+
+  return (
+    <View style={styles.carouselCard}>
+      {hasImage ? (
+        <ImageBackground
+          source={{ uri: imgUri }}
+          style={styles.carouselCardBg}
+          imageStyle={styles.carouselCardImage}
+          onError={() => {
+            if (fallbackUri && imgUri !== fallbackUri) {
+              setImgUri(fallbackUri);
+            } else {
+              setHasError(true);
+            }
+          }}
+        >
+          {cardContent}
+        </ImageBackground>
+      ) : (
+        <View style={styles.carouselCardBg}>{cardContent}</View>
+      )}
+    </View>
   );
 };
 
@@ -198,10 +354,14 @@ const FriendsScreen = ({ navigation }) => {
       Object.keys(friends).forEach(friendId => {
         const userRef = db.ref(`users/${friendId}`);
         userRef.on('value', (userSnapshot) => {
-          const friendDetails = userSnapshot.val();
-          if (friendDetails) {
+          const val = userSnapshot.val();
+          if (val) {
+            const friendDetails = {
+              ...val,
+              userId: val.userId || val.id || friendId,
+            };
             setFriendsList(currentList => {
-              const newList = currentList.filter(f => f.userId !== friendId);
+              const newList = currentList.filter(f => (f.userId || f.id) !== friendId);
               return [...newList, friendDetails];
             });
           }
@@ -437,86 +597,15 @@ const FriendsScreen = ({ navigation }) => {
                 };
 
                 return (
-                  <View key={item.roomId || item.name} style={styles.carouselCard}>
-                    {item.thumbnail ? (
-                      <ImageBackground
-                        source={{ uri: item.thumbnail }}
-                        style={styles.carouselBanner}
-                        imageStyle={{ borderTopLeftRadius: 16, borderTopRightRadius: 16 }}
-                      >
-                        <LinearGradient
-                          colors={['rgba(15, 15, 26, 0.2)', colors.SURFACE_COLOR]}
-                          style={styles.carouselBannerGradient}
-                        >
-                          <View style={styles.carouselTopBadge}>
-                            <View style={styles.pingDot} />
-                            <Text style={styles.carouselTagText}>
-                              {item.isStreaming ? 'LIVE SYNC' : 'READY'}
-                            </Text>
-                          </View>
-                        </LinearGradient>
-                      </ImageBackground>
-                    ) : (
-                      <LinearGradient
-                        colors={['#1E1B4B', colors.SURFACE_COLOR]}
-                        style={styles.carouselBanner}
-                      >
-                        <View style={styles.carouselBannerGradient}>
-                          <View style={styles.carouselTopBadge}>
-                            <View style={styles.pingDot} />
-                            <Text style={styles.carouselTagText}>
-                              {item.isStreaming ? 'LIVE SYNC' : 'READY'}
-                            </Text>
-                          </View>
-                          <View style={styles.carouselFallbackIcon}>
-                            <Ionicons name="film" size={24} color={colors.CYAN_ACCENT} />
-                          </View>
-                        </View>
-                      </LinearGradient>
-                    )}
-
-                    <View style={styles.carouselCardBody}>
-                      <View style={styles.carouselMetaRow}>
-                        <View style={[styles.carouselMiniAvatar, { backgroundColor: avatarBg }]}>
-                          <Text style={styles.carouselMiniAvatarText}>{initial}</Text>
-                        </View>
-                        <Text style={styles.carouselHostName} numberOfLines={1}>{hostName}</Text>
-                        <Text style={styles.carouselRoomCode}>
-                          {item.roomId ? String(item.roomId).substring(0, 7) : ''}
-                        </Text>
-                      </View>
-
-                      <View style={styles.carouselMovieRow}>
-                        <MaterialIcons name="movie" size={14} color={colors.PRIMARY_COLOR} style={{ marginRight: 4 }} />
-                        <Text style={styles.carouselMovieText} numberOfLines={1}>
-                          {item.name}
-                        </Text>
-                      </View>
-
-                      <View style={styles.carouselSyncCountRow}>
-                        <MaterialIcons name="groups" size={13} color="#93C5FD" style={{ marginRight: 4 }} />
-                        <Text style={styles.carouselSyncCountText}>
-                          {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
-                        </Text>
-                      </View>
-
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        style={styles.quickJoinBtn}
-                        onPress={handleJoin}
-                      >
-                        <LinearGradient
-                          colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 0 }}
-                          style={styles.quickJoinGradient}
-                        >
-                          <MaterialIcons name="bolt" size={16} color="#FFF" />
-                          <Text style={styles.quickJoinText}>Quick Join</Text>
-                        </LinearGradient>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                  <WatchingNowCard
+                    key={item.roomId || item.name}
+                    item={item}
+                    handleJoin={handleJoin}
+                    avatarBg={avatarBg}
+                    initial={initial}
+                    hostName={hostName}
+                    participantCount={participantCount}
+                  />
                 );
               })}
             </ScrollView>
@@ -632,7 +721,7 @@ const FriendsScreen = ({ navigation }) => {
                       onPress={() =>
                         navigation.navigate('Chat', {
                           username: item?.username || 'Chat',
-                          userId: item?.userId,
+                          userId: item?.userId || item?.id,
                           avatar: item?.avatar,
                         })
                       }
@@ -935,30 +1024,46 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   carouselCard: {
-    width: 230,
+    width: 240,
+    height: 255,
     backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.INPUTBOX_BORDER_COLOR,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 6,
   },
-  carouselBanner: {
+  carouselCardBg: {
     width: '100%',
-    height: 110,
+    height: '100%',
   },
-  carouselBannerGradient: {
+  carouselCardImage: {
+    borderRadius: 18,
+  },
+  carouselGradient: {
     flex: 1,
     justifyContent: 'space-between',
-    padding: 10,
+    padding: 12,
+  },
+  carouselTopSection: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
   },
   carouselTopBadge: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(8, 8, 16, 0.8)',
+    backgroundColor: 'rgba(8, 8, 16, 0.82)',
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     gap: 4,
   },
   pingDot: {
@@ -971,6 +1076,14 @@ const styles = StyleSheet.create({
     color: colors.TITLE_COLOR,
     fontSize: 10,
     fontWeight: '700',
+  },
+  carouselFallbackIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   carouselAvatarWrap: {
     position: 'relative',
@@ -995,16 +1108,20 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.SURFACE_COLOR,
   },
-
   carouselCardBody: {
-    padding: 12,
-    paddingTop: 16,
     gap: 6,
+    paddingTop: 8,
   },
   carouselMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  carouselMetaLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 6,
   },
   carouselMiniAvatar: {
     width: 24,
@@ -1037,6 +1154,7 @@ const styles = StyleSheet.create({
     color: colors.TITLE_COLOR,
     fontSize: 14,
     fontWeight: '700',
+    flex: 1,
   },
   carouselRoomCode: {
     color: colors.CYAN_ACCENT,
@@ -1046,6 +1164,9 @@ const styles = StyleSheet.create({
   carouselMovieRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  carouselMovieIcon: {
+    marginRight: 4,
   },
   carouselMovieText: {
     color: colors.SUB_TITLE_COLOR,

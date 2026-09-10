@@ -22,6 +22,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import Slider from '@react-native-community/slider';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
+import { getYouTubeThumbnail } from '../../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -252,7 +253,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
             },
         streamUrl: streamUrl.trim(),
         participants: [...inviteEmails],
-        thumbnail: selectedGenre.icon || '🎬',
+        thumbnail: getYouTubeThumbnail(streamUrl.trim()) || selectedGenre.icon || '🎬',
         genre: selectedGenre.label || 'Movies',
         isPrivate: isPrivate,
         pin: isPrivate ? pin : null,
@@ -270,6 +271,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
         roomId: roomId,
         roomName: roomName.trim(),
         streamUrl: streamUrl.trim(),
+        thumbnail: roomData.thumbnail,
       });
     } catch (error) {
       console.error('Error saving room:', error);
