@@ -19,6 +19,7 @@ import WaitingScreen from '../screens/main/Streaming/WaitingScreen';
 import StreamingScreen from '../screens/main/Streaming/StreamingScreen';
 import SettingsScreen from '../screens/main/Settings/SettingsScreen';
 import ChatScreen from '../screens/main/Chat/ChatScreen';
+import FriendProfileScreen from '../screens/main/Chat/FriendProfileScreen';
 import CreateRoomScreen from '../screens/main/Streaming/CreateRoomScreen';
 import HelpAndSupportScreen from '../screens/main/Settings/HelpAndSupportScreen';
 import SetupPINScreen from '../screens/main/Settings/SetupPINScreen';
@@ -27,6 +28,7 @@ import MainTabs from './MainTabs';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { navigationRef } from './navigationRef';
 import GlobalIncomingCallNotifier from '../components/GlobalIncomingCallNotifier';
+import CineAlertModal from '../components/CineAlertModal';
 
 const Stack = createNativeStackNavigator();
 
@@ -149,6 +151,7 @@ const AppNavigator = () => {
                   component={HelpAndSupportScreen}
                 />
                 <Stack.Screen name="SetupPIN" component={SetupPINScreen} />
+                <Stack.Screen name="FriendProfile" component={FriendProfileScreen} />
               </>
             ) : (
               <>
@@ -163,6 +166,7 @@ const AppNavigator = () => {
           </Stack.Navigator>
         </NavigationContainer>
         {user && <GlobalIncomingCallNotifier currentUser={user} />}
+        <CineAlertModal />
       </BottomSheetModalProvider>
     </GestureHandlerRootView>
   );

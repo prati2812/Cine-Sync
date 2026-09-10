@@ -24,6 +24,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
 import { getYouTubeThumbnailDetails } from '../../../functions';
+import { showCineAlert } from '../../../components/CineAlert';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -242,13 +243,11 @@ const WatchingNowCard = ({
 // ──────────────────────────────────────────────────────────────
 const FriendsScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const [searchEmail, setSearchEmail] = useState('');
   const [activeTab, setActiveTab] = useState('friends'); // 'friends', 'requests', 'sent'
   const [isLoading, setIsLoading] = useState(false);
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [activeRooms, setActiveRooms] = useState([]);
 
   // Dynamic safe area top inset for Android & iOS notch protection
@@ -434,10 +433,21 @@ const FriendsScreen = ({ navigation }) => {
     try {
       setIsLoading(true);
       const db = database();
-      const queryKey = emailOrUsername.includes('@') ? 'email' : 'username';
-      const userQuery = db.ref('users').orderByChild(queryKey).equalTo(emailOrUsername);
+      const cleanTerm = (emailOrUsername || '').trim().replace(/^@/, '');
+      const queryKey = cleanTerm.includes('@') ? 'email' : 'username';
+      const userQuery = db.ref('users').orderByChild(queryKey).equalTo(cleanTerm);
       const snapshot = await userQuery.once('value');
       let newVal = snapshot.val();
+      if (!newVal && !cleanTerm.includes('@')) {
+        const allSnap = await db.ref('users').once('value');
+        const allUsers = allSnap.val() || {};
+        const matched = Object.values(allUsers).find(
+          u =>
+            u?.username?.toLowerCase() === cleanTerm.toLowerCase() ||
+            u?.email?.toLowerCase() === cleanTerm.toLowerCase()
+        );
+        if (matched) newVal = { [matched.userId || 'found']: matched };
+      }
       setIsLoading(false);
       return newVal ? Object.values(newVal)[0] : false;
     } catch (error) {
@@ -446,34 +456,78 @@ const FriendsScreen = ({ navigation }) => {
     }
   };
 
-  const handleAddFriend = async () => {
-    if (!searchEmail.trim()) {
-      Alert.alert('Required', 'Please enter a valid email or username');
+  const openAddCrewMemberSheet = () => {
+    showCineAlert({
+      type: 'add_friend',
+      icon: 'check-circle-outline',
+      title: 'Add Crew Member',
+      message: 'Enter username or scan QR to link instant synchronized watch permissions.',
+      inputPlaceholder: '@david_cho',
+      confirmText: 'Send Request',
+      cancelText: 'Cancel',
+      onConfirm: async (inputQuery) => {
+        await handleAddFriendDirect(inputQuery);
+      },
+    });
+  };
+
+  const handleAddFriendDirect = async (inputQuery) => {
+    const rawInput = (inputQuery || '').trim();
+    if (!rawInput) {
+      showCineAlert({
+        type: 'warning',
+        title: 'Input Required',
+        message: 'Please enter a valid email or username to search.',
+        confirmText: 'Got It',
+      });
       return;
     }
+    const cleanSearch = rawInput.replace(/^@/, '');
     const tempUser = auth().currentUser;
-    if (tempUser?.email === searchEmail.trim()) {
-      Alert.alert('Oops!', "You can't add yourself as a friend");
+    if (
+      tempUser?.email?.toLowerCase() === cleanSearch.toLowerCase() ||
+      tempUser?.displayName?.toLowerCase() === cleanSearch.toLowerCase()
+    ) {
+      showCineAlert({
+        type: 'info',
+        title: 'Oops!',
+        message: "You can't add yourself as a friend.",
+        confirmText: 'OK',
+      });
       return;
     }
-    const userExists = await checkUserExists(searchEmail.trim());
+    const userExists = await checkUserExists(cleanSearch);
     if (userExists && userExists.userId) {
       const isFriend = await isFriendIsOrNot(userExists.userId);
       if (isFriend) {
-        Alert.alert('Already Friends', 'This user is already in your crew!');
+        showCineAlert({
+          type: 'info',
+          title: 'Already Friends',
+          message: `${userExists.username || cleanSearch} is already in your crew!`,
+          confirmText: 'OK',
+        });
         return;
       }
       const db = database();
       await db.ref(`friend_requests/${userExists.userId}/${tempUser.uid}`).set(true);
       await db.ref(`user_friend_requests/${tempUser.uid}/${userExists.userId}`).set(true);
-      setSearchEmail('');
-      setShowAddModal(false);
-      Alert.alert('Request Sent', `Friend request sent to ${userExists.username || searchEmail}!`);
+      showCineAlert({
+        type: 'success',
+        icon: 'check-circle-outline',
+        title: 'Request Sent',
+        message: `Friend request sent to ${userExists.username || cleanSearch}!`,
+        confirmText: 'Great',
+      });
     } else {
-      Alert.alert('Not Found', 'No user found with that email or username');
+      showCineAlert({
+        type: 'danger',
+        icon: 'person-off',
+        title: 'User Not Found',
+        message: 'No user found with that email or username. Check spelling and try again.',
+        confirmText: 'OK',
+      });
     }
   };
-
 
   return (
     <View style={styles.container}>
@@ -498,7 +552,7 @@ const FriendsScreen = ({ navigation }) => {
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.addFriendBtn}
-            onPress={() => setShowAddModal(!showAddModal)}
+            onPress={openAddCrewMemberSheet}
             activeOpacity={0.8}
           >
             <MaterialIcons name="person-add" size={16} color={colors.CYAN_ACCENT} />
@@ -520,31 +574,6 @@ const FriendsScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* ── ADD FRIEND SEARCH EXPANDABLE INPUT ─────────────────── */}
-        {showAddModal && (
-          <View style={styles.addFriendSearchBox}>
-            <MaterialIcons name="search" size={20} color={colors.CYAN_ACCENT} style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.addSearchInput}
-              placeholder="Enter email or username to add..."
-              placeholderTextColor={colors.MUTED_COLOR}
-              value={searchEmail}
-              onChangeText={setSearchEmail}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              style={styles.sendReqBtn}
-              onPress={handleAddFriend}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Text style={styles.sendReqBtnText}>Send</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
 
         {/* ── SECTION 1: WATCHING NOW CAROUSEL ──────────────────── */}
         {activeRooms.length > 0 && (
@@ -671,9 +700,32 @@ const FriendsScreen = ({ navigation }) => {
             friendsList.map(item => {
               const isOnline = item?.status === 'online' || item?.status?.state === 'online';
               return (
-                <View key={item?.userId || item?.email} style={styles.friendRowCard}>
+                <TouchableOpacity
+                  key={item?.userId || item?.email}
+                  style={styles.friendRowCard}
+                  activeOpacity={0.75}
+                  onPress={() =>
+                    navigation.navigate('Chat', {
+                      username: item?.username || item?.email?.split('@')[0],
+                      userId: item?.userId || item?.id,
+                      avatar: item?.avatar,
+                    })
+                  }
+                >
                   <View style={styles.friendRowLeft}>
-                    <View style={styles.friendAvatarBox}>
+                    {/* Click profile icon -> navigate to FriendProfileScreen */}
+                    <TouchableOpacity
+                      style={styles.friendAvatarBox}
+                      activeOpacity={0.75}
+                      onPress={() =>
+                        navigation.navigate('FriendProfile', {
+                          username: item?.username || item?.email?.split('@')[0],
+                          userId: item?.userId || item?.id,
+                          avatar: item?.avatar,
+                          status: item?.status,
+                        })
+                      }
+                    >
                       {isOnline && <PulsingRing />}
                       <View
                         style={[
@@ -691,7 +743,7 @@ const FriendsScreen = ({ navigation }) => {
                           { backgroundColor: isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
                         ]}
                       />
-                    </View>
+                    </TouchableOpacity>
 
                     <View style={styles.friendRowText}>
                       <View style={styles.friendNameRow}>
@@ -705,44 +757,9 @@ const FriendsScreen = ({ navigation }) => {
                     </View>
                   </View>
 
-                  <View style={styles.friendRowActions}>
-                    <TouchableOpacity
-                      style={styles.inviteRowBtn}
-                      activeOpacity={0.8}
-                      onPress={() => Alert.alert('Invite Sent', `Invited ${item?.username} to your room!`)}
-                    >
-                      <MaterialIcons name="group-add" size={16} color={colors.PRIMARY_COLOR} />
-                      <Text style={styles.inviteRowBtnText}>Invite</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.chatIconBtn}
-                      activeOpacity={0.8}
-                      onPress={() =>
-                        navigation.navigate('Chat', {
-                          username: item?.username || 'Chat',
-                          userId: item?.userId || item?.id,
-                          avatar: item?.avatar,
-                        })
-                      }
-                    >
-                      <MaterialIcons name="chat" size={18} color={colors.TITLE_COLOR} />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.removeIconBtn}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        Alert.alert('Remove Friend', 'Remove this user from your crew?', [
-                          { text: 'Cancel', style: 'cancel' },
-                          { text: 'Remove', style: 'destructive', onPress: () => removeFriend(item?.userId) },
-                        ]);
-                      }}
-                    >
-                      <MaterialIcons name="person-remove" size={16} color={colors.DELETE_RED_COLOR} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                  {/* Chat Icon */}
+                  <MaterialIcons name="chat" size={18} color={colors.SUB_TITLE_COLOR} />
+                </TouchableOpacity>
               );
             })
           ) : (
@@ -750,11 +767,20 @@ const FriendsScreen = ({ navigation }) => {
               <Ionicons name="people-outline" size={40} color={colors.FILM_GOLD} />
               <Text style={styles.emptyTitle}>No Friends Added Yet</Text>
               <Text style={styles.emptySub}>
-                Tap the "+ Add" button in the header to find friends by email or username!
+                Connect with crew members to stream movies in real-time sync!
               </Text>
+              <TouchableOpacity
+                style={styles.emptyAddBtn}
+                onPress={openAddCrewMemberSheet}
+                activeOpacity={0.82}
+              >
+                <MaterialIcons name="person-add" size={16} color="#FFF" style={{ marginRight: 6 }} />
+                <Text style={styles.emptyAddBtnText}>Add Crew Member</Text>
+              </TouchableOpacity>
             </View>
           )
         )}
+
 
         {/* TAB 2: FRIEND REQUESTS */}
         {activeTab === 'requests' && (
@@ -882,7 +908,7 @@ const styles = StyleSheet.create({
   headerLogoIcon: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -921,7 +947,7 @@ const styles = StyleSheet.create({
   iconBellBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1412,13 +1438,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 16,
     backgroundColor: colors.ACCEPT_GREEN,
   },
   friendAvatar: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1429,11 +1455,11 @@ const styles = StyleSheet.create({
   },
   friendOnlineDot: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: -1,
+    right: -1,
     width: 12,
     height: 12,
-    borderRadius: 6,
+    borderRadius: 4,
     borderWidth: 2,
     borderColor: colors.SURFACE_COLOR,
   },
@@ -1480,7 +1506,7 @@ const styles = StyleSheet.create({
   chatIconBtn: {
     width: 34,
     height: 34,
-    borderRadius: 17,
+    borderRadius: 10,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1488,7 +1514,7 @@ const styles = StyleSheet.create({
   removeIconBtn: {
     width: 34,
     height: 34,
-    borderRadius: 17,
+    borderRadius: 10,
     backgroundColor: 'rgba(239, 68, 68, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1529,7 +1555,7 @@ const styles = StyleSheet.create({
   declineRequestBtn: {
     width: 34,
     height: 34,
-    borderRadius: 17,
+    borderRadius: 10,
     backgroundColor: 'rgba(239, 68, 68, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1567,6 +1593,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  emptyAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.PRIMARY_COLOR,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 14,
+    marginTop: 14,
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  emptyAddBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
 });
 

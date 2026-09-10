@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -22,9 +22,20 @@ import LinearGradient from 'react-native-linear-gradient';
 import Slider from '@react-native-community/slider';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
-import { getYouTubeThumbnail } from '../../../functions';
+import { getYouTubeThumbnail, getYouTubeThumbnailDetails } from '../../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const QUICK_TIMES = [
+  { hour: 18, minute: 0, label: '6:00 PM' },
+  { hour: 19, minute: 0, label: '7:00 PM' },
+  { hour: 20, minute: 0, label: '8:00 PM' },
+  { hour: 20, minute: 30, label: '8:30 PM' },
+  { hour: 21, minute: 0, label: '9:00 PM' },
+  { hour: 21, minute: 30, label: '9:30 PM' },
+  { hour: 22, minute: 0, label: '10:00 PM' },
+  { hour: 23, minute: 0, label: '11:00 PM' },
+];
 
 const RANDOM_TITLES = [
   'Friday Night Sci-Fi Marathon 🚀',
@@ -86,6 +97,52 @@ const CreateRoomScreen = ({ navigation, route }) => {
     editingRoom?.floatingReactions !== undefined ? editingRoom.floatingReactions : true
   );
   const [isCreating, setIsCreating] = useState(false);
+
+  // Premiere & Future Date Scheduling
+  const [isScheduled, setIsScheduled] = useState(
+    editingRoom?.isScheduled || !!editingRoom?.scheduledDate || false
+  );
+  const [selectedDayIndex, setSelectedDayIndex] = useState(1); // Default to Tomorrow
+  const [selectedTimeIndex, setSelectedTimeIndex] = useState(2); // Default to 8:00 PM
+
+  const upcomingDays = useMemo(() => {
+    const days = [];
+    const now = new Date();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      let label = '';
+      if (i === 0) label = 'Today';
+      else if (i === 1) label = 'Tomorrow';
+      else {
+        label = d.toLocaleDateString(undefined, { weekday: 'short' });
+      }
+      const sub = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      days.push({ label, sub, dateObj: d });
+    }
+    return days;
+  }, []);
+
+  const scheduledDateTime = useMemo(() => {
+    const targetDay = upcomingDays[selectedDayIndex]?.dateObj || new Date();
+    const time = QUICK_TIMES[selectedTimeIndex] || QUICK_TIMES[2];
+    const d = new Date(targetDay);
+    d.setHours(time.hour, time.minute, 0, 0);
+    return d;
+  }, [upcomingDays, selectedDayIndex, selectedTimeIndex]);
+
+  const formatScheduledDate = d => {
+    if (!d) return '';
+    return (
+      d.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      }) +
+      ' at ' +
+      d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    );
+  };
 
   // Email invitations (backwards compatibility)
   const [inviteEmails, setInviteEmails] = useState(editingRoom?.participants || []);
@@ -253,7 +310,12 @@ const CreateRoomScreen = ({ navigation, route }) => {
             },
         streamUrl: streamUrl.trim(),
         participants: [...inviteEmails],
-        thumbnail: getYouTubeThumbnail(streamUrl.trim()) || selectedGenre.icon || '🎬',
+        thumbnail:
+          getYouTubeThumbnailDetails(streamUrl.trim())?.maxresUrl ||
+          getYouTubeThumbnailDetails(streamUrl.trim())?.mqUrl ||
+          getYouTubeThumbnail(streamUrl.trim()) ||
+          selectedGenre.icon ||
+          '🎬',
         genre: selectedGenre.label || 'Movies',
         isPrivate: isPrivate,
         pin: isPrivate ? pin : null,
@@ -261,8 +323,10 @@ const CreateRoomScreen = ({ navigation, route }) => {
         hostOnlyControl: hostOnlyControl,
         spatialVoice: spatialVoice,
         floatingReactions: floatingReactions,
+        isScheduled: isScheduled,
+        scheduledDate: isScheduled ? scheduledDateTime.toISOString() : null,
         createdAt: isEditing ? editingRoom.createdAt : new Date().toISOString(),
-        status: 'active',
+        status: isScheduled ? 'scheduled' : 'active',
       };
 
       await roomRef.set(roomData);
@@ -272,6 +336,8 @@ const CreateRoomScreen = ({ navigation, route }) => {
         roomName: roomName.trim(),
         streamUrl: streamUrl.trim(),
         thumbnail: roomData.thumbnail,
+        isScheduled: isScheduled,
+        scheduledDate: isScheduled ? scheduledDateTime.toISOString() : null,
       });
     } catch (error) {
       console.error('Error saving room:', error);
@@ -601,6 +667,78 @@ const CreateRoomScreen = ({ navigation, route }) => {
                 </View>
               </View>
             </View>
+          </View>
+
+          {/* ── SECTION: PREMIERE SCHEDULER ── */}
+          <View style={styles.cardContainer}>
+            <View style={styles.cardHeaderRow}>
+              <View style={[styles.cardHeaderIconWrap, { backgroundColor: 'rgba(255, 180, 0, 0.12)' }]}>
+                <MaterialIcons name="event" size={18} color={colors.FILM_GOLD} />
+              </View>
+              <View style={styles.cardHeaderTextCol}>
+                <Text style={styles.cardHeaderTitle}>Schedule Premiere for Later</Text>
+                <Text style={styles.cardHeaderSubtitle}>Set future date & time for synchronized screening</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.switchTrack, isScheduled ? styles.switchTrackActiveGold : styles.switchTrackInactive]}
+                onPress={() => setIsScheduled(!isScheduled)}
+              >
+                <View style={[styles.switchThumb, isScheduled && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+
+            {isScheduled && (
+              <View style={styles.scheduleBody}>
+                {/* Selected Premiere Highlight Banner */}
+                <View style={styles.schedulePreviewBanner}>
+                  <MaterialIcons name="alarm" size={16} color={colors.FILM_GOLD} />
+                  <Text style={styles.schedulePreviewText}>
+                    Premiere set for:{' '}
+                    <Text style={styles.schedulePreviewTime}>{formatScheduledDate(scheduledDateTime)}</Text>
+                  </Text>
+                </View>
+
+                {/* Day Selection Pills */}
+                <Text style={styles.scheduleSubLabel}>SELECT PREMIERE DAY</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dayScroll}>
+                  {upcomingDays.map((day, idx) => {
+                    const isSelected = selectedDayIndex === idx;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        activeOpacity={0.8}
+                        onPress={() => setSelectedDayIndex(idx)}
+                        style={[styles.dayPill, isSelected && styles.dayPillActive]}
+                      >
+                        <Text style={[styles.dayLabel, isSelected && styles.dayLabelActive]}>{day.label}</Text>
+                        <Text style={[styles.daySub, isSelected && styles.daySubActive]}>{day.sub}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                {/* Time Selection */}
+                <Text style={styles.scheduleSubLabel}>SELECT START TIME</Text>
+                <View style={styles.timeChipsRow}>
+                  {QUICK_TIMES.map((time, idx) => {
+                    const isSelected = selectedTimeIndex === idx;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        activeOpacity={0.8}
+                        onPress={() => setSelectedTimeIndex(idx)}
+                        style={[styles.timeChip, isSelected && styles.timeChipActive]}
+                      >
+                        <Text style={[styles.timeChipText, isSelected && styles.timeChipTextActive]}>
+                          {time.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
           </View>
 
           {/* ── SECTION 4: SYNC PREFERENCES & HOST PRIVILEGES ── */}
@@ -1211,6 +1349,112 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.6,
     shadowRadius: 8,
     elevation: 4,
+  },
+  switchTrackActiveGold: {
+    backgroundColor: colors.FILM_GOLD,
+    shadowColor: colors.FILM_GOLD,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+
+  // Premiere Scheduler Styles
+  scheduleBody: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE,
+    paddingTop: 14,
+    gap: 12,
+  },
+  schedulePreviewBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 180, 0, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.25)',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+    gap: 8,
+  },
+  schedulePreviewText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
+  schedulePreviewTime: {
+    color: colors.FILM_GOLD,
+    fontWeight: '800',
+  },
+  scheduleSubLabel: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  dayScroll: {
+    marginHorizontal: -4,
+  },
+  dayPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+    alignItems: 'center',
+    marginHorizontal: 4,
+    minWidth: 70,
+  },
+  dayPillActive: {
+    backgroundColor: 'rgba(255, 180, 0, 0.15)',
+    borderColor: colors.FILM_GOLD,
+  },
+  dayLabel: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  dayLabelActive: {
+    color: colors.FILM_GOLD,
+    fontWeight: '800',
+  },
+  daySub: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  daySubActive: {
+    color: colors.FILM_GOLD,
+  },
+  timeChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  timeChip: {
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: colors.INPUTBOX_BORDER_COLOR,
+  },
+  timeChipActive: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderColor: colors.PRIMARY_COLOR,
+  },
+  timeChipText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  timeChipTextActive: {
+    color: '#FFF',
+    fontWeight: '800',
   },
   switchTrackInactive: {
     backgroundColor: colors.SURFACE_ELEVATED,

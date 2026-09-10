@@ -30,6 +30,8 @@ import { useAudioCall } from '../../../webRTC/useAudioCall';
 import { RTCView } from 'react-native-webrtc';
 import colors from '../../../theme/Colors';
 import { uploadMediaBlob, resolveMediaUri, deleteMediaBlob } from '../../../functions/mediaService';
+import { showCineAlert } from '../../../components/CineAlert';
+import { getYouTubeThumbnailDetails } from '../../../functions';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -153,6 +155,438 @@ const ChatImageThumbnail = ({ item, isMyMessage, onOpenFullscreen, onLongPress }
         )}
       </View>
     </TouchableOpacity>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────
+//  Watch Party Invite Tile Component (Faded Card UI like FriendsScreen & HomeScreen)
+// ──────────────────────────────────────────────────────────────
+const WatchPartyInviteTile = ({
+  item,
+  chatId,
+  isMyMessage,
+  otherUsername,
+  navigation,
+  handleMessageLongPress,
+  dateSeparator,
+}) => {
+  const cleanThumbUrl = (uri) => {
+    if (!uri || typeof uri !== 'string') return uri;
+    if (uri.includes('/hqdefault.jpg')) {
+      return uri.replace('/hqdefault.jpg', '/maxresdefault.jpg');
+    }
+    return uri;
+  };
+
+  const getCandidateThumbnail = () => {
+    if (item.thumbnail && typeof item.thumbnail === 'string' && item.thumbnail.startsWith('http')) {
+      return cleanThumbUrl(item.thumbnail);
+    }
+    const effectiveStream = item.streamUrl;
+    if (effectiveStream) {
+      const details = getYouTubeThumbnailDetails(effectiveStream);
+      if (details) {
+        return details.maxresUrl || details.mqUrl || details.fallbackUrl || null;
+      }
+    }
+    return null;
+  };
+
+  const [thumbUri, setThumbUri] = useState(getCandidateThumbnail);
+  const [streamUrl, setStreamUrl] = useState(item.streamUrl || '');
+  const [roomName, setRoomName] = useState(item.roomName || 'Watch Party');
+  const [scheduledDate, setScheduledDate] = useState(
+    item.scheduledDate || item.scheduledAt || null
+  );
+  const [inviteStatus, setInviteStatus] = useState(item.inviteStatus || 'pending');
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const currentThumb =
+      (item.thumbnail && typeof item.thumbnail === 'string' && item.thumbnail.startsWith('http'))
+        ? cleanThumbUrl(item.thumbnail)
+        : null;
+    const currentDetails = getYouTubeThumbnailDetails(item.streamUrl);
+    const resolvedUrl = currentThumb || currentDetails?.maxresUrl || currentDetails?.mqUrl || currentDetails?.fallbackUrl || null;
+
+    if (resolvedUrl) {
+      setThumbUri(resolvedUrl);
+      setHasError(false);
+    }
+    if (item.inviteStatus && item.inviteStatus !== inviteStatus) {
+      setInviteStatus(item.inviteStatus);
+    }
+
+    if (item.roomId) {
+      // Query RTDB to lookup live room metadata and streamUrl/thumbnail/scheduledDate
+      database()
+        .ref(`rooms/${item.roomId}`)
+        .once('value')
+        .then(snapshot => {
+          if (!isMounted) return;
+          const r = snapshot.val();
+          if (r) {
+            if (r.name && !item.roomName) setRoomName(r.name);
+            if (r.streamUrl && !item.streamUrl) setStreamUrl(r.streamUrl);
+            if (r.scheduledDate || r.scheduledAt) {
+              setScheduledDate(r.scheduledDate || r.scheduledAt);
+            }
+            if (r.thumbnail && typeof r.thumbnail === 'string' && r.thumbnail.startsWith('http')) {
+              setThumbUri(cleanThumbUrl(r.thumbnail));
+              setHasError(false);
+            } else if (r.streamUrl) {
+              const details = getYouTubeThumbnailDetails(r.streamUrl);
+              if (details) {
+                setThumbUri(details.maxresUrl || details.mqUrl || details.fallbackUrl || null);
+                setHasError(false);
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [item.thumbnail, item.streamUrl, item.roomId, item.inviteStatus]);
+
+  const handleImageError = () => {
+    const effectiveStream = streamUrl || item.streamUrl;
+    if (effectiveStream) {
+      const details = getYouTubeThumbnailDetails(effectiveStream);
+      if (details?.mqUrl && thumbUri !== details.mqUrl) {
+        setThumbUri(details.mqUrl);
+        return;
+      }
+      if (details?.fallbackUrl && thumbUri !== details.fallbackUrl) {
+        setThumbUri(details.fallbackUrl);
+        return;
+      }
+    }
+    if (typeof thumbUri === 'string' && thumbUri.includes('maxresdefault.jpg')) {
+      setThumbUri(thumbUri.replace('maxresdefault.jpg', 'mqdefault.jpg'));
+      return;
+    }
+    setHasError(true);
+  };
+
+  const showImage = !!thumbUri && !hasError;
+
+  const isFuture = (() => {
+    if (!scheduledDate) return false;
+    const t = new Date(scheduledDate).getTime();
+    return !isNaN(t) && t > Date.now();
+  })();
+
+  const formatScheduledTime = (dateVal) => {
+    if (!dateVal) return '';
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return String(dateVal);
+    return (
+      d.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      }) +
+      ' • ' +
+      d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    );
+  };
+
+  // Receiver Action (Accept & Join or RSVP)
+  const handleReceiverAction = async () => {
+    if (!item.roomId) {
+      navigation.navigate('HomeScreen');
+      return;
+    }
+
+    // Persist accepted status to RTDB
+    if (chatId && item.id && inviteStatus !== 'accepted') {
+      setInviteStatus('accepted');
+      try {
+        await database().ref(`chats/${chatId}/messages/${item.id}`).update({
+          inviteStatus: 'accepted',
+          acceptedAt: database.ServerValue.TIMESTAMP,
+        });
+      } catch (e) {
+        console.warn('Could not update inviteStatus:', e);
+      }
+    }
+
+    if (isFuture) {
+      showCineAlert({
+        type: 'success',
+        title: 'Watch Party RSVP’d! 🎟️',
+        message: `You accepted ${otherUsername}'s invitation for "${roomName || 'Watch Party'}" scheduled for ${formatScheduledTime(scheduledDate)}. You will be notified when the room goes live!`,
+        confirmText: 'Enter Lobby Now',
+        cancelText: 'Done',
+        onConfirm: () => {
+          navigation.navigate('WaitingScreen', {
+            roomId: item.roomId,
+            roomName: roomName || item.roomName || 'Watch Party',
+            streamUrl: streamUrl || item.streamUrl || '',
+            scheduledDate: scheduledDate || '',
+          });
+        },
+      });
+    } else {
+      navigation.navigate('WaitingScreen', {
+        roomId: item.roomId,
+        roomName: roomName || item.roomName || 'Watch Party',
+        streamUrl: streamUrl || item.streamUrl || '',
+      });
+    }
+  };
+
+  // Sender Action (Host Access to Room)
+  const handleSenderAction = () => {
+    if (item.roomId) {
+      navigation.navigate('WaitingScreen', {
+        roomId: item.roomId,
+        roomName: roomName || item.roomName || 'Watch Party',
+        streamUrl: streamUrl || item.streamUrl || '',
+        isHost: true,
+        scheduledDate: scheduledDate || '',
+      });
+    } else {
+      navigation.navigate('HomeScreen');
+    }
+  };
+
+  const cardContent = (
+    <LinearGradient
+      colors={
+        showImage
+          ? [
+              'rgba(8, 8, 16, 0.12)',
+              'rgba(8, 8, 16, 0.55)',
+              'rgba(15, 15, 26, 0.94)',
+              colors.SURFACE_COLOR,
+            ]
+          : ['#1E1B4B', colors.SURFACE_COLOR]
+      }
+      locations={showImage ? [0, 0.26, 0.54, 0.88] : undefined}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={styles.inviteCardFadeGradient}
+    >
+      {/* Top Header Badge Row */}
+      <View style={styles.inviteTopBadgeRow}>
+        {isFuture ? (
+          <View style={styles.scheduledBadge}>
+            <MaterialIcons name="event" size={11} color={colors.FILM_GOLD} />
+            <Text style={styles.scheduledBadgeText}>SCHEDULED</Text>
+          </View>
+        ) : (
+          <View style={styles.liveSyncBadge}>
+            <View
+              style={[
+                styles.livePingDot,
+                item?.isStreaming && { backgroundColor: colors.LIVE_RED },
+              ]}
+            />
+            <Text style={styles.liveSyncText}>
+              {item?.isStreaming ? 'LIVE SYNC' : 'READY'}
+            </Text>
+          </View>
+        )}
+
+        {showImage ? (
+          <View style={isFuture ? styles.scheduledHdrTag : styles.hdrTag}>
+            <Text style={isFuture ? styles.scheduledHdrText : styles.hdrText}>
+              {isFuture ? 'VIP RSVP' : 'SYNC'}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.carouselFallbackIconWrap}>
+            <Ionicons name="film" size={18} color={colors.CYAN_ACCENT} />
+          </View>
+        )}
+      </View>
+
+      {/* Bottom Content Area: Faded smoothly into deep dark surface */}
+      <View style={styles.inviteTileBody}>
+        <View style={styles.inviteMetaRow}>
+          <Text style={[styles.inviteCategory, isFuture && { color: colors.FILM_GOLD }]}>
+            {isMyMessage ? 'OUTGOING INVITATION' : 'INCOMING INVITATION'}
+          </Text>
+          {item.roomId ? (
+            <Text style={styles.inviteRoomCode}>
+              #{String(item.roomId).substring(0, 8)}
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={styles.inviteMovieRow}>
+          <MaterialIcons
+            name="movie"
+            size={14}
+            color={colors.PRIMARY_COLOR}
+            style={styles.inviteMovieIcon}
+          />
+          <Text style={styles.inviteMovieTitle} numberOfLines={1}>
+            {roomName || item.roomName || 'Watch Party'}
+          </Text>
+        </View>
+
+        <Text style={styles.inviteSubtext} numberOfLines={1}>
+          {isMyMessage
+            ? `You invited @${otherUsername}`
+            : `@${otherUsername} invited you to watch together`}
+        </Text>
+
+        {/* Scheduled Date Indicator */}
+        {scheduledDate ? (
+          <View style={styles.scheduledPill}>
+            <MaterialIcons name="schedule" size={12} color={colors.FILM_GOLD} />
+            <Text style={styles.scheduledPillText}>{formatScheduledTime(scheduledDate)}</Text>
+          </View>
+        ) : null}
+
+        {/* Action Area: SENDER vs RECEIVER */}
+        {isMyMessage ? (
+          // ── SENDER VIEW: Cannot "Accept" their own invite ──
+          <View style={styles.senderActionContainer}>
+            <View style={styles.senderStatusRow}>
+              <MaterialIcons
+                name={inviteStatus === 'accepted' ? 'check-circle' : 'send'}
+                size={12}
+                color={inviteStatus === 'accepted' ? colors.ACCEPT_GREEN : colors.CYAN_ACCENT}
+              />
+              <Text
+                style={[
+                  styles.senderStatusText,
+                  inviteStatus === 'accepted' && { color: colors.ACCEPT_GREEN, fontWeight: '700' },
+                ]}
+              >
+                {inviteStatus === 'accepted'
+                  ? `@${otherUsername} accepted!`
+                  : 'Invitation Sent • Awaiting reply'}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.joinPartyCtaBtn}
+              onPress={handleSenderAction}
+            >
+              <LinearGradient
+                colors={[colors.SURFACE_ELEVATED, colors.SURFACE_COLOR]}
+                style={[
+                  styles.joinPartyGradient,
+                  { borderWidth: 1, borderColor: colors.INPUTBOX_BORDER_COLOR },
+                ]}
+              >
+                <MaterialIcons name="meeting-room" size={15} color={colors.CYAN_ACCENT} />
+                <Text style={[styles.joinPartyText, { color: colors.TITLE_COLOR }]}>
+                  {isFuture ? 'Open Scheduled Room' : 'Enter Watch Room'}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          // ── RECEIVER VIEW: Can Accept & Join, or RSVP for future ──
+          <View style={styles.receiverActionContainer}>
+            {inviteStatus === 'accepted' && (
+              <View style={styles.receiverAcceptedRow}>
+                <MaterialIcons name="check-circle" size={12} color={colors.ACCEPT_GREEN} />
+                <Text style={styles.receiverAcceptedText}>You accepted this invite</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.joinPartyCtaBtn}
+              onPress={handleReceiverAction}
+            >
+              <LinearGradient
+                colors={
+                  inviteStatus === 'accepted'
+                    ? [colors.ACCEPT_GREEN, '#059669']
+                    : [colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]
+                }
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.joinPartyGradient}
+              >
+                <MaterialIcons
+                  name={
+                    inviteStatus === 'accepted'
+                      ? 'play-arrow'
+                      : isFuture
+                      ? 'event-available'
+                      : 'bolt'
+                  }
+                  size={15}
+                  color="#FFF"
+                />
+                <Text style={styles.joinPartyText}>
+                  {inviteStatus === 'accepted'
+                    ? isFuture
+                      ? 'View Room Lobby'
+                      : 'Join Room Now'
+                    : isFuture
+                    ? 'Accept & RSVP'
+                    : 'Accept & Join Party'}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Footer Inside: Timestamp & Status ticks */}
+        <View style={styles.messageFooterInside}>
+          <Text style={styles.timestampInside}>
+            {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </Text>
+          {isMyMessage && (
+            <View style={styles.seenReceiptRow}>
+              <MaterialIcons
+                name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+                size={13}
+                color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.6)'}
+                style={{ marginLeft: 4 }}
+              />
+            </View>
+          )}
+        </View>
+      </View>
+    </LinearGradient>
+  );
+
+  return (
+    <View style={styles.messageOuterWrap}>
+      {dateSeparator}
+      <TouchableOpacity
+        activeOpacity={0.92}
+        onLongPress={() => handleMessageLongPress && handleMessageLongPress(item)}
+        style={[
+          styles.inviteCardTile,
+          isMyMessage ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' },
+        ]}
+      >
+        {showImage ? (
+          <ImageBackground
+            source={{ uri: thumbUri }}
+            style={styles.inviteFadedCardBg}
+            imageStyle={styles.inviteFadedCardImage}
+            resizeMode="cover"
+            onError={handleImageError}
+          >
+            {cardContent}
+          </ImageBackground>
+        ) : (
+          <View style={styles.inviteFadedCardBg}>
+            {cardContent}
+          </View>
+        )}
+      </TouchableOpacity>
+    </View>
   );
 };
 
@@ -479,10 +913,25 @@ const ChatScreen = ({ route, navigation }) => {
 
   // Send Watch Party Invite inside Chat
   const sendWatchPartyInvite = async (roomData) => {
-    if (!chatId) return;
+    const effectiveChatId = chatId || route.params?.chatId;
+    if (!effectiveChatId) {
+      console.warn('sendWatchPartyInvite: No active chatId found');
+      return;
+    }
     const db = database();
     const currentUser = auth().currentUser;
     if (!currentUser) return;
+
+    // Resolve high quality thumbnail URL from YouTube or roomData (avoiding 4:3 hqdefault black bars)
+    let resolvedThumbnail = '';
+    if (roomData?.thumbnail && typeof roomData.thumbnail === 'string' && roomData.thumbnail.startsWith('http')) {
+      resolvedThumbnail = roomData.thumbnail.replace('/hqdefault.jpg', '/maxresdefault.jpg');
+    } else if (roomData?.streamUrl) {
+      const details = getYouTubeThumbnailDetails(roomData.streamUrl);
+      if (details) {
+        resolvedThumbnail = details.maxresUrl || details.mqUrl || details.fallbackUrl || '';
+      }
+    }
 
     const inviteText = `Hey! Join my watch party for ${roomData?.name || 'a live screening'} 🍿`;
     const messageData = {
@@ -493,23 +942,40 @@ const ChatScreen = ({ route, navigation }) => {
       roomId: roomData?.roomId || '',
       roomName: roomData?.name || 'Watch Party',
       streamUrl: roomData?.streamUrl || '',
-      thumbnail: roomData?.thumbnail || '',
+      thumbnail: resolvedThumbnail || '',
+      isScheduled: !!roomData?.scheduledDate || !!roomData?.isScheduled,
+      scheduledDate: roomData?.scheduledDate || null,
+      inviteStatus: 'pending',
       seen: false,
       status: 'sent',
     };
 
-    const newMessageRef = db.ref(`chats/${chatId}/messages`).push();
+    const newMessageRef = db.ref(`chats/${effectiveChatId}/messages`).push();
     await newMessageRef.set(messageData);
 
     const updates = {};
-    updates[`user_chats/${currentUser.uid}/${chatId}/lastMessage`] = inviteText;
-    updates[`user_chats/${currentUser.uid}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+    updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessage`] = inviteText;
+    updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
     if (otherUserId) {
-      updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = inviteText;
-      updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessage`] = inviteText;
+      updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
     }
     await db.ref().update(updates);
+
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 100);
   };
+
+  const autoInviteSentRef = useRef(false);
+
+  // Automatically send watch party invite if passed via navigation params (e.g. from FriendProfileScreen)
+  useEffect(() => {
+    if (route.params?.autoSendInvite && chatId && !autoInviteSentRef.current) {
+      autoInviteSentRef.current = true;
+      sendWatchPartyInvite(route.params.autoSendInvite);
+    }
+  }, [route.params?.autoSendInvite, chatId]);
 
   // Trigger watch party invite with real active rooms from RTDB
   const handleTriggerWatchPartyInvite = async () => {
@@ -519,28 +985,83 @@ const ChatScreen = ({ route, navigation }) => {
       const snapshot = await database().ref('rooms').once('value');
       const val = snapshot.val();
       if (val) {
-        // Find rooms created by currentUser or active rooms
-        const userRooms = Object.values(val).filter(
+        // Collect rooms created by currentUser
+        const myRooms = Object.values(val).filter(
           r => r && (r.creator?.email === currentUser?.email || r.creator?.uid === currentUser?.uid)
         );
-        const anyRooms = Object.values(val).filter(r => r && r.name);
 
-        const targetRoom = userRooms.length > 0 ? userRooms[0] : (anyRooms.length > 0 ? anyRooms[0] : null);
+        // Participated rooms where user is participant or host
+        const participatedRooms = Object.values(val).filter(r => {
+          if (!r || !r.name) return false;
+          if (r.participants && typeof r.participants === 'object') {
+            return Object.keys(r.participants).includes(currentUser.uid);
+          }
+          return false;
+        });
 
-        if (targetRoom) {
-          sendWatchPartyInvite(targetRoom);
+        // Combine unique rooms
+        const combined = [...myRooms];
+        participatedRooms.forEach(pr => {
+          if (!combined.some(r => r.roomId === pr.roomId)) {
+            combined.push(pr);
+          }
+        });
+
+        const availableRooms = combined.length > 0 ? combined : Object.values(val).filter(r => r && r.name);
+
+        // Scenario 1: Exactly 1 room -> show single VIP ticket pass
+        if (availableRooms.length === 1) {
+          const targetRoom = availableRooms[0];
+          showCineAlert({
+            type: 'invite',
+            title: 'Watch Party VIP Pass',
+            message: `Dispatch real-time synchronized invitation to @${otherUsername}`,
+            roomTicket: {
+              name: targetRoom.name,
+              roomId: targetRoom.roomId,
+              isStreaming: targetRoom.isStreaming,
+              streamUrl: targetRoom.streamUrl,
+              thumbnail: targetRoom.thumbnail,
+              scheduledDate: targetRoom.scheduledDate,
+              isScheduled: targetRoom.isScheduled,
+            },
+            confirmText: 'Send Invite',
+            cancelText: 'Dismiss',
+            onConfirm: () => {
+              sendWatchPartyInvite(targetRoom);
+            },
+          });
+          return;
+        }
+
+        // Scenario 2: Multiple rooms -> open interactive room selector modal
+        if (availableRooms.length > 1) {
+          showCineAlert({
+            type: 'invite',
+            title: 'Select Watch Party Room',
+            message: `Choose which room to invite @${otherUsername} to:`,
+            roomList: availableRooms,
+            confirmText: 'Send Invite',
+            cancelText: 'Dismiss',
+            onConfirm: (selectedRoom) => {
+              const target = selectedRoom || availableRooms[0];
+              sendWatchPartyInvite(target);
+            },
+          });
           return;
         }
       }
+
       // If no rooms exist, prompt user to create a room
-      Alert.alert(
-        'No Active Rooms',
-        "You don't have an active watch party room yet. Would you like to create one now?",
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Create Room', onPress: () => navigation.navigate('CreateRoom') },
-        ]
-      );
+      showCineAlert({
+        type: 'action',
+        icon: 'video-camera-front',
+        title: 'No Active Watch Room',
+        message: "You don't have an active watch party room yet. Would you like to create one now to stream together?",
+        confirmText: 'Create Room',
+        cancelText: 'Cancel',
+        onConfirm: () => navigation.navigate('CreateRoom'),
+      });
     } catch (err) {
       console.error('Error fetching rooms for invite:', err);
     }
@@ -576,42 +1097,43 @@ const ChatScreen = ({ route, navigation }) => {
     const currentUid = auth().currentUser?.uid;
     if (!currentUid || selectedMessage.senderId !== currentUid) return;
 
-    Alert.alert(
-      'Delete for Everyone?',
-      'This message will be deleted for everyone in this chat.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await database()
-                .ref(`chats/${chatId}/messages/${selectedMessage.id}`)
-                .update({
-                  deletedForEveryone: true,
-                  deletedAt: database.ServerValue.TIMESTAMP,
-                  text: 'This message was deleted',
-                });
+    showCineAlert({
+      type: 'danger',
+      icon: 'delete-forever',
+      title: 'Delete for Everyone?',
+      message: 'This message will be permanently deleted for all members in this chat.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        try {
+          await database()
+            .ref(`chats/${chatId}/messages/${selectedMessage.id}`)
+            .update({
+              deletedForEveryone: true,
+              deletedAt: database.ServerValue.TIMESTAMP,
+              text: 'This message was deleted',
+            });
 
-              // Also update lastMessage in user_chats if needed
-              const updates = {};
-              updates[`user_chats/${currentUid}/${chatId}/lastMessage`] = 'This message was deleted';
-              if (otherUserId) {
-                updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = 'This message was deleted';
-              }
-              await database().ref().update(updates);
+          // Also update lastMessage in user_chats if needed
+          const updates = {};
+          updates[`user_chats/${currentUid}/${chatId}/lastMessage`] = 'This message was deleted';
+          if (otherUserId) {
+            updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = 'This message was deleted';
+          }
+          await database().ref().update(updates);
 
-              setShowMessageActionModal(false);
-              setSelectedMessage(null);
-            } catch (error) {
-              console.error('[Chat] Delete for everyone error:', error);
-              Alert.alert('Error', 'Could not delete message for everyone.');
-            }
-          },
-        },
-      ]
-    );
+          setShowMessageActionModal(false);
+          setSelectedMessage(null);
+        } catch (error) {
+          console.error('[Chat] Delete for everyone error:', error);
+          showCineAlert({
+            type: 'danger',
+            title: 'Delete Failed',
+            message: 'Could not delete message for everyone. Please try again.',
+          });
+        }
+      },
+    });
   };
 
   const setupUserPresence = () => {
@@ -889,9 +1411,7 @@ const ChatScreen = ({ route, navigation }) => {
       if (!previousMessageDate || !isSameDay(currentMessageDate, previousMessageDate)) {
         return (
           <View style={styles.dateSeparator}>
-            <View style={styles.dateLine} />
             <Text style={styles.dateText}>{getDateLabel(currentMessageDate)}</Text>
-            <View style={styles.dateLine} />
           </View>
         );
       }
@@ -1057,108 +1577,16 @@ const ChatScreen = ({ route, navigation }) => {
     // ── EMBEDDED WATCH PARTY INVITATION CARD IN CHAT ──
     if (item.type === 'watch_party_invite') {
       return (
-        <View style={styles.messageOuterWrap}>
-          {dateSeparator}
-          <TouchableOpacity
-            activeOpacity={0.92}
-            onLongPress={() => handleMessageLongPress(item)}
-            style={[styles.inviteCardTile, isMyMessage ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}
-          >
-            {item.thumbnail ? (
-              <ImageBackground
-                source={{ uri: item.thumbnail }}
-                style={styles.inviteTileBanner}
-                imageStyle={{ borderTopLeftRadius: 16, borderTopRightRadius: 16 }}
-              >
-                <LinearGradient
-                  colors={['rgba(15, 15, 26, 0.2)', colors.SURFACE_COLOR]}
-                  style={styles.inviteTileGradient}
-                >
-                  <View style={styles.inviteBadgeRow}>
-                    <View style={styles.liveSyncBadge}>
-                      <View style={styles.livePingDot} />
-                      <Text style={styles.liveSyncText}>WATCH PARTY INVITE</Text>
-                    </View>
-                    <View style={styles.hdrTag}>
-                      <Text style={styles.hdrText}>SYNC</Text>
-                    </View>
-                  </View>
-                </LinearGradient>
-              </ImageBackground>
-            ) : (
-              <LinearGradient
-                colors={['#1E1B4B', colors.SURFACE_COLOR]}
-                style={styles.inviteTileBanner}
-              >
-                <View style={styles.inviteTileGradient}>
-                  <View style={styles.inviteBadgeRow}>
-                    <View style={styles.liveSyncBadge}>
-                      <View style={styles.livePingDot} />
-                      <Text style={styles.liveSyncText}>WATCH PARTY INVITE</Text>
-                    </View>
-                    <View style={styles.hdrTag}>
-                      <Text style={styles.hdrText}>SYNC</Text>
-                    </View>
-                  </View>
-                </View>
-              </LinearGradient>
-            )}
-
-            <View style={styles.inviteTileBody}>
-              <Text style={styles.inviteCategory}>INCOMING INVITATION</Text>
-              <Text style={styles.inviteMovieTitle}>{item.roomName || 'Watch Party'}</Text>
-              <Text style={styles.inviteSubtext}>
-                {isMyMessage ? 'You invited this friend' : `${otherUsername} invited you to watch together`}
-              </Text>
-
-              {/* Action Button */}
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.joinPartyCtaBtn}
-                onPress={() => {
-                  if (item.roomId) {
-                    navigation.navigate('WaitingScreen', {
-                      roomId: item.roomId,
-                      roomName: item.roomName || 'Watch Party',
-                      streamUrl: item.streamUrl || '',
-                    });
-                  } else {
-                    navigation.navigate('HomeScreen');
-                  }
-                }}
-              >
-                <LinearGradient
-                  colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.joinPartyGradient}
-                >
-                  <MaterialIcons name="rocket-launch" size={16} color="#FFF" />
-                  <Text style={styles.joinPartyText}>Accept & Join Party</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.messageFooterInside}>
-              <Text style={styles.timestampInside}>
-                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </Text>
-              {isMyMessage && (
-                <View style={styles.seenReceiptRow}>
-                  <MaterialIcons
-                    name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
-                    size={14}
-                    color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.65)'}
-                    style={{ marginLeft: 4 }}
-                  />
-                </View>
-              )}
-            </View>
-          </TouchableOpacity>
-        </View>
+        <WatchPartyInviteTile
+          key={item.id || item.timestamp}
+          item={item}
+          chatId={chatId}
+          isMyMessage={isMyMessage}
+          otherUsername={otherUsername}
+          navigation={navigation}
+          handleMessageLongPress={handleMessageLongPress}
+          dateSeparator={dateSeparator}
+        />
       );
     }
 
@@ -1457,7 +1885,9 @@ const ChatScreen = ({ route, navigation }) => {
         badgeColor: colors.LIVE_RED,
         onPress: () => {
           setShowAttachments(false);
-          handleTriggerWatchPartyInvite();
+          setTimeout(() => {
+            handleTriggerWatchPartyInvite();
+          }, 300);
         },
       },
       {
@@ -1516,7 +1946,9 @@ const ChatScreen = ({ route, navigation }) => {
         badgeColor: colors.PRIMARY_COLOR,
         onPress: () => {
           setShowAttachments(false);
-          handleTriggerWatchPartyInvite();
+          setTimeout(() => {
+            handleTriggerWatchPartyInvite();
+          }, 300);
         },
       },
     ];
@@ -2551,36 +2983,49 @@ const ChatScreen = ({ route, navigation }) => {
             <MaterialIcons name="arrow-back-ios-new" size={18} color={colors.TITLE_COLOR} />
           </TouchableOpacity>
 
-          {/* User Avatar with Status Indicator */}
-          <View style={styles.userAvatarWrap}>
-            {otherAvatar ? (
-              <Image source={{ uri: otherAvatar }} style={styles.userAvatarImage} />
-            ) : (
-              <View style={styles.userAvatarFallback}>
-                <Text style={styles.avatarInitial}>{otherUsername[0]?.toUpperCase()}</Text>
-              </View>
-            )}
-            <View
-              style={[
-                styles.userOnlineDot,
-                { backgroundColor: otherUserStatus === 'online' ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
-              ]}
-            />
-          </View>
+          {/* User Avatar & Name with Status Indicator -> Clickable to FriendProfileScreen */}
+          <TouchableOpacity
+            style={styles.headerProfileBtn}
+            activeOpacity={0.75}
+            onPress={() =>
+              navigation.navigate('FriendProfile', {
+                userId: otherUserId,
+                username: otherUsername,
+                avatar: otherAvatar,
+                status: otherUserStatus,
+              })
+            }
+          >
+            <View style={styles.userAvatarWrap}>
+              {otherAvatar ? (
+                <Image source={{ uri: otherAvatar }} style={styles.userAvatarImage} />
+              ) : (
+                <View style={styles.userAvatarFallback}>
+                  <Text style={styles.avatarInitial}>{otherUsername[0]?.toUpperCase()}</Text>
+                </View>
+              )}
+              <View
+                style={[
+                  styles.userOnlineDot,
+                  { backgroundColor: otherUserStatus === 'online' ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                ]}
+              />
+            </View>
 
-          <View style={styles.headerTitleWrap}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {otherUsername}
-            </Text>
-            <Text
-              style={[
-                styles.headerSubtext,
-                otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN },
-              ]}
-            >
-              {otherUserStatus === 'online' ? 'Online' : 'Offline'}
-            </Text>
-          </View>
+            <View style={styles.headerTitleWrap}>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {otherUsername}
+              </Text>
+              <Text
+                style={[
+                  styles.headerSubtext,
+                  otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN },
+                ]}
+              >
+                {otherUserStatus === 'online' ? 'Online' : 'Offline'}
+              </Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Right Action Icons: Audio Call, Video Call, Watch Party Invite */}
@@ -2739,6 +3184,12 @@ const styles = StyleSheet.create({
     gap: 10,
     flex: 1,
   },
+  headerProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
   backBtn: {
     width: 36,
     height: 36,
@@ -2824,21 +3275,21 @@ const styles = StyleSheet.create({
     paddingBottom: 90,
   },
   dateSeparator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 12,
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    marginVertical: 14,
   },
   dateLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.BORDER_SUBTLE,
+    display: 'none',
   },
   dateText: {
     color: colors.SUB_TITLE_COLOR,
     fontSize: 11,
     fontWeight: '600',
-    marginHorizontal: 10,
+    letterSpacing: 0.3,
   },
 
   messageOuterWrap: {
@@ -3027,86 +3478,214 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Embedded Watch Party Invite Tile
+  // Embedded Watch Party Invite Tile (Faded Card UI matching FriendsScreen & HomeScreen)
   inviteCardTile: {
-    width: 280,
+    width: 275,
+    minHeight: 275,
     backgroundColor: colors.SURFACE_COLOR,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.INPUTBOX_BORDER_COLOR,
     overflow: 'hidden',
     marginVertical: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 6,
   },
-  inviteTileBanner: {
+  inviteFadedCardBg: {
     width: '100%',
-    height: 100,
+    minHeight: 275,
+    backgroundColor: colors.SURFACE_COLOR,
   },
-  inviteTileGradient: {
+  inviteFadedCardImage: {
+    borderRadius: 18,
+  },
+  inviteCardFadeGradient: {
     flex: 1,
-    padding: 10,
+    minHeight: 275,
+    justifyContent: 'space-between',
+    padding: 12,
   },
-  inviteBadgeRow: {
+  inviteTopBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    width: '100%',
+  },
+  carouselFallbackIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   liveSyncBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(8, 8, 16, 0.8)',
+    backgroundColor: 'rgba(8, 8, 16, 0.82)',
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 4,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     gap: 4,
   },
   livePingDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.LIVE_RED,
+    backgroundColor: colors.ACCEPT_GREEN,
   },
   liveSyncText: {
     color: colors.TITLE_COLOR,
-    fontSize: 9,
-    fontWeight: '800',
+    fontSize: 10,
+    fontWeight: '700',
     letterSpacing: 0.5,
   },
   hdrTag: {
-    backgroundColor: 'rgba(0, 122, 255, 0.3)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+    backgroundColor: 'rgba(0, 122, 255, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.4)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   hdrText: {
     color: colors.PRIMARY_COLOR,
     fontSize: 9,
     fontWeight: '800',
+    letterSpacing: 0.4,
   },
-
-  inviteTileBody: {
-    padding: 12,
+  scheduledHdrTag: {
+    backgroundColor: 'rgba(255, 180, 0, 0.20)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.45)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  scheduledHdrText: {
+    color: colors.FILM_GOLD,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  scheduledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 180, 0, 0.20)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.45)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
     gap: 4,
   },
-  inviteCategory: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 10,
+  scheduledBadgeText: {
+    color: colors.FILM_GOLD,
+    fontSize: 9,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  inviteTileBody: {
+    gap: 4,
+    padding: 10,
+    backgroundColor: 'rgba(11, 11, 20, 0.68)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  inviteMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  inviteCategory: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  inviteRoomCode: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+    letterSpacing: 0.5,
+  },
+  inviteMovieRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  inviteMovieIcon: {
+    marginRight: 2,
+  },
   inviteMovieTitle: {
     color: colors.TITLE_COLOR,
-    fontSize: 14,
-    fontWeight: '800',
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1,
   },
   inviteSubtext: {
     color: colors.SUB_TITLE_COLOR,
     fontSize: 11,
+    fontWeight: '500',
   },
-
+  scheduledPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 180, 0, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.35)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    gap: 5,
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  scheduledPillText: {
+    color: colors.FILM_GOLD,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  senderActionContainer: {
+    marginTop: 4,
+  },
+  senderStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  senderStatusText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  receiverActionContainer: {
+    marginTop: 2,
+  },
+  receiverAcceptedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  receiverAcceptedText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 11,
+    fontWeight: '700',
+  },
   joinPartyCtaBtn: {
-    borderRadius: 12,
+    borderRadius: 10,
     overflow: 'hidden',
-    marginTop: 8,
+    marginTop: 4,
   },
   joinPartyGradient: {
     flexDirection: 'row',
@@ -3118,16 +3697,21 @@ const styles = StyleSheet.create({
   joinPartyText: {
     color: '#FFF',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   messageFooterInside: {
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingTop: 4,
   },
   timestampInside: {
     color: colors.MUTED_COLOR,
     fontSize: 10,
+  },
+  seenReceiptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 
   // ── ATTACHMENT BOTTOM SHEET MODAL ──
