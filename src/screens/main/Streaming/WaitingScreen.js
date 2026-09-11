@@ -326,6 +326,14 @@ const WaitingScreen = ({ route, navigation }) => {
     <View style={styles.container}>
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" translucent />
 
+      {/* Ambient Top Glow - exact match to LoginScreen & SignUpScreen */}
+      <View style={styles.ambientTopGlow} pointerEvents="none">
+        <LinearGradient
+          colors={['rgba(124, 58, 237, 0.18)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </View>
+
       {/* ── TOP HEADER ─────────────────────────────────────────── */}
       <View style={[styles.header, { paddingTop: safeTopPadding }]}>
         <TouchableOpacity
@@ -691,6 +699,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+  ambientTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 380,
+  },
   scrollContent: {
     paddingHorizontal: 16,
     paddingBottom: 40,
@@ -703,13 +718,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: colors.BACKGROUND_COLOR,
+    backgroundColor: 'transparent',
   },
   headerBtn: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -778,13 +795,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: 16,
     backgroundColor: 'rgba(6, 182, 212, 0.25)',
   },
   loaderIconBox: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -857,7 +874,7 @@ const styles = StyleSheet.create({
   hostAvatarCircle: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     backgroundColor: colors.PRIMARY_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
@@ -959,7 +976,7 @@ const styles = StyleSheet.create({
   avatarGradient: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1019,7 +1036,7 @@ const styles = StyleSheet.create({
   micBtn: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1074,7 +1091,7 @@ const styles = StyleSheet.create({
   deviceIconCircle: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: colors.PRIMARY_GLOW,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1082,7 +1099,7 @@ const styles = StyleSheet.create({
   deviceIconCircleCyan: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: 'rgba(6, 182, 212, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',

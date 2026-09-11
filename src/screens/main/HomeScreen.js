@@ -12,6 +12,7 @@ import {
   ImageBackground,
   Image,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -432,12 +433,29 @@ const HomeScreen = () => {
     }
   };
 
+  const safeTopPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
+  ) + 8;
+
   return (
     <View style={styles.container}>
-      <StatusBar backgroundColor="#090A12" barStyle="light-content" />
+      <StatusBar
+        backgroundColor={colors.BACKGROUND_COLOR}
+        barStyle="light-content"
+        translucent
+      />
+
+      {/* Ambient Top Glow - exact pattern from Login & SignUp screens */}
+      <View style={styles.ambientTopGlow} pointerEvents="none">
+        <LinearGradient
+          colors={['rgba(124, 58, 237, 0.18)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </View>
 
       {/* ── HEADER ─────────────────────────────────────────────── */}
-      <View style={[styles.headerContainer, { paddingTop: Math.max(insets.top, 10) }]}>
+      <View style={[styles.headerContainer, { paddingTop: safeTopPadding }]}>
         <View style={styles.headerInner}>
           {/* Logo Mark & Text */}
           <View style={styles.headerLeft}>
@@ -461,7 +479,9 @@ const HomeScreen = () => {
             onPress={() => navigation.navigate('Profile')}
             activeOpacity={0.8}
           >
-            <Ionicons name="person-circle" size={32} color="#1D8CF8" />
+            <View style={styles.profileAvatarBox}>
+              <Ionicons name="person" size={17} color={colors.TITLE_COLOR} />
+            </View>
           </TouchableOpacity>
         </View>
       </View>
@@ -748,8 +768,8 @@ const HomeScreen = () => {
             </View>
           ) : (
             <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconCircle}>
-                <Ionicons name="film-outline" size={36} color="#FBBF24" />
+              <View style={styles.emptyIconBox}>
+                <Ionicons name="film-outline" size={34} color="#FBBF24" />
               </View>
               <Text style={styles.emptyTitle}>
                 {searchQuery ? 'No matching rooms found' : 'No Active Rooms'}
@@ -789,7 +809,14 @@ const HomeScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#090A12',
+    backgroundColor: colors.BACKGROUND_COLOR,
+  },
+  ambientTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 380,
   },
   scrollContent: {
     paddingBottom: 110,
@@ -797,9 +824,9 @@ const styles = StyleSheet.create({
 
   // ── Header ────────────────────────
   headerContainer: {
-    backgroundColor: '#090A12',
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
-    borderBottomColor: '#1B1C2B',
+    borderBottomColor: colors.BORDER_SUBTLE,
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
@@ -845,6 +872,16 @@ const styles = StyleSheet.create({
   },
   profileAvatarBtn: {
     padding: 2,
+  },
+  profileAvatarBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   // ── Search & Filters ──────────────
@@ -1283,16 +1320,16 @@ const styles = StyleSheet.create({
     paddingVertical: 36,
     paddingHorizontal: 20,
   },
-  emptyIconCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#161726',
+  emptyIconBox: {
+    width: 68,
+    height: 68,
+    borderRadius: 18,
+    backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.2)',
+    borderColor: 'rgba(251, 191, 36, 0.25)',
   },
   emptyTitle: {
     color: '#FFF',

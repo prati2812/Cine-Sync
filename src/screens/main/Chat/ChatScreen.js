@@ -18,6 +18,7 @@ import {
   Modal,
   Dimensions,
   Alert,
+  Linking,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -32,6 +33,7 @@ import colors from '../../../theme/Colors';
 import { uploadMediaBlob, resolveMediaUri, deleteMediaBlob } from '../../../functions/mediaService';
 import { showCineAlert } from '../../../components/CineAlert';
 import { getYouTubeThumbnailDetails } from '../../../functions';
+import LinkPreviewCard, { extractFirstUrl } from '../../../components/LinkPreviewCard';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -360,14 +362,15 @@ const WatchPartyInviteTile = ({
       colors={
         showImage
           ? [
-              'rgba(8, 8, 16, 0.12)',
-              'rgba(8, 8, 16, 0.55)',
-              'rgba(15, 15, 26, 0.94)',
+              'rgba(8, 8, 16, 0.04)',
+              'rgba(8, 8, 16, 0.35)',
+              'rgba(8, 8, 16, 0.78)',
+              'rgba(15, 15, 26, 0.95)',
               colors.SURFACE_COLOR,
             ]
           : ['#1E1B4B', colors.SURFACE_COLOR]
       }
-      locations={showImage ? [0, 0.26, 0.54, 0.88] : undefined}
+      locations={showImage ? [0, 0.22, 0.46, 0.72, 0.96] : undefined}
       start={{ x: 0, y: 0 }}
       end={{ x: 0, y: 1 }}
       style={styles.inviteCardFadeGradient}
@@ -406,8 +409,8 @@ const WatchPartyInviteTile = ({
         )}
       </View>
 
-      {/* Bottom Content Area: Faded smoothly into deep dark surface */}
-      <View style={styles.inviteTileBody}>
+      {/* Direct Content Area directly on bottom gradient overlay (No Inner Card) */}
+      <View style={styles.inviteDirectContent}>
         <View style={styles.inviteMetaRow}>
           <Text style={[styles.inviteCategory, isFuture && { color: colors.FILM_GOLD }]}>
             {isMyMessage ? 'OUTGOING INVITATION' : 'INCOMING INVITATION'}
@@ -1703,6 +1706,39 @@ const ChatScreen = ({ route, navigation }) => {
     }
 
     // ── REGULAR CHAT BUBBLES ──
+    const extractedUrl = extractFirstUrl(item.text);
+
+    const renderFormattedMessageText = (rawText, isMine) => {
+      if (!rawText) return null;
+      const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+      const parts = rawText.split(urlRegex);
+
+      return (
+        <Text style={[styles.messageText, isMine && { color: '#FFF' }]}>
+          {parts.map((part, i) => {
+            if (!part) return null;
+            const isUrl = /(https?:\/\/[^\s]+|www\.[^\s]+)/i.test(part);
+            if (isUrl) {
+              const fullUrl = part.toLowerCase().startsWith('www.') ? 'https://' + part : part;
+              return (
+                <Text
+                  key={i}
+                  style={{
+                    color: isMine ? '#93C5FD' : colors.CYAN_ACCENT,
+                    textDecorationLine: 'underline',
+                  }}
+                  onPress={() => Linking.openURL(fullUrl)}
+                >
+                  {part}
+                </Text>
+              );
+            }
+            return part;
+          })}
+        </Text>
+      );
+    };
+
     return (
       <View style={styles.messageOuterWrap}>
         {dateSeparator}
@@ -1712,13 +1748,26 @@ const ChatScreen = ({ route, navigation }) => {
           style={[
             styles.messageContainer,
             isMyMessage ? styles.myMessage : styles.theirMessage,
+            Boolean(extractedUrl) && styles.linkMessageBubble,
           ]}
         >
-          <Text style={[styles.messageText, isMyMessage && { color: '#FFF' }]}>
-            {item.text}
-          </Text>
+          {/* 1. Rich Link Preview on TOP (flush edge-to-edge) */}
+          {Boolean(extractedUrl) && (
+            <LinkPreviewCard
+              url={extractedUrl}
+              navigation={navigation}
+              isMyMessage={isMyMessage}
+              onLongPress={() => handleMessageLongPress(item)}
+            />
+          )}
 
-          <View style={styles.messageFooter}>
+          {/* 2. Message Text & Link at the BOTTOM below the preview */}
+          <View style={Boolean(extractedUrl) ? styles.linkMessageTextWrap : null}>
+            {renderFormattedMessageText(item.text, isMyMessage)}
+          </View>
+
+          {/* 3. Footer with timestamp & read receipts */}
+          <View style={[styles.messageFooter, Boolean(extractedUrl) && styles.linkMessageFooter]}>
             <Text style={[styles.timestamp, isMyMessage && { color: 'rgba(255, 255, 255, 0.7)' }]}>
               {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
                 hour: '2-digit',
@@ -3332,6 +3381,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  // ── Unified Link Preview Message Bubble (Edge-to-Edge, No Double Card) ──
+  linkMessageBubble: {
+    padding: 0,
+    overflow: 'hidden',
+    minWidth: 260,
+    maxWidth: '85%',
+  },
+  linkMessageTextWrap: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  linkMessageFooter: {
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    paddingTop: 0,
+  },
+
   // ── Deleted Message Bubble Styles ──
   deletedBubbleContainer: {
     flexDirection: 'row',
@@ -3480,8 +3547,8 @@ const styles = StyleSheet.create({
 
   // Embedded Watch Party Invite Tile (Faded Card UI matching FriendsScreen & HomeScreen)
   inviteCardTile: {
-    width: 275,
-    minHeight: 275,
+    width: 280,
+    minHeight: 280,
     backgroundColor: colors.SURFACE_COLOR,
     borderRadius: 18,
     borderWidth: 1,
@@ -3496,7 +3563,7 @@ const styles = StyleSheet.create({
   },
   inviteFadedCardBg: {
     width: '100%',
-    minHeight: 275,
+    minHeight: 280,
     backgroundColor: colors.SURFACE_COLOR,
   },
   inviteFadedCardImage: {
@@ -3504,14 +3571,15 @@ const styles = StyleSheet.create({
   },
   inviteCardFadeGradient: {
     flex: 1,
-    minHeight: 275,
+    minHeight: 280,
     justifyContent: 'space-between',
-    padding: 12,
+    paddingTop: 12,
   },
   inviteTopBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 12,
     width: '100%',
   },
   carouselFallbackIconWrap: {
@@ -3590,13 +3658,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  inviteTileBody: {
+  inviteDirectContent: {
     gap: 4,
-    padding: 10,
-    backgroundColor: 'rgba(11, 11, 20, 0.68)',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
   },
   inviteMetaRow: {
     flexDirection: 'row',
@@ -4035,9 +4100,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     alignItems: 'center',
     marginTop: 6,
-    paddingTop: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    paddingTop: 2,
   },
   callTileTimestamp: {
     fontSize: 10,
@@ -5203,9 +5266,7 @@ const videoCallStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 5,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    paddingTop: 4,
   },
   audioSpectrumGroup: {
     flexDirection: 'row',

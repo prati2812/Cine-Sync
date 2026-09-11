@@ -356,7 +356,19 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
   return (
     <View style={styles.screenWrap}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <StatusBar
+        backgroundColor={colors.BACKGROUND_COLOR}
+        barStyle="light-content"
+        translucent
+      />
+
+      {/* Ambient Top Glow Overlay - matching Login/SignUp pattern */}
+      <View style={styles.ambientTopGlow} pointerEvents="none">
+        <LinearGradient
+          colors={['rgba(124, 58, 237, 0.18)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </View>
 
       {/* ── TOP HEADER BAR (Safe Area & Navigation) ── */}
       <View style={[styles.topHeaderBar, { paddingTop: safeTopPadding }]}>
@@ -416,10 +428,6 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
           {/* ── HERO CINEMA AMBIENT CARD ── */}
           <View style={styles.heroAmbientCard}>
-            {/* Background Ambient Glow Accents */}
-            <View style={styles.glowOrbTopRight} />
-            <View style={styles.glowOrbBottomLeft} />
-
             <View style={styles.heroContentRow}>
               <View style={styles.heroTextCol}>
                 <Text style={styles.heroEngineTag}>SYNC ENGINE V2.4</Text>
@@ -429,7 +437,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
                 </Text>
               </View>
 
-              <View style={styles.heroIconCircle}>
+              <View style={styles.heroIconBox}>
                 <MaterialIcons name="movie-filter" size={26} color={colors.PRIMARY_COLOR} />
               </View>
             </View>
@@ -909,13 +917,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+  ambientTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 380,
+    zIndex: 0,
+  },
   topHeaderBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: 'rgba(8, 8, 16, 0.95)',
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.06)',
     zIndex: 50,
@@ -953,7 +969,7 @@ const styles = StyleSheet.create({
   subCloseBtn: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1008,24 +1024,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
   },
-  glowOrbTopRight: {
-    position: 'absolute',
-    top: -24,
-    right: -24,
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(124, 58, 237, 0.2)',
-  },
-  glowOrbBottomLeft: {
-    position: 'absolute',
-    bottom: -24,
-    left: -24,
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-  },
   heroContentRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1055,10 +1053,10 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 4,
   },
-  heroIconCircle: {
+  heroIconBox: {
     width: 46,
     height: 46,
-    borderRadius: 23,
+    borderRadius: 14,
     backgroundColor: 'rgba(0, 122, 255, 0.15)',
     borderWidth: 1,
     borderColor: 'rgba(0, 122, 255, 0.3)',
@@ -1279,7 +1277,7 @@ const styles = StyleSheet.create({
   cardHeaderIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     backgroundColor: 'rgba(124, 58, 237, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1548,7 +1546,7 @@ const styles = StyleSheet.create({
   stepperBtn: {
     width: 30,
     height: 30,
-    borderRadius: 15,
+    borderRadius: 8,
     backgroundColor: colors.SURFACE_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1656,7 +1654,7 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(255, 255, 255, 0.08)',
   },
   createCtaButton: {
-    borderRadius: 28,
+    borderRadius: 16,
     overflow: 'hidden',
     shadowColor: colors.PURPLE_ACCENT,
     shadowOffset: { width: 0, height: 8 },

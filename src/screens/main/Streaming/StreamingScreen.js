@@ -568,7 +568,22 @@ const StreamingScreen = ({ route, navigation }) => {
 
   return (
     <View style={[styles.container, isLandscape && styles.containerLandscape]}>
-      <StatusBar hidden={isLandscape} barStyle="light-content" translucent backgroundColor="transparent" />
+      <StatusBar
+        hidden={isLandscape}
+        barStyle="light-content"
+        translucent
+        backgroundColor={colors.BACKGROUND_COLOR}
+      />
+
+      {/* Ambient Top Glow Overlay - identical to Login & SignUp pattern */}
+      {!isLandscape && (
+        <View style={styles.ambientTopGlow} pointerEvents="none">
+          <LinearGradient
+            colors={['rgba(124, 58, 237, 0.18)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+            style={StyleSheet.absoluteFillObject}
+          />
+        </View>
+      )}
 
       {/* ── TOP HEADER BAR ── */}
       {!isLandscape && (
@@ -684,7 +699,7 @@ const StreamingScreen = ({ route, navigation }) => {
         {/* Video Overlays: Host Paused */}
         {creatorLeft && (
           <View style={styles.creatorLeftOverlay}>
-            <Ionicons name="pause-circle" size={46} color={colors.TITLE_COLOR} />
+            <MaterialIcons name="pause" size={46} color={colors.TITLE_COLOR} />
             <Text style={styles.creatorLeftTitle}>Host Paused Stream</Text>
             <Text style={styles.creatorLeftText}>Waiting for host to resume...</Text>
           </View>
@@ -1137,6 +1152,14 @@ const styles = StyleSheet.create({
   containerLandscape: {
     backgroundColor: colors.BACKGROUND_COLOR,
   },
+  ambientTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 380,
+    zIndex: 0,
+  },
 
   // ── Top Header ──
   topHeader: {
@@ -1145,9 +1168,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingBottom: 10,
-    backgroundColor: colors.BACKGROUND_COLOR,
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
     borderBottomColor: colors.BORDER_SUBTLE,
+    zIndex: 50,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -1158,7 +1182,7 @@ const styles = StyleSheet.create({
   backBtnCircle: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     backgroundColor: colors.SURFACE_ELEVATED,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1229,7 +1253,7 @@ const styles = StyleSheet.create({
   headerActionBtn: {
     width: 34,
     height: 34,
-    borderRadius: 17,
+    borderRadius: 10,
     backgroundColor: colors.SURFACE_ELEVATED,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1350,7 +1374,7 @@ const styles = StyleSheet.create({
   seekStepBtn: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 10,
     backgroundColor: 'rgba(8, 8, 16, 0.65)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
@@ -1360,7 +1384,7 @@ const styles = StyleSheet.create({
   playPauseGlowBtn: {
     width: 52,
     height: 52,
-    borderRadius: 26,
+    borderRadius: 14,
     overflow: 'hidden',
     shadowColor: colors.PRIMARY_COLOR,
     shadowOffset: { width: 0, height: 4 },
@@ -1793,7 +1817,7 @@ const styles = StyleSheet.create({
   audienceAvatarWrap: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 10,
     backgroundColor: colors.SURFACE_ELEVATED,
     borderWidth: 1.5,
     alignItems: 'center',
@@ -1811,7 +1835,7 @@ const styles = StyleSheet.create({
     right: -4,
     width: 14,
     height: 14,
-    borderRadius: 7,
+    borderRadius: 4,
     backgroundColor: colors.FILM_GOLD,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1827,7 +1851,7 @@ const styles = StyleSheet.create({
     right: -2,
     width: 12,
     height: 12,
-    borderRadius: 6,
+    borderRadius: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1872,7 +1896,7 @@ const styles = StyleSheet.create({
   chatAvatarThumb: {
     width: 26,
     height: 26,
-    borderRadius: 13,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
