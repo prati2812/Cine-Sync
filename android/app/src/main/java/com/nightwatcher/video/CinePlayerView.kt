@@ -33,6 +33,8 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isPlayingRequested: Boolean = true
     private var currentUrl: String? = null
+    private var pendingSeekPositionMs: Long = -1L
+    private var isMediaLoaded: Boolean = false
 
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -70,6 +72,7 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
     fun setSourceUrl(url: String?) {
         if (url.isNullOrEmpty()) {
             currentUrl = null
+            isMediaLoaded = false
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
             return
@@ -77,6 +80,7 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
 
         if (url == currentUrl) return
         currentUrl = url
+        isMediaLoaded = false
 
         initializePlayer()
 
@@ -123,6 +127,7 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
     private fun loadExtractedMedia(media: ExtractedMedia) {
         val player = exoPlayer ?: return
         val dataSourceFactory = DefaultDataSource.Factory(context)
+        val targetSeek = pendingSeekPositionMs
 
         when (media) {
             is ExtractedMedia.Single -> {
@@ -134,7 +139,11 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
                 } else {
                     MediaItem.fromUri(media.uri)
                 }
-                player.setMediaItem(mediaItem)
+                if (targetSeek > 0) {
+                    player.setMediaItem(mediaItem, targetSeek)
+                } else {
+                    player.setMediaItem(mediaItem)
+                }
             }
             is ExtractedMedia.Merged -> {
                 val videoSource = ProgressiveMediaSource.Factory(dataSourceFactory)
@@ -143,11 +152,19 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
                     .createMediaSource(MediaItem.fromUri(media.audioUri))
                 val mergedSource = MergingMediaSource(videoSource, audioSource)
                 player.setMediaSource(mergedSource)
+                if (targetSeek > 0) {
+                    player.seekTo(targetSeek)
+                }
             }
         }
 
         player.prepare()
         player.playWhenReady = isPlayingRequested
+        isMediaLoaded = true
+
+        if (targetSeek > 0) {
+            Log.d("CinePlayerView", "Applied pending seek in loadExtractedMedia: ${targetSeek}ms")
+        }
     }
 
     fun setPaused(paused: Boolean) {
@@ -168,7 +185,15 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
     }
 
     fun seekTo(positionMs: Long) {
-        exoPlayer?.seekTo(positionMs)
+        val player = exoPlayer
+        if (player == null || !isMediaLoaded || player.playbackState == Player.STATE_IDLE || player.currentTimeline.isEmpty) {
+            pendingSeekPositionMs = positionMs
+            Log.d("CinePlayerView", "seekTo cached as pending: ${positionMs}ms")
+        } else {
+            pendingSeekPositionMs = -1L
+            player.seekTo(positionMs)
+            Log.d("CinePlayerView", "seekTo executed immediately: ${positionMs}ms")
+        }
     }
 
     fun setResizeMode(mode: String?) {
@@ -190,8 +215,18 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
         val isBuffering = playbackState == Player.STATE_BUFFERING
         val isEnded = playbackState == Player.STATE_ENDED
 
+        if (playbackState == Player.STATE_READY) {
+            isMediaLoaded = true
+            if (pendingSeekPositionMs > 0) {
+                val target = pendingSeekPositionMs
+                pendingSeekPositionMs = -1L
+                Log.d("CinePlayerView", "STATE_READY applying pending seek: ${target}ms")
+                player.seekTo(target)
+            }
+        }
+
         val map = Arguments.createMap().apply {
-            putBoolean("isPlaying", player.isPlaying)
+            putBoolean("isPlaying", player.playWhenReady && playbackState != Player.STATE_ENDED)
             putBoolean("isBuffering", isBuffering)
             putDouble("duration", if (player.duration != C.TIME_UNSET) player.duration / 1000.0 else 0.0)
             putDouble("currentTime", player.currentPosition / 1000.0)
@@ -207,7 +242,18 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         val player = exoPlayer ?: return
         val map = Arguments.createMap().apply {
-            putBoolean("isPlaying", isPlaying)
+            putBoolean("isPlaying", player.playWhenReady && player.playbackState != Player.STATE_ENDED)
+            putBoolean("isBuffering", player.playbackState == Player.STATE_BUFFERING)
+            putDouble("currentTime", player.currentPosition / 1000.0)
+            putDouble("duration", if (player.duration != C.TIME_UNSET) player.duration / 1000.0 else 0.0)
+        }
+        emitEvent("onPlaybackStateChange", map)
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        val player = exoPlayer ?: return
+        val map = Arguments.createMap().apply {
+            putBoolean("isPlaying", playWhenReady && player.playbackState != Player.STATE_ENDED)
             putBoolean("isBuffering", player.playbackState == Player.STATE_BUFFERING)
             putDouble("currentTime", player.currentPosition / 1000.0)
             putDouble("duration", if (player.duration != C.TIME_UNSET) player.duration / 1000.0 else 0.0)
@@ -253,6 +299,8 @@ class CinePlayerView(context: Context) : FrameLayout(context), Player.Listener {
 
     fun releasePlayer() {
         mainHandler.removeCallbacks(progressRunnable)
+        pendingSeekPositionMs = -1L
+        isMediaLoaded = false
         exoPlayer?.let { player ->
             player.removeListener(this)
             player.release()

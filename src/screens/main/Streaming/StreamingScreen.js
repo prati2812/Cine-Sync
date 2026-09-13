@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
   ScrollView,
   useWindowDimensions,
   Share,
+  BackHandler,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CineVideoPlayer from '../../../components/video/CineVideoPlayer';
@@ -23,6 +25,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import Orientation from 'react-native-orientation-locker';
 import { auth, database } from '../../../config/firebase';
+import { createSyncSession, saveLocalProgress, getLocalProgress } from '../../../services/video/CineSyncEngine';
 import colors from '../../../theme/Colors';
 
 const AVATAR_COLORS = [
@@ -76,14 +79,26 @@ const FloatingEmoji = ({ emoji }) => {
 
   return (
     <Animated.View style={[styles.floatingEmoji, { transform: [{ translateY }], opacity }]}>
-      <Text style={{ fontSize: 30 }}>{emoji}</Text>
+      <View style={styles.floatingReactionBubble}>
+        <MaterialIcons name={emoji || 'auto-awesome'} size={22} color={colors.CYAN_ACCENT} />
+      </View>
     </Animated.View>
   );
 };
 
 const StreamingScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
-  const { streamUrl, roomName: initialRoomName, roomId } = route.params || {};
+  const {
+    streamUrl,
+    roomName: initialRoomName,
+    roomId: initialRoomId,
+    isLocalSolo: initialIsLocalSolo,
+    thumbnail: initialThumbnail,
+  } = route.params || {};
+
+  const [currentRoomId, setCurrentRoomId] = useState(initialRoomId || null);
+  const roomId = currentRoomId;
+  const isLocalSolo = Boolean(initialIsLocalSolo || !initialRoomId);
 
   const safeTopPadding = Math.max(
     insets.top,
@@ -98,13 +113,20 @@ const StreamingScreen = ({ route, navigation }) => {
   const [playing, setPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [showControls, setShowControls] = useState(true);
+  const [initialPosition, setInitialPosition] = useState(0);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const currentTimeRef = useRef(0);
+  const durationRef = useRef(0);
+  const pendingResumeRef = useRef(null);
+  const isSeekingRef = useRef(false);
+  const seekLockTimeoutRef = useRef(null);
+  const [showControls, setShowControls] = useState(false);
   const controlsTimeoutRef = useRef(null);
   const playerRef = useRef(null);
   const [isCreator, setIsCreator] = useState(false);
   const [roomData, setRoomData] = useState(null);
 
-  // Adaptive Switcher: 'chat' (Party Default) vs 'notes' (Solo)
+  // Adaptive Switcher: 'chat' vs 'notes' (Multi-user party only)
   const [activeMode, setActiveMode] = useState('chat');
   const hasAutoSetDefaultModeRef = useRef(false);
 
@@ -164,35 +186,71 @@ const StreamingScreen = ({ route, navigation }) => {
   };
 
   useEffect(() => {
+    setIsInitialLoading(true);
     if (!streamUrl || !streamUrl.trim()) {
       Alert.alert('Invalid Stream', 'No streaming URL provided for this room.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     }
+    // Safety failsafe: Ensure initial loader never hangs indefinitely
+    const fallbackTimer = setTimeout(() => {
+      setIsInitialLoading(false);
+    }, 4000);
+    return () => clearTimeout(fallbackTimer);
   }, [streamUrl, navigation]);
 
   const [creatorLeft, setCreatorLeft] = useState(false);
   const streamBadge = useMemo(() => getStreamBadgeInfo(streamUrl), [streamUrl]);
 
-  // Auto-hide controls overlay after 3.5s
-  const resetControlsTimeout = () => {
+  // Detected if room is for self (no friends invited) or direct solo stream
+  const isSoloRoom = useMemo(() => {
+    if (isLocalSolo || !currentRoomId) return true;
+    if (roomData?.isSolo !== undefined) return Boolean(roomData.isSolo);
+    if (route.params?.isSolo !== undefined) return Boolean(route.params.isSolo);
+    if (roomData) {
+      const parts = roomData.participants || [];
+      return parts.length === 0;
+    }
+    return false;
+  }, [isLocalSolo, currentRoomId, roomData, route.params]);
+
+  // Auto-hide controls overlay after 3.5s (hidden while initial loading)
+  const resetControlsTimeout = useCallback(() => {
+    if (isInitialLoading) {
+      setShowControls(false);
+      return;
+    }
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
       setShowControls(false);
     }, 3500);
-  };
+  }, [isInitialLoading]);
 
+  // When video transitions from loading to ready, show controls briefly then auto-hide
   useEffect(() => {
-    resetControlsTimeout();
+    if (!isInitialLoading) {
+      resetControlsTimeout();
+    } else {
+      setShowControls(false);
+    }
     return () => {
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     };
-  }, []);
+  }, [isInitialLoading, resetControlsTimeout]);
 
-  // Fetch Room & Participants from RTDB
+  // Fetch Room & Participants from RTDB (Only for multi-user networked rooms)
   useEffect(() => {
-    const roomRef = database().ref(`rooms/${roomId}`);
+    if (isLocalSolo || !currentRoomId) {
+      setIsCreator(true);
+      if (!hasAutoSetDefaultModeRef.current) {
+        hasAutoSetDefaultModeRef.current = true;
+        setActiveMode('notes');
+      }
+      return;
+    }
+
+    const roomRef = database().ref(`rooms/${currentRoomId}`);
 
     const onRoomHandler = async snapshot => {
       const data = snapshot.val();
@@ -244,16 +302,19 @@ const StreamingScreen = ({ route, navigation }) => {
       }
       setParticipantProfiles(profiles);
 
-      // Default to Party Chat on initial load
+      // Default mode on initial room load:
+      // If room is for self (no friends invited), default to 'notes' (Scene Notes / Storyboard);
+      // If group watch party with invited members, default to 'chat'.
       if (!hasAutoSetDefaultModeRef.current) {
         hasAutoSetDefaultModeRef.current = true;
-        setActiveMode('chat');
+        const isSelfRoom = data.isSolo === true || !data.participants || data.participants.length === 0;
+        setActiveMode(isSelfRoom ? 'notes' : 'chat');
       }
     };
 
     roomRef.on('value', onRoomHandler);
     return () => roomRef.off('value', onRoomHandler);
-  }, [roomId]);
+  }, [currentRoomId, isLocalSolo]);
 
   useEffect(() => {
     if (participantProfiles.length === 0) return;
@@ -277,94 +338,83 @@ const StreamingScreen = ({ route, navigation }) => {
   }));
 
   // ──────────────────────────────────────────────────────────────
-  // Sync Playback Logic
+  // Production Dead-Reckoning Synchronization & Local Progress Engine
   // ──────────────────────────────────────────────────────────────
-  const syncDebounceRef = useRef(null);
-  const isSyncingRef = useRef(false);
-  const lastPlaybackRef = useRef(null);
+  const syncSessionRef = useRef(null);
+  const [syncStateInfo, setSyncStateInfo] = useState({
+    isSynced: true,
+    status: 'SYNC_LOCKED',
+    driftMs: 0,
+    isSolo: false,
+  });
 
-  const pushPlaybackState = async isCurrentPlaying => {
-    if (!isCreator) return;
-    try {
-      const curTime = (await playerRef.current?.getCurrentTime()) || 0;
-      await database().ref(`rooms/${roomId}/playback`).set({
-        isPlaying: isCurrentPlaying,
-        currentTime: curTime,
-        updatedAt: Date.now(),
-      });
-    } catch (e) {
-      console.log('[Sync] Error pushing playback state:', e);
-    }
-  };
-
-  const debouncedPushRef = useRef(null);
-  const debouncedPushPlaybackState = isCurrentPlaying => {
-    if (debouncedPushRef.current) clearTimeout(debouncedPushRef.current);
-    debouncedPushRef.current = setTimeout(() => {
-      pushPlaybackState(isCurrentPlaying);
-    }, 600);
-  };
-
+  // Read local progress immediately to set initialPosition prop before player mounts
   useEffect(() => {
-    if (!isCreator || !playing) return;
-    const intervalId = setInterval(async () => {
-      if (!playerRef.current) return;
-      try {
-        const curTime = await playerRef.current.getCurrentTime();
-        await database().ref(`rooms/${roomId}/playback`).update({
-          currentTime: curTime || 0,
-          updatedAt: Date.now(),
-        });
-      } catch (e) {
-        console.log('[Sync] Heartbeat error:', e);
+    let isMounted = true;
+    (async () => {
+      if (!currentRoomId && !streamUrl) return;
+      const saved = await getLocalProgress(streamUrl, currentRoomId);
+      if (isMounted && saved && typeof saved.position === 'number' && saved.position >= 1) {
+        pendingResumeRef.current = saved.position;
+        setInitialPosition(saved.position);
+        setCurrentTime(saved.position);
+        currentTimeRef.current = saved.position;
       }
-    }, 3000);
-    return () => clearInterval(intervalId);
-  }, [isCreator, playing, roomId]);
-
-  // Viewer playback listener
-  useEffect(() => {
-    if (isCreator) return;
-    const playbackRef = database().ref(`rooms/${roomId}/playback`);
-
-    const onPlaybackHandler = async snapshot => {
-      const data = snapshot.val();
-      if (!data || isSyncingRef.current) return;
-      lastPlaybackRef.current = data;
-
-      isSyncingRef.current = true;
-      setPlaying(data.isPlaying);
-
-      if (playerRef.current) {
-        if (data.isPlaying) {
-          playerRef.current.play();
-          const elapsed = (Date.now() - data.updatedAt) / 1000;
-          const targetTime = (data.currentTime || 0) + elapsed;
-          playerRef.current.getCurrentTime().then(viewerTime => {
-            if (Math.abs((viewerTime || 0) - targetTime) > 1.5) {
-              playerRef.current.seekTo(targetTime);
-            }
-          });
-        } else {
-          playerRef.current.pause();
-          playerRef.current.seekTo(data.currentTime || 0);
-        }
-      }
-      isSyncingRef.current = false;
+    })();
+    return () => {
+      isMounted = false;
     };
+  }, [currentRoomId, streamUrl]);
 
-    playbackRef.on('value', onPlaybackHandler);
-    return () => playbackRef.off('value', onPlaybackHandler);
-  }, [roomId, isCreator]);
+  useEffect(() => {
+    if (!currentRoomId || isLocalSolo) return;
+
+    const session = createSyncSession({
+      roomId: currentRoomId,
+      mediaKey: streamUrl || currentRoomId,
+      isHost: isCreator,
+      isSolo: isCreator && (isSoloRoom || participants.length <= 1),
+      playerRef,
+      onSyncStatusChange: statusData => {
+        setSyncStateInfo(statusData);
+      },
+      onRemotePlayStateChange: isRemotePlaying => {
+        setPlaying(isRemotePlaying);
+      },
+      onResumeProgress: ({ position }) => {
+        if (typeof position === 'number' && position >= 1) {
+          pendingResumeRef.current = position;
+          setCurrentTime(position);
+          currentTimeRef.current = position;
+          setInitialPosition(position);
+          playerRef.current?.seekTo(position);
+        }
+      },
+    });
+
+    syncSessionRef.current = session;
+
+    return () => {
+      session.destroy(currentTimeRef.current, durationRef.current);
+      syncSessionRef.current = null;
+    };
+  }, [currentRoomId, isLocalSolo, isCreator, streamUrl, isSoloRoom]);
+
+  // Dynamically update solo vs party mode when participants join or leave
+  useEffect(() => {
+    if (syncSessionRef.current && isCreator && !isLocalSolo) {
+      syncSessionRef.current.setSolo(isSoloRoom || participants.length <= 1);
+    }
+  }, [participants.length, isCreator, isSoloRoom, isLocalSolo]);
 
   // ──────────────────────────────────────────────────────────────
-  // Notes Logic
+  // Notes Logic: Lazy Cloud Persistence
   // ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const user = auth().currentUser;
-    if (!user || !roomId) return;
+    if (!user || !currentRoomId) return;
 
-    const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
+    const notesRef = database().ref(`notes/${user.uid}/${currentRoomId}`);
     const onNotesHandler = snapshot => {
       const data = snapshot.val();
       if (data) {
@@ -377,26 +427,96 @@ const StreamingScreen = ({ route, navigation }) => {
     };
     notesRef.on('value', onNotesHandler);
     return () => notesRef.off('value', onNotesHandler);
-  }, [roomId]);
+  }, [currentRoomId]);
 
   const addNote = async (customText = null) => {
     const user = auth().currentUser;
-    if (!user) return;
+    if (!user) {
+      Alert.alert('Sign In Required', 'Please sign in to save cinema notes.');
+      return;
+    }
     const textToSave = (typeof customText === 'string' ? customText : newNoteText).trim();
     if (!textToSave) return;
+
     try {
-      const secs = (await playerRef.current?.getCurrentTime()) || currentTime || 0;
-      const notesRef = database().ref(`notes/${user.uid}/${roomId}`);
-      await notesRef.push({
+      const secs = (await playerRef.current?.getCurrentTime()) || currentTimeRef.current || currentTime || 0;
+      const roundedSecs = Math.floor(secs);
+      let targetRoomId = currentRoomId;
+
+      // Lazy Database Persistence:
+      // If user was streaming solo with zero DB room, create the room record now on first note!
+      if (!targetRoomId) {
+        targetRoomId = `solo_${Date.now()}`;
+        const db = database();
+
+        const newRoomData = {
+          roomId: targetRoomId,
+          name: roomTitle,
+          nameLower: roomTitle.toLowerCase(),
+          streamUrl: streamUrl,
+          thumbnail: initialThumbnail || null,
+          isSolo: true,
+          isPrivate: true,
+          isStreaming: true,
+          createdAt: new Date().toISOString(),
+          creator: {
+            uid: user.uid,
+            email: user.email,
+            userName: user.displayName || user.email?.split('@')[0] || 'Host',
+          },
+          playback: {
+            currentTime: roundedSecs,
+            isPlaying: playing,
+            lastUpdated: database.ServerValue.TIMESTAMP,
+          },
+        };
+
+        const updates = {};
+        updates[`rooms/${targetRoomId}`] = newRoomData;
+        updates[`user_rooms/${user.uid}/${targetRoomId}`] = {
+          roomId: targetRoomId,
+          name: roomTitle,
+          nameLower: roomTitle.toLowerCase(),
+          role: 'creator',
+          isSolo: true,
+          createdAt: newRoomData.createdAt,
+          status: 'active',
+          thumbnail: initialThumbnail || null,
+          lastWatched: database.ServerValue.TIMESTAMP,
+        };
+
+        await db.ref().update(updates);
+        setCurrentRoomId(targetRoomId);
+      }
+
+      // Save note in notes/${user.uid}/${targetRoomId}
+      const notesRef = database().ref(`notes/${user.uid}/${targetRoomId}`);
+      const newNoteRef = await notesRef.push({
         text: textToSave,
-        seconds: Math.floor(secs),
+        seconds: roundedSecs,
         tag: 'Storyboard Note',
         author: user.email?.split('@')[0] || 'Me',
         timestamp: database.ServerValue.TIMESTAMP,
       });
+
+      // Optimistic local state update so note renders instantaneously
+      setNotes(prevNotes => {
+        const noteItem = {
+          id: newNoteRef.key || `local_${Date.now()}`,
+          text: textToSave,
+          seconds: roundedSecs,
+          tag: 'Storyboard Note',
+          author: user.email?.split('@')[0] || 'Me',
+          timestamp: Date.now(),
+        };
+        const updated = [noteItem, ...prevNotes.filter(n => n.id !== noteItem.id)];
+        return updated.sort((a, b) => (b.seconds || 0) - (a.seconds || 0));
+      });
+
       setNewNoteText('');
     } catch (e) {
       console.log('Error adding note:', e);
+      Alert.alert('Save Error', 'Unable to save note to cloud storyboard.');
     }
   };
 
@@ -404,7 +524,10 @@ const StreamingScreen = ({ route, navigation }) => {
     const user = auth().currentUser;
     if (!user) return;
     try {
-      await database().ref(`notes/${user.uid}/${roomId}/${noteId}`).remove();
+      if (currentRoomId) {
+        await database().ref(`notes/${user.uid}/${currentRoomId}/${noteId}`).remove();
+      }
+      setNotes(prev => prev.filter(n => n.id !== noteId));
     } catch (e) {
       console.log('Error deleting note:', e);
     }
@@ -413,17 +536,22 @@ const StreamingScreen = ({ route, navigation }) => {
   const handleSeekToNote = seconds => {
     if (!playerRef.current) return;
     playerRef.current.seekTo(seconds);
+    currentTimeRef.current = seconds;
     setCurrentTime(seconds);
-    if (isCreator) {
-      debouncedPushPlaybackState(playing);
+    const dur = durationRef.current || duration;
+    if (isCreator && syncSessionRef.current && !isLocalSolo) {
+      syncSessionRef.current.pushSeek(seconds, playing, dur);
+    } else {
+      saveLocalProgress(streamUrl || currentRoomId, seconds, dur, currentRoomId);
     }
   };
 
   // ──────────────────────────────────────────────────────────────
-  // Chat & Reactions Logic
+  // Chat & Reactions Logic (Only for multi-user watch parties)
   // ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    const messagesRef = database().ref(`rooms/${roomId}/messages`);
+    if (!currentRoomId || isLocalSolo) return;
+    const messagesRef = database().ref(`rooms/${currentRoomId}/messages`);
     const onMessagesHandler = snapshot => {
       const data = snapshot.val();
       if (data) {
@@ -436,11 +564,11 @@ const StreamingScreen = ({ route, navigation }) => {
     };
     messagesRef.limitToLast(50).on('value', onMessagesHandler);
     return () => messagesRef.limitToLast(50).off('value', onMessagesHandler);
-  }, [roomId]);
+  }, [currentRoomId, isLocalSolo]);
 
   const sendMessage = async () => {
-    if (!newMessage.trim()) return;
-    const messagesRef = database().ref(`rooms/${roomId}/messages`);
+    if (!newMessage.trim() || !currentRoomId || isLocalSolo) return;
+    const messagesRef = database().ref(`rooms/${currentRoomId}/messages`);
     const currentUserProfile = participantProfiles.find(
       p => p.email === auth().currentUser?.email
     ) || {
@@ -459,7 +587,8 @@ const StreamingScreen = ({ route, navigation }) => {
   };
 
   useEffect(() => {
-    const reactionsRef = database().ref(`rooms/${roomId}/reactions`);
+    if (!currentRoomId || isLocalSolo) return;
+    const reactionsRef = database().ref(`rooms/${currentRoomId}/reactions`);
     const now = Date.now();
 
     const onChildAddedHandler = snapshot => {
@@ -475,11 +604,12 @@ const StreamingScreen = ({ route, navigation }) => {
 
     reactionsRef.limitToLast(1).on('child_added', onChildAddedHandler);
     return () => reactionsRef.limitToLast(1).off('child_added', onChildAddedHandler);
-  }, [roomId]);
+  }, [currentRoomId, isLocalSolo]);
 
   const sendReaction = async emoji => {
+    if (!currentRoomId || isLocalSolo) return;
     try {
-      await database().ref(`rooms/${roomId}/reactions`).push({
+      await database().ref(`rooms/${currentRoomId}/reactions`).push({
         emoji,
         senderId: auth().currentUser?.uid,
         timestamp: database.ServerValue.TIMESTAMP,
@@ -490,7 +620,7 @@ const StreamingScreen = ({ route, navigation }) => {
   };
 
   // ──────────────────────────────────────────────────────────────
-  // Playback Control Handlers
+  // Playback Control Handlers (Zero Debounce, Instant Native Response)
   // ──────────────────────────────────────────────────────────────
   const togglePlayPause = () => {
     const next = !playing;
@@ -502,37 +632,80 @@ const StreamingScreen = ({ route, navigation }) => {
         playerRef.current.pause();
       }
     }
-    if (isCreator) {
-      pushPlaybackState(next);
+    const cur = currentTimeRef.current || currentTime;
+    const dur = durationRef.current || duration;
+    if (isCreator && syncSessionRef.current && !isLocalSolo) {
+      if (next) {
+        syncSessionRef.current.pushPlay(cur, dur);
+      } else {
+        syncSessionRef.current.pushPause(cur, dur);
+      }
+    } else {
+      saveLocalProgress(streamUrl || currentRoomId, cur, dur, currentRoomId);
     }
   };
 
   const handleRewind10 = async () => {
     if (!playerRef.current) return;
+    resetControlsTimeout();
+    isSeekingRef.current = true;
+    if (seekLockTimeoutRef.current) clearTimeout(seekLockTimeoutRef.current);
+    seekLockTimeoutRef.current = setTimeout(() => {
+      isSeekingRef.current = false;
+    }, 800);
+
     try {
-      const t = (await playerRef.current.getCurrentTime()) || currentTime || 0;
+      const t = (await playerRef.current.getCurrentTime()) || currentTimeRef.current || currentTime || 0;
       const target = Math.max(0, t - 10);
       playerRef.current.seekTo(target);
+      currentTimeRef.current = target;
       setCurrentTime(target);
-      if (isCreator) debouncedPushPlaybackState(playing);
+      const dur = durationRef.current || duration;
+      if (isCreator && syncSessionRef.current && !isLocalSolo) {
+        syncSessionRef.current.pushSeek(target, playing, dur);
+      } else {
+        saveLocalProgress(streamUrl || currentRoomId, target, dur, currentRoomId);
+      }
     } catch (e) {}
   };
 
   const handleForward10 = async () => {
     if (!playerRef.current) return;
+    resetControlsTimeout();
+    isSeekingRef.current = true;
+    if (seekLockTimeoutRef.current) clearTimeout(seekLockTimeoutRef.current);
+    seekLockTimeoutRef.current = setTimeout(() => {
+      isSeekingRef.current = false;
+    }, 800);
+
     try {
-      const t = (await playerRef.current.getCurrentTime()) || currentTime || 0;
+      const t = (await playerRef.current.getCurrentTime()) || currentTimeRef.current || currentTime || 0;
       const target = t + 10;
       playerRef.current.seekTo(target);
+      currentTimeRef.current = target;
       setCurrentTime(target);
-      if (isCreator) debouncedPushPlaybackState(playing);
+      const dur = durationRef.current || duration;
+      if (isCreator && syncSessionRef.current && !isLocalSolo) {
+        syncSessionRef.current.pushSeek(target, playing, dur);
+      } else {
+        saveLocalProgress(streamUrl || currentRoomId, target, dur, currentRoomId);
+      }
     } catch (e) {}
   };
 
-  const handleGoBack = async () => {
-    if (isCreator) {
+  const savePlaybackOnExit = useCallback(async () => {
+    const cur = currentTimeRef.current;
+    const dur = durationRef.current;
+    if (typeof cur === 'number' && cur >= 1) {
+      await saveLocalProgress(streamUrl || currentRoomId, cur, dur, currentRoomId);
+    }
+  }, [streamUrl, currentRoomId]);
+
+  const handleGoBack = useCallback(async () => {
+    await savePlaybackOnExit();
+    if (isCreator && currentRoomId && !isLocalSolo) {
       try {
-        await database().ref(`rooms/${roomId}`).update({
+        await database().ref(`rooms/${currentRoomId}`).update({
           isStreaming: false,
         });
       } catch (error) {
@@ -540,11 +713,39 @@ const StreamingScreen = ({ route, navigation }) => {
       }
     }
     navigation.goBack();
-  };
+  }, [savePlaybackOnExit, isCreator, currentRoomId, isLocalSolo, navigation]);
+
+  // Guaranteed save on Android hardware back button
+  useEffect(() => {
+    const backAction = () => {
+      handleGoBack();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [handleGoBack]);
+
+  // Guaranteed save on screen unmount
+  useEffect(() => {
+    return () => {
+      savePlaybackOnExit();
+    };
+  }, [savePlaybackOnExit]);
+
+  const roomTitle = roomData?.name || initialRoomName || 'Screening Room';
+  const shortRoomId = (currentRoomId ? currentRoomId.replace('room_', '').replace('solo_', '') : 'SOLO').slice(-4);
+  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   const handleShareScreening = async () => {
     try {
-      const cleanCode = (roomId || '').replace('room_', '');
+      if (isSoloRoom || isLocalSolo) {
+        await Share.share({
+          title: `Cine-Sync: ${roomTitle}`,
+          message: `🎬 Streaming "${roomTitle}" on Cine-Sync!\n${streamUrl}\nStream anytime with 100% native cinema audio & video!`,
+        });
+        return;
+      }
+      const cleanCode = (currentRoomId || '').replace('room_', '');
       const pinText = roomData?.isPrivate && roomData?.pin ? `\nAccess PIN: ${roomData.pin}` : '';
       await Share.share({
         title: `Cine-Sync: ${roomTitle}`,
@@ -554,10 +755,6 @@ const StreamingScreen = ({ route, navigation }) => {
       console.log('Error sharing screening:', e);
     }
   };
-
-  const roomTitle = roomData?.name || initialRoomName || 'Screening Room';
-  const shortRoomId = (roomId ? roomId.replace('room_', '') : '842').slice(-4);
-  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   return (
     <View style={[styles.container, isLandscape && styles.containerLandscape]}>
@@ -600,17 +797,26 @@ const StreamingScreen = ({ route, navigation }) => {
                 </View>
               </View>
               <Text style={styles.headerSubtitleText}>
-                Live Sync Room #{shortRoomId}
+                {isSoloRoom
+                  ? (currentRoomId ? `Personal Cinema #${shortRoomId}` : 'Personal Cinema • Direct Stream')
+                  : `Live Sync Room #${shortRoomId}`}
               </Text>
             </View>
           </View>
 
           {/* Right Action Icons */}
           <View style={styles.headerRightActions}>
-            <View style={styles.liveStreamBadge}>
-              <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
-              <Text style={styles.liveStreamText}>LIVE</Text>
-            </View>
+            {isSoloRoom ? (
+              <View style={styles.soloHeaderBadge}>
+                <MaterialIcons name="person" size={11} color={colors.CYAN_ACCENT} />
+                <Text style={styles.soloHeaderBadgeText}>SOLO</Text>
+              </View>
+            ) : (
+              <View style={styles.liveStreamBadge}>
+                <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
+                <Text style={styles.liveStreamText}>LIVE</Text>
+              </View>
+            )}
 
             <TouchableOpacity
               style={styles.headerActionBtn}
@@ -636,15 +842,51 @@ const StreamingScreen = ({ route, navigation }) => {
           ref={playerRef}
           url={streamUrl}
           playing={playing}
+          initialPosition={initialPosition}
           onProgress={({ currentTime: cur, duration: dur }) => {
-            if (typeof cur === 'number') setCurrentTime(cur);
-            if (typeof dur === 'number' && dur > 0) setDuration(dur);
-          }}
-          onStateChange={({ isPlaying }) => {
-            if (typeof isPlaying === 'boolean' && isPlaying !== playing) {
-              setPlaying(isPlaying);
-              if (isCreator) debouncedPushPlaybackState(isPlaying);
+            if (typeof cur === 'number') {
+              // Dismiss initial loader immediately upon receiving progress
+              if (isInitialLoading) {
+                setIsInitialLoading(false);
+              }
+              if (typeof dur === 'number' && dur > 0) {
+                durationRef.current = dur;
+                setDuration(dur);
+              }
+
+              currentTimeRef.current = cur;
+              setCurrentTime(cur);
+              syncSessionRef.current?.checkDrift(cur, dur);
             }
+          }}
+          onStateChange={({ isPlaying: playerPlaying, isBuffering, playbackState }) => {
+            // Immediately dismiss initial loader when player is ready (playbackState === 3), playing, or finished initial buffer
+            if (isInitialLoading && (playerPlaying || isBuffering === false || playbackState === 3)) {
+              setIsInitialLoading(false);
+            }
+
+            if (typeof playerPlaying === 'boolean' && playerPlaying !== playing) {
+              // Suppress transient pause emitted during seek buffering
+              if (isSeekingRef.current && !playerPlaying && playing) {
+                return;
+              }
+              setPlaying(playerPlaying);
+              const cur = currentTimeRef.current;
+              const dur = durationRef.current;
+              if (isCreator && syncSessionRef.current) {
+                if (playerPlaying) {
+                  syncSessionRef.current.pushPlay(cur, dur);
+                } else {
+                  syncSessionRef.current.pushPause(cur, dur);
+                }
+              } else {
+                saveLocalProgress(streamUrl || roomId, cur, dur, roomId);
+              }
+            }
+          }}
+          onError={error => {
+            setIsInitialLoading(false);
+            console.warn('[StreamingScreen] Player Error:', error);
           }}
           style={StyleSheet.absoluteFill}
         />
@@ -653,7 +895,15 @@ const StreamingScreen = ({ route, navigation }) => {
         <TouchableOpacity
           style={StyleSheet.absoluteFill}
           activeOpacity={1}
-          onPress={resetControlsTimeout}
+          disabled={isInitialLoading}
+          onPress={() => {
+            if (showControls) {
+              setShowControls(false);
+              if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+            } else {
+              resetControlsTimeout();
+            }
+          }}
         />
 
         {/* Video Overlays: Host Paused */}
@@ -665,14 +915,24 @@ const StreamingScreen = ({ route, navigation }) => {
           </View>
         )}
 
-        {/* Player Controls Overlay */}
-        {showControls && (
+        {/* Player Controls Overlay (Strictly hidden when video is loading) */}
+        {!isInitialLoading && showControls && (
           <View style={styles.controlsOverlay} pointerEvents="box-none">
             {/* Top Bar inside Overlay */}
             <View style={styles.overlayTopBar}>
               <View style={styles.overlaySyncPill}>
-                <Animated.View style={[styles.syncBufferDot, { opacity: syncPulseAnim }]} />
-                <Text style={styles.overlaySyncText}>Live Synced</Text>
+                <Animated.View
+                  style={[
+                    styles.syncBufferDot,
+                    {
+                      backgroundColor: isSoloRoom ? colors.CYAN_ACCENT : colors.ACCEPT_GREEN,
+                      opacity: syncPulseAnim,
+                    },
+                  ]}
+                />
+                <Text style={styles.overlaySyncText}>
+                  {isSoloRoom ? 'Solo Cinema' : 'Live Synced'}
+                </Text>
               </View>
 
               <TouchableOpacity
@@ -740,8 +1000,26 @@ const StreamingScreen = ({ route, navigation }) => {
                   <Text style={styles.timeDivider}>/</Text>
                   <Text style={styles.timeTotalText}>{formatTime(duration)}</Text>
                   <View style={styles.syncLockBadge}>
-                    <Animated.View style={[styles.syncLockDot, { opacity: syncPulseAnim }]} />
-                    <Text style={styles.syncLockText}>Sync Locked</Text>
+                    <Animated.View
+                      style={[
+                        styles.syncLockDot,
+                        {
+                          backgroundColor: syncStateInfo.isSolo || isSoloRoom
+                            ? colors.CYAN_ACCENT
+                            : syncStateInfo.isSynced
+                            ? colors.ACCEPT_GREEN
+                            : colors.FILM_GOLD,
+                          opacity: syncPulseAnim,
+                        },
+                      ]}
+                    />
+                    <Text style={styles.syncLockText}>
+                      {syncStateInfo.isSolo || isSoloRoom
+                        ? 'Solo Mode • Progress Saved'
+                        : syncStateInfo.isSynced
+                        ? 'Sync Locked'
+                        : 'Re-syncing'}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -749,17 +1027,23 @@ const StreamingScreen = ({ route, navigation }) => {
           </View>
         )}
 
-        {/* Floating Emojis */}
-        {floatingEmojis.map(item => (
+        {/* Video Loading Overlay: Centered circular loader on login background color */}
+        {isInitialLoading && (
+          <View style={styles.videoLoaderOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color={colors.PRIMARY_COLOR} />
+          </View>
+        )}
+
+        {/* Floating Emojis (Only for multi-user watch parties) */}
+        {!isSoloRoom && floatingEmojis.map(item => (
           <FloatingEmoji key={item.id} emoji={item.emoji} />
         ))}
       </View>
 
-      {/* ── STATE SWITCHER DOCK (Interactive Mode Toggle) ── */}
-      {!isLandscape && (
+      {/* ── STATE SWITCHER DOCK (Interactive Mode Toggle: ONLY for Multi-user Watch Party) ── */}
+      {!isLandscape && !isSoloRoom && (
         <View style={styles.stateSwitcherDock}>
           <View style={styles.stateSwitcherContainer}>
-            {/* Party Live Chat Tab (Primary) */}
             <TouchableOpacity
               style={[
                 styles.switcherTabBtn,
@@ -787,7 +1071,6 @@ const StreamingScreen = ({ route, navigation }) => {
               </View>
             </TouchableOpacity>
 
-            {/* Scene Notes Tab (Secondary) */}
             <TouchableOpacity
               style={[
                 styles.switcherTabBtn,
@@ -822,10 +1105,159 @@ const StreamingScreen = ({ route, navigation }) => {
       {/* ── DYNAMIC ADAPTIVE VIEW CONTAINER ── */}
       {!isLandscape && (
         <View style={styles.adaptiveContentWrap}>
-          {/* ============================================================== */}
-          {/* VIEW A: SOLO VIEWER MODE (Personal Notes / Storyboard)        */}
-          {/* ============================================================== */}
-          {activeMode === 'notes' ? (
+          {isSoloRoom ? (
+            /* ============================================================== */
+            /* SOLO CINEMA DASHBOARD (Distraction-Free Personal Theater)     */
+            /* ============================================================== */
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ flex: 1 }}
+            >
+              {/* Solo Cinema Overview Hub */}
+              <View style={styles.soloOverviewCard}>
+                <View style={styles.soloOverviewLeft}>
+                  <View style={styles.soloCinemaIconBox}>
+                    <MaterialIcons name="theaters" size={20} color={colors.CYAN_ACCENT} />
+                  </View>
+                  <View style={styles.soloOverviewTextCol}>
+                    <View style={styles.soloOverviewTitleRow}>
+                      <Text style={styles.soloOverviewTitle} numberOfLines={1}>
+                        {roomTitle}
+                      </Text>
+                      <View style={styles.soloCinemaTag}>
+                        <Text style={styles.soloCinemaTagText}>SOLO</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.soloOverviewSubtitle}>
+                      Personal Cinema • Progress Auto-Saved
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.quickBookmarkBtn}
+                  onPress={() => addNote(`Saved milestone @ ${formatTime(currentTime)}`)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="bookmark-add" size={15} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.quickBookmarkText}>
+                    + Bookmark @ {formatTime(currentTime)}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Storyboard Header */}
+              <View style={styles.storyboardHeaderRow}>
+                <View style={styles.storyboardTitleGroup}>
+                  <MaterialIcons name="bookmarks" size={16} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.storyboardTitle}>My Cinema Storyboard</Text>
+                  <View style={styles.privateVaultBadge}>
+                    <Text style={styles.privateVaultText}>Private Vault</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.storyboardCountText}>
+                  {notes.length} {notes.length === 1 ? 'bookmark' : 'bookmarks'}
+                </Text>
+              </View>
+
+              {/* Bookmarks List */}
+              <FlatList
+                data={notes}
+                keyExtractor={item => item.id}
+                contentContainerStyle={styles.notesListContainer}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={
+                  <View style={styles.emptyNotesBox}>
+                    <View style={styles.emptyNotesIconCircle}>
+                      <MaterialIcons name="bookmark-border" size={36} color={colors.CYAN_ACCENT} />
+                    </View>
+                    <Text style={styles.emptyNotesTitle}>Personal Cinema Storyboard</Text>
+                    <Text style={styles.emptyNotesSubtitle}>
+                      Save key moments & notes linked to timestamps while watching:
+                      {'\n\n'}• Tap "+ Bookmark" above to mark this exact second.
+                      {'\n'}• Or write a note below and tap Save.
+                      {'\n'}• Tap any saved [ ▶ MM:SS ] pill to jump straight to that moment!
+                    </Text>
+                  </View>
+                }
+                renderItem={({ item }) => (
+                  <View style={styles.noteCard}>
+                    <View style={styles.noteCardTopRow}>
+                      <View style={styles.noteTimestampGroup}>
+                        <TouchableOpacity
+                          style={styles.jumpTimePill}
+                          onPress={() => handleSeekToNote(item.seconds || 0)}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons name="play-arrow" size={13} color={colors.CYAN_ACCENT} />
+                          <Text style={styles.jumpTimeText}>{formatTime(item.seconds || 0)}</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.noteActTag}>{item.tag || 'Scene Bookmark'}</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.noteDeleteBtn}
+                        onPress={() => deleteNote(item.id)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="delete-outline" size={16} color={colors.SUB_TITLE_COLOR} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <Text style={styles.noteContentText}>{item.text}</Text>
+
+                    {/* Frame Snapshot Row */}
+                    <View style={styles.frameSnapshotRow}>
+                      <MaterialIcons name="photo-camera" size={12} color={colors.ACCEPT_GREEN} />
+                      <Text style={styles.frameSnapshotText}>
+                        Timestamp: {formatTime(item.seconds || 0)} • Frame Milestone
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              />
+
+              {/* Solo Bottom Dock: Quick Frame Capture & Note Input */}
+              <View style={styles.soloBottomDock}>
+                <TouchableOpacity
+                  style={styles.cameraSnapBtn}
+                  onPress={() => addNote(`Captured frame at ${formatTime(currentTime)}`)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="photo-camera" size={20} color={colors.CYAN_ACCENT} />
+                  <View style={styles.cameraSnapDot} />
+                </TouchableOpacity>
+
+                <View style={styles.soloInputWrap}>
+                  <TextInput
+                    style={styles.soloTextInput}
+                    placeholder={`Add note at ${formatTime(currentTime)}...`}
+                    placeholderTextColor={colors.SUB_TITLE_COLOR}
+                    value={newNoteText}
+                    onChangeText={setNewNoteText}
+                    onSubmitEditing={() => addNote()}
+                  />
+                  <Text style={styles.soloInputTimestamp}>{formatTime(currentTime)}</Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.saveNoteBtn}
+                  onPress={() => addNote()}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                    style={styles.saveNoteGradient}
+                  >
+                    <MaterialIcons name="bookmark-add" size={16} color={colors.TITLE_COLOR} />
+                    <Text style={styles.saveNoteBtnText}>Save</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </KeyboardAvoidingView>
+          ) : activeMode === 'notes' ? (
+            /* PARTY MODE: Notes Tab */
             <KeyboardAvoidingView
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
               style={{ flex: 1 }}
@@ -855,7 +1287,6 @@ const StreamingScreen = ({ route, navigation }) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Notes List */}
               <FlatList
                 data={notes}
                 keyExtractor={item => item.id}
@@ -869,7 +1300,7 @@ const StreamingScreen = ({ route, navigation }) => {
                       Save your thoughts linked to timestamps while watching:
                       {'\n'}• Tap "+ Bookmark" above to mark this exact second.
                       {'\n'}• Or type any note below and tap Save.
-                      {'\n'}• Tap any saved [▶ MM:SS] pill to immediately jump the video to that moment!
+                      {'\n'}• Tap any saved [▶ MM:SS] pill to jump to that moment!
                     </Text>
                   </View>
                 }
@@ -899,7 +1330,6 @@ const StreamingScreen = ({ route, navigation }) => {
 
                     <Text style={styles.noteContentText}>{item.text}</Text>
 
-                    {/* Frame Snapshot Pill */}
                     <View style={styles.frameSnapshotRow}>
                       <MaterialIcons name="photo-camera" size={12} color={colors.ACCEPT_GREEN} />
                       <Text style={styles.frameSnapshotText}>
@@ -910,7 +1340,6 @@ const StreamingScreen = ({ route, navigation }) => {
                 )}
               />
 
-              {/* Solo Mode: Quick Frame Capture Bottom Dock */}
               <View style={styles.soloBottomDock}>
                 <TouchableOpacity
                   style={styles.cameraSnapBtn}
@@ -949,9 +1378,7 @@ const StreamingScreen = ({ route, navigation }) => {
               </View>
             </KeyboardAvoidingView>
           ) : (
-            /* ============================================================== */
-            /* VIEW B: MULTI-PARTICIPANT MODE (Social Party)                  */
-            /* ============================================================== */
+            /* PARTY MODE: Live Theater Chat Tab */
             <KeyboardAvoidingView
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
               style={{ flex: 1 }}
@@ -1059,23 +1486,29 @@ const StreamingScreen = ({ route, navigation }) => {
                 }}
               />
 
-              {/* Floating Reaction Emojis Dock */}
+              {/* Floating Reaction Emojis Dock (Vector Icons per Rule 6) */}
               <View style={styles.floatingReactionsDock}>
-                {['🔥', '🍿', '😱', '🚀', '❤️', '👏'].map(emoji => (
+                {[
+                  { id: 'fire', icon: 'local-fire-department', color: colors.LIVE_RED },
+                  { id: 'love', icon: 'favorite', color: colors.LIVE_RED },
+                  { id: 'like', icon: 'thumb-up', color: colors.PRIMARY_COLOR },
+                  { id: 'laugh', icon: 'sentiment-very-satisfied', color: colors.FILM_GOLD },
+                  { id: 'star', icon: 'auto-awesome', color: colors.CYAN_ACCENT },
+                  { id: 'party', icon: 'celebration', color: colors.PURPLE_ACCENT },
+                ].map(reaction => (
                   <TouchableOpacity
-                    key={emoji}
+                    key={reaction.id}
                     style={styles.reactionEmojiBtn}
-                    onPress={() => sendReaction(emoji)}
+                    onPress={() => sendReaction(reaction.icon)}
                     activeOpacity={0.65}
                   >
-                    <Text style={styles.reactionEmojiText}>{emoji}</Text>
+                    <MaterialIcons name={reaction.icon} size={20} color={reaction.color} />
                   </TouchableOpacity>
                 ))}
               </View>
 
               {/* Party Chat Input Bar */}
               <View style={styles.partyBottomInputBar}>
-                {/* Mic Toggle Button */}
                 <TouchableOpacity
                   style={[
                     styles.partyMicBtn,
@@ -1091,7 +1524,6 @@ const StreamingScreen = ({ route, navigation }) => {
                   />
                 </TouchableOpacity>
 
-                {/* Message Input */}
                 <TextInput
                   style={styles.partyTextInput}
                   placeholder="Say something to the room..."
@@ -1101,7 +1533,6 @@ const StreamingScreen = ({ route, navigation }) => {
                   onSubmitEditing={sendMessage}
                 />
 
-                {/* Send Button */}
                 <TouchableOpacity
                   style={styles.partySendBtn}
                   onPress={sendMessage}
@@ -1229,6 +1660,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  soloHeaderBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+  },
+  soloHeaderBadgeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   headerActionBtn: {
     width: 34,
     height: 34,
@@ -1295,6 +1743,14 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  videoLoaderOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.BACKGROUND_COLOR,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 99,
+    elevation: 20,
   },
   creatorLeftOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1508,7 +1964,103 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // ── VIEW A: Solo Storyboard ──
+  // ── Solo Cinema & Storyboard ──
+  soloOverviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 6,
+    gap: 10,
+  },
+  soloOverviewLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  soloCinemaIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  soloOverviewTextCol: {
+    flex: 1,
+  },
+  soloOverviewTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  soloOverviewTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  soloCinemaTag: {
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  soloCinemaTagText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  soloOverviewSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  storyboardCountText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  emptyNotesIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 16,
+    backgroundColor: 'rgba(6, 182, 212, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  floatingReactionBubble: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.CYAN_ACCENT,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+  },
   storyboardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1925,9 +2477,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.BORDER_SUBTLE,
-  },
-  reactionEmojiText: {
-    fontSize: 18,
   },
 
   // Party Bottom Input Bar

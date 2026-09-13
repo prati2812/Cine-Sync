@@ -61,3 +61,13 @@ Whenever generating, modifying, or refactoring code for this React Native codeba
 ## 🎭 6. Vector Icons Exclusively (NO EMOJIS in UI)
 - **MANDATORY**: Always use professional vector icon sets (`MaterialIcons`, `Ionicons`, etc.) for buttons, chips, genre badges, cards, indicators, and actions.
 - **NO RAW UNICODE EMOJIS**: Do not use raw emojis (e.g., 🍿, ⚡, 🎵, ⚽, 🎮, 🎲, 🚀) as icons or decorations in UI elements. Use crisp, scalable vector icons with appropriate theme color tokens.
+
+---
+
+## 🧪 7. Testing Protocols: Manual User Testing Scenarios
+- **MANDATORY**: The user will always test the app manually on their physical device or active emulator.
+- **STRUCTURED TEST SCENARIOS REQUIRED**: Whenever completing any feature, fix, or workflow, always provide clear, step-by-step manual testing scenarios detailing:
+  1. Preconditions & Setup (e.g., Solo Room vs Multi-user Party).
+  2. Action Steps (e.g., Play, Seek, Exit Room, Re-enter).
+  3. Exact Expected Results & Visual Indicators (e.g., Badge colors, time counters, loader transitions).
+  4. Edge Cases to verify.

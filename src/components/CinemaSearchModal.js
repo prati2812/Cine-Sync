@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   StatusBar,
   Dimensions,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -21,8 +22,22 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import colors from '../theme/Colors';
 import { database } from '../config/firebase';
 import { getYouTubeThumbnailDetails } from '../functions';
+import {
+  searchCinemaMedia,
+  fetchMediaSuggestions,
+} from '../services/video/CinemaMediaSearchService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const QUICK_MEDIA_CHIPS = [
+  { label: 'Trailers', icon: 'local-movies', query: 'Official Movie Trailers 4K' },
+  { label: 'Sci-Fi', icon: 'rocket-launch', query: 'Sci-Fi Cinema 4K' },
+  { label: 'Anime', icon: 'flash-on', query: 'Anime Animation 4K' },
+  { label: 'Music', icon: 'music-note', query: 'Music Video Official 4K' },
+  { label: 'Concerts', icon: 'headset', query: 'Live Music Concert 4K' },
+  { label: 'Documentary', icon: 'movie-filter', query: 'Documentary 4K' },
+  { label: 'Gaming', icon: 'sports-esports', query: 'Gaming Cinema 4K' },
+];
 
 const QUICK_GENRES = [
   { label: 'Movies', icon: 'local-movies', query: 'Movies' },
@@ -32,14 +47,35 @@ const QUICK_GENRES = [
   { label: 'Gaming', icon: 'sports-esports', query: 'Gaming' },
 ];
 
-const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, currentUserEmail }) => {
+const CinemaSearchModal = ({
+  visible,
+  onClose,
+  rooms = [],
+  onSelectRoom,
+  onSelectSoloMedia,
+  currentUserEmail,
+}) => {
   const insets = useSafeAreaInsets();
+
+  // Top Switcher: 'media' (Solo Cinema) vs 'parties' (Watch Parties)
+  const [searchTab, setSearchTab] = useState('media');
+
+  // Input states
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  // Watch Parties states
   const [selectedFilter, setSelectedFilter] = useState('all'); // 'all', 'live', 'scheduled', 'my'
   const [selectedGenre, setSelectedGenre] = useState(null);
   const [serverResults, setServerResults] = useState([]);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
+
+  // Cinema Media (Solo) states
+  const [mediaResults, setMediaResults] = useState([]);
+  const [mediaSuggestions, setMediaSuggestions] = useState([]);
+  const [isSearchingMedia, setIsSearchingMedia] = useState(false);
+  const [hasSearchedMedia, setHasSearchedMedia] = useState(false);
+  const [selectedMediaChip, setSelectedMediaChip] = useState(null);
 
   const inputRef = useRef(null);
 
@@ -57,12 +93,13 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedQuery(query);
-    }, 150);
+    }, 180);
     return () => clearTimeout(handler);
   }, [query]);
 
-  // Scalable server-side indexed query on nameLower for 20M / 5M DAU scale
+  // Scalable server-side indexed query on nameLower for Watch Parties
   useEffect(() => {
+    if (searchTab !== 'parties') return;
     const q = debouncedQuery.trim().toLowerCase();
     if (!q || q.length < 2) {
       setServerResults([]);
@@ -99,7 +136,66 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
     return () => {
       isMounted = false;
     };
-  }, [debouncedQuery]);
+  }, [debouncedQuery, searchTab]);
+
+  // Keyless on-device Cinema Media search for Solo Stream (Zero Database Writes)
+  useEffect(() => {
+    if (searchTab !== 'media') return;
+    const q = debouncedQuery.trim();
+    if (!q || q.length < 2) {
+      setMediaResults([]);
+      setIsSearchingMedia(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsSearchingMedia(true);
+    setHasSearchedMedia(true);
+
+    searchCinemaMedia(q)
+      .then(items => {
+        if (isMounted) setMediaResults(items || []);
+      })
+      .catch(err => {
+        console.warn('Media search error:', err);
+        if (isMounted) setMediaResults([]);
+      })
+      .finally(() => {
+        if (isMounted) setIsSearchingMedia(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [debouncedQuery, searchTab]);
+
+  // Autocomplete Suggestions for Media
+  useEffect(() => {
+    if (searchTab !== 'media') {
+      setMediaSuggestions([]);
+      return;
+    }
+    const q = query.trim();
+    if (!q || q.length < 2) {
+      setMediaSuggestions([]);
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      try {
+        const list = await fetchMediaSuggestions(q);
+        if (isMounted) setMediaSuggestions((list || []).slice(0, 5));
+      } catch (err) {
+        if (isMounted) setMediaSuggestions([]);
+      }
+    }, 200);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [query, searchTab]);
 
   // Open/close animation
   useEffect(() => {
@@ -107,8 +203,12 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
       setQuery('');
       setDebouncedQuery('');
       setServerResults([]);
+      setMediaResults([]);
+      setMediaSuggestions([]);
       setSelectedFilter('all');
       setSelectedGenre(null);
+      setSelectedMediaChip(null);
+      setHasSearchedMedia(false);
 
       Animated.parallel([
         Animated.timing(animOpacity, {
@@ -154,8 +254,8 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
     return Array.from(map.values());
   }, [rooms, serverResults]);
 
-  // Search & Filter Results
-  const searchResults = useMemo(() => {
+  // Search & Filter Results for Watch Parties
+  const partyResults = useMemo(() => {
     if (!combinedRooms || combinedRooms.length === 0) return [];
 
     let list = [...combinedRooms];
@@ -200,11 +300,42 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
     return combinedRooms.filter(r => r.isScheduled || r.status === 'scheduled').length;
   }, [combinedRooms]);
 
-  const handleSelectRoom = (room) => {
+  // Handlers
+  const handleSelectRoom = room => {
     onClose();
     if (onSelectRoom) {
       onSelectRoom(room);
     }
+  };
+
+  const handleSelectSoloMedia = mediaItem => {
+    onClose();
+    if (onSelectSoloMedia) {
+      onSelectSoloMedia(mediaItem);
+    }
+  };
+
+  const handleMediaChipPress = chip => {
+    setSelectedMediaChip(chip.label);
+    setQuery(chip.label);
+    setMediaSuggestions([]);
+    setIsSearchingMedia(true);
+    setHasSearchedMedia(true);
+    searchCinemaMedia(chip.query)
+      .then(items => setMediaResults(items || []))
+      .catch(() => setMediaResults([]))
+      .finally(() => setIsSearchingMedia(false));
+  };
+
+  const handleSelectSuggestion = text => {
+    setQuery(text);
+    setMediaSuggestions([]);
+    setIsSearchingMedia(true);
+    setHasSearchedMedia(true);
+    searchCinemaMedia(text)
+      .then(items => setMediaResults(items || []))
+      .catch(() => setMediaResults([]))
+      .finally(() => setIsSearchingMedia(false));
   };
 
   if (!visible) return null;
@@ -239,11 +370,19 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
           {/* ── TOP SEARCH INPUT ROW ── */}
           <View style={styles.searchHeaderBar}>
             <View style={styles.searchBox}>
-              <MaterialIcons name="search" size={22} color={colors.PRIMARY_COLOR} />
+              <MaterialIcons
+                name="search"
+                size={22}
+                color={searchTab === 'media' ? colors.CYAN_ACCENT : colors.PRIMARY_COLOR}
+              />
               <TextInput
                 ref={inputRef}
                 style={styles.searchInput}
-                placeholder="Search movies, rooms, hosts, genres..."
+                placeholder={
+                  searchTab === 'media'
+                    ? 'Search movies, trailers, cinema media...'
+                    : 'Search watch parties, screening rooms, hosts...'
+                }
                 placeholderTextColor={colors.MUTED_COLOR}
                 value={query}
                 onChangeText={setQuery}
@@ -253,7 +392,12 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
               />
               {query.length > 0 && (
                 <TouchableOpacity
-                  onPress={() => setQuery('')}
+                  onPress={() => {
+                    setQuery('');
+                    setMediaSuggestions([]);
+                    setMediaResults([]);
+                    setSelectedMediaChip(null);
+                  }}
                   activeOpacity={0.7}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
@@ -271,267 +415,505 @@ const CinemaSearchModal = ({ visible, onClose, rooms = [], onSelectRoom, current
             </TouchableOpacity>
           </View>
 
-          {/* ── QUICK STATUS PILLS ── */}
-          <View style={styles.statusPillsRow}>
+          {/* ── TOP MODE SEGMENT SWITCHER ── */}
+          <View style={styles.tabSegmentContainer}>
             <TouchableOpacity
               style={[
-                styles.statusPill,
-                selectedFilter === 'all' && styles.statusPillActive,
+                styles.tabSegmentBtn,
+                searchTab === 'media' && styles.tabSegmentBtnActive,
               ]}
-              onPress={() => setSelectedFilter('all')}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.statusPillText,
-                  selectedFilter === 'all' && styles.statusPillTextActive,
-                ]}
-              >
-                All ({rooms.length})
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.statusPill,
-                selectedFilter === 'live' && styles.statusPillActiveLive,
-              ]}
-              onPress={() => setSelectedFilter(selectedFilter === 'live' ? 'all' : 'live')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.liveDot} />
-              <Text
-                style={[
-                  styles.statusPillText,
-                  selectedFilter === 'live' && styles.statusPillTextActiveLive,
-                ]}
-              >
-                Live Sync ({liveCount})
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.statusPill,
-                selectedFilter === 'scheduled' && styles.statusPillActiveGold,
-              ]}
-              onPress={() => setSelectedFilter(selectedFilter === 'scheduled' ? 'all' : 'scheduled')}
+              onPress={() => {
+                setSearchTab('media');
+                setQuery('');
+              }}
               activeOpacity={0.8}
             >
               <MaterialIcons
-                name="event"
-                size={13}
-                color={selectedFilter === 'scheduled' ? colors.FILM_GOLD : colors.SUB_TITLE_COLOR}
+                name="movie-filter"
+                size={16}
+                color={searchTab === 'media' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
               />
               <Text
                 style={[
-                  styles.statusPillText,
-                  selectedFilter === 'scheduled' && styles.statusPillTextActiveGold,
+                  styles.tabSegmentText,
+                  searchTab === 'media' && styles.tabSegmentTextActive,
                 ]}
               >
-                Premieres ({scheduledCount})
+                Cinema Media (Solo)
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[
-                styles.statusPill,
-                selectedFilter === 'my' && styles.statusPillActive,
+                styles.tabSegmentBtn,
+                searchTab === 'parties' && styles.tabSegmentBtnActive,
               ]}
-              onPress={() => setSelectedFilter(selectedFilter === 'my' ? 'all' : 'my')}
+              onPress={() => {
+                setSearchTab('parties');
+                setQuery('');
+              }}
               activeOpacity={0.8}
             >
+              <MaterialIcons
+                name="groups"
+                size={17}
+                color={searchTab === 'parties' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
+              />
               <Text
                 style={[
-                  styles.statusPillText,
-                  selectedFilter === 'my' && styles.statusPillTextActive,
+                  styles.tabSegmentText,
+                  searchTab === 'parties' && styles.tabSegmentTextActive,
                 ]}
               >
-                My Rooms
+                Watch Parties ({rooms.length})
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* ── ATMOSPHERE GENRE CHIPS ── */}
-          <View style={styles.genreScrollWrap}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.genreScroll}
-            >
-              {QUICK_GENRES.map((g) => {
-                const isGenreSelected = selectedGenre === g.query;
-                return (
-                  <TouchableOpacity
-                    key={g.query}
-                    style={[
-                      styles.genreChip,
-                      isGenreSelected && styles.genreChipActive,
-                    ]}
-                    onPress={() => setSelectedGenre(isGenreSelected ? null : g.query)}
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons
-                      name={g.icon}
-                      size={14}
-                      color={isGenreSelected ? colors.TITLE_COLOR : colors.CYAN_ACCENT}
-                    />
-                    <Text
-                      style={[
-                        styles.genreLabel,
-                        isGenreSelected && styles.genreLabelActive,
-                      ]}
-                    >
-                      {g.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* ── RESULTS LIST OR EMPTY STATE ── */}
-          <ScrollView
-            style={styles.resultsScroll}
-            contentContainerStyle={styles.resultsContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {searchResults.length > 0 ? (
-              <>
-                <View style={styles.resultsHeaderRow}>
-                  <Text style={styles.resultsHeading}>
-                    {query.trim() || selectedGenre || selectedFilter !== 'all'
-                      ? 'MATCHING SCREENINGS'
-                      : 'ALL SCREENING ROOMS'}
-                  </Text>
-                  <Text style={styles.resultsCountBadge}>
-                    {searchResults.length} {searchResults.length === 1 ? 'room' : 'rooms'}
-                  </Text>
-                </View>
-
-                {searchResults.map((room) => {
-                  const isLive = room.isStreaming || room.status === 'active';
-                  const thumb =
-                    getYouTubeThumbnailDetails(room.streamUrl)?.mqUrl ||
-                    room.thumbnail ||
-                    '🎬';
-                  const participantCount =
-                    (room.participants?.length ||
-                      (room.participants ? Object.keys(room.participants).length : 0)) + 1;
-                  const hostName =
-                    room.creator?.userName ||
-                    room.creator?.name ||
-                    (room.creator?.email ? room.creator.email.split('@')[0] : 'Host');
-
-                  return (
+          {/* ════════════════════════════════════════════════════════════
+              MODE A: CINEMA MEDIA (SOLO STREAM - ZERO DB COST)
+          ════════════════════════════════════════════════════════════ */}
+          {searchTab === 'media' && (
+            <>
+              {/* Autocomplete Suggestions */}
+              {mediaSuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  {mediaSuggestions.map((item, idx) => (
                     <TouchableOpacity
-                      key={room.roomId}
-                      style={styles.roomResultCard}
-                      onPress={() => handleSelectRoom(room)}
-                      activeOpacity={0.8}
+                      key={`${item}-${idx}`}
+                      style={styles.suggestionRow}
+                      onPress={() => handleSelectSuggestion(item)}
+                      activeOpacity={0.75}
                     >
-                      {/* Thumbnail / Poster Box */}
-                      <View style={styles.roomThumbBox}>
-                        {thumb && typeof thumb === 'string' && thumb.startsWith('http') ? (
-                          <Image
-                            source={{ uri: thumb }}
-                            style={StyleSheet.absoluteFillObject}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <MaterialIcons
-                            name={
-                              room.genre === 'Anime'
-                                ? 'flash-on'
-                                : room.genre === 'Music'
-                                ? 'music-note'
-                                : room.genre === 'Gaming'
-                                ? 'sports-esports'
-                                : room.genre === 'Sports'
-                                ? 'sports-soccer'
-                                : 'local-movies'
-                            }
-                            size={22}
-                            color={colors.CYAN_ACCENT}
-                          />
-                        )}
-                        {isLive && (
-                          <View style={styles.thumbLiveBadge}>
-                            <View style={styles.thumbLiveDot} />
-                            <Text style={styles.thumbLiveText}>LIVE</Text>
-                          </View>
-                        )}
-                      </View>
-
-                      {/* Info Col */}
-                      <View style={styles.roomInfoCol}>
-                        <View style={styles.roomTitleRow}>
-                          <Text style={styles.roomTitleText} numberOfLines={1}>
-                            {room.name || 'Untitled Party'}
-                          </Text>
-                          {room.isPrivate && (
-                            <MaterialIcons name="lock" size={13} color={colors.FILM_GOLD} />
-                          )}
-                        </View>
-
-                        <Text style={styles.roomHostText} numberOfLines={1}>
-                          Host: <Text style={styles.roomHostName}>{hostName}</Text>
-                        </Text>
-
-                        <View style={styles.roomMetaTagsRow}>
-                          <View style={styles.roomGenrePill}>
-                            <Text style={styles.roomGenrePillText}>
-                              {room.genre || 'Movies'}
-                            </Text>
-                          </View>
-                          <View style={styles.roomAudiencePill}>
-                            <Ionicons name="people" size={11} color={colors.SUB_TITLE_COLOR} />
-                            <Text style={styles.roomAudienceText}>{participantCount}</Text>
-                          </View>
-                        </View>
-                      </View>
-
-                      {/* Join Action Arrow */}
-                      <View style={styles.roomJoinActionBtn}>
-                        <MaterialIcons
-                          name="arrow-forward-ios"
-                          size={13}
-                          color={colors.CYAN_ACCENT}
-                        />
-                      </View>
+                      <MaterialIcons name="north-west" size={14} color={colors.CYAN_ACCENT} />
+                      <Text style={styles.suggestionText} numberOfLines={1}>
+                        {item}
+                      </Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </>
-            ) : (
-              <View style={styles.emptyResultsBox}>
-                <View style={styles.emptyIconWrap}>
-                  <MaterialIcons name="search-off" size={32} color={colors.FILM_GOLD} />
+                  ))}
                 </View>
-                <Text style={styles.emptyHeading}>No Screenings Found</Text>
-                <Text style={styles.emptySubheading}>
-                  {query
-                    ? `No rooms matched "${query}". Try another title or host.`
-                    : 'No rooms match the selected atmosphere filters.'}
-                </Text>
+              )}
 
-                {(query || selectedGenre || selectedFilter !== 'all') && (
-                  <TouchableOpacity
-                    style={styles.resetFiltersBtn}
-                    onPress={() => {
-                      setQuery('');
-                      setSelectedGenre(null);
-                      setSelectedFilter('all');
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.resetFiltersBtnText}>Clear All Filters</Text>
-                  </TouchableOpacity>
-                )}
+              {/* Quick Explore Chips */}
+              <View style={styles.genreScrollWrap}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.genreScroll}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {QUICK_MEDIA_CHIPS.map(chip => {
+                    const isSelected = selectedMediaChip === chip.label;
+                    return (
+                      <TouchableOpacity
+                        key={chip.label}
+                        style={[styles.genreChip, isSelected && styles.genreChipActive]}
+                        onPress={() => handleMediaChipPress(chip)}
+                        activeOpacity={0.8}
+                      >
+                        <MaterialIcons
+                          name={chip.icon}
+                          size={14}
+                          color={isSelected ? colors.TITLE_COLOR : colors.CYAN_ACCENT}
+                        />
+                        <Text
+                          style={[styles.genreLabel, isSelected && styles.genreLabelActive]}
+                        >
+                          {chip.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
               </View>
-            )}
-          </ScrollView>
+
+              {/* Media Content Scroll */}
+              {isSearchingMedia ? (
+                <View style={styles.centerLoadingState}>
+                  <ActivityIndicator size="large" color={colors.PRIMARY_COLOR} />
+                  <Text style={styles.loadingStateText}>Searching Cinema Media...</Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.resultsScroll}
+                  contentContainerStyle={styles.resultsContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {mediaResults.length > 0 ? (
+                    <>
+                      <View style={styles.resultsHeaderRow}>
+                        <View style={styles.resultsHeaderLeft}>
+                          <MaterialIcons name="theaters" size={15} color={colors.CYAN_ACCENT} />
+                          <Text style={styles.resultsHeading}>CINEMA MEDIA RESULTS</Text>
+                        </View>
+                        <Text style={styles.resultsCountBadge}>
+                          {mediaResults.length} available
+                        </Text>
+                      </View>
+
+                      {mediaResults.map(item => (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={styles.mediaCard}
+                          onPress={() => handleSelectSoloMedia(item)}
+                          activeOpacity={0.82}
+                        >
+                          {/* 16:9 Squircle Thumbnail */}
+                          <View style={styles.mediaThumbBox}>
+                            {item.thumbnail ? (
+                              <Image
+                                source={{ uri: item.thumbnail }}
+                                style={styles.mediaThumbImg}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
+                            )}
+                            <View style={styles.mediaQualityTag}>
+                              <Text style={styles.mediaQualityTagText}>CINEMA HD</Text>
+                            </View>
+                            {item.duration ? (
+                              <View style={styles.mediaDurationBadge}>
+                                <Text style={styles.mediaDurationText}>{item.duration}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+
+                          {/* Info Column */}
+                          <View style={styles.mediaInfoCol}>
+                            <Text style={styles.mediaTitleText} numberOfLines={2}>
+                              {item.title}
+                            </Text>
+
+                            <View style={styles.mediaMetaRow}>
+                              <MaterialIcons name="verified" size={12} color={colors.CYAN_ACCENT} />
+                              <Text style={styles.mediaChannelText} numberOfLines={1}>
+                                {item.channelName}
+                              </Text>
+                            </View>
+
+                            <View style={styles.mediaFooterRow}>
+                              {item.views ? (
+                                <Text style={styles.mediaViewsText} numberOfLines={1}>
+                                  {item.views}
+                                </Text>
+                              ) : null}
+
+                              {/* Watch Now Button */}
+                              <View style={styles.watchNowActionBtn}>
+                                <MaterialIcons name="play-arrow" size={13} color="#FFF" />
+                                <Text style={styles.watchNowActionText}>Watch Now</Text>
+                              </View>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </>
+                  ) : hasSearchedMedia ? (
+                    <View style={styles.emptyResultsBox}>
+                      <View style={styles.emptyIconWrap}>
+                        <MaterialIcons name="search-off" size={32} color={colors.FILM_GOLD} />
+                      </View>
+                      <Text style={styles.emptyHeading}>No Cinema Media Found</Text>
+                      <Text style={styles.emptySubheading}>
+                        Try searching with different keywords, movie titles, or explore trending categories.
+                      </Text>
+                    </View>
+                  ) : (
+                    /* Initial Discover State */
+                    <View style={styles.initialMediaBox}>
+                      <View style={styles.initialMediaIconCircle}>
+                        <MaterialIcons name="movie-filter" size={36} color={colors.CYAN_ACCENT} />
+                      </View>
+                      <Text style={styles.initialMediaTitle}>Cinema Media Search</Text>
+                      <Text style={styles.initialMediaSub}>
+                        Search across movies, official trailers, and streaming media to watch instantly with zero delay.
+                      </Text>
+                      <View style={styles.initialMediaTagsRow}>
+                        <View style={styles.mediaTagPill}>
+                          <MaterialIcons name="hd" size={13} color={colors.PRIMARY_COLOR} />
+                          <Text style={styles.mediaTagText}>Full HD / 4K</Text>
+                        </View>
+                        <View style={styles.mediaTagPill}>
+                          <MaterialIcons name="speed" size={13} color={colors.CYAN_ACCENT} />
+                          <Text style={styles.mediaTagText}>Zero Lag</Text>
+                        </View>
+                        <View style={styles.mediaTagPill}>
+                          <MaterialIcons name="play-circle" size={13} color={colors.ACCEPT_GREEN} />
+                          <Text style={styles.mediaTagText}>Instant Solo Play</Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+                </ScrollView>
+              )}
+            </>
+          )}
+
+          {/* ════════════════════════════════════════════════════════════
+              MODE B: WATCH PARTIES (MULTIPLAYER LIVE SYNC ROOMS)
+          ════════════════════════════════════════════════════════════ */}
+          {searchTab === 'parties' && (
+            <>
+              {/* Quick Status Pills */}
+              <View style={styles.statusPillsRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.statusPill,
+                    selectedFilter === 'all' && styles.statusPillActive,
+                  ]}
+                  onPress={() => setSelectedFilter('all')}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      selectedFilter === 'all' && styles.statusPillTextActive,
+                    ]}
+                  >
+                    All ({rooms.length})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.statusPill,
+                    selectedFilter === 'live' && styles.statusPillActiveLive,
+                  ]}
+                  onPress={() => setSelectedFilter(selectedFilter === 'live' ? 'all' : 'live')}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.liveDot} />
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      selectedFilter === 'live' && styles.statusPillTextActiveLive,
+                    ]}
+                  >
+                    Live Sync ({liveCount})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.statusPill,
+                    selectedFilter === 'scheduled' && styles.statusPillActiveGold,
+                  ]}
+                  onPress={() => setSelectedFilter(selectedFilter === 'scheduled' ? 'all' : 'scheduled')}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons
+                    name="event"
+                    size={13}
+                    color={selectedFilter === 'scheduled' ? colors.FILM_GOLD : colors.SUB_TITLE_COLOR}
+                  />
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      selectedFilter === 'scheduled' && styles.statusPillTextActiveGold,
+                    ]}
+                  >
+                    Premieres ({scheduledCount})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.statusPill,
+                    selectedFilter === 'my' && styles.statusPillActive,
+                  ]}
+                  onPress={() => setSelectedFilter(selectedFilter === 'my' ? 'all' : 'my')}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      selectedFilter === 'my' && styles.statusPillTextActive,
+                    ]}
+                  >
+                    My Rooms
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Genre Chips */}
+              <View style={styles.genreScrollWrap}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.genreScroll}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {QUICK_GENRES.map(g => {
+                    const isGenreSelected = selectedGenre === g.query;
+                    return (
+                      <TouchableOpacity
+                        key={g.query}
+                        style={[styles.genreChip, isGenreSelected && styles.genreChipActive]}
+                        onPress={() => setSelectedGenre(isGenreSelected ? null : g.query)}
+                        activeOpacity={0.8}
+                      >
+                        <MaterialIcons
+                          name={g.icon}
+                          size={14}
+                          color={isGenreSelected ? colors.TITLE_COLOR : colors.CYAN_ACCENT}
+                        />
+                        <Text
+                          style={[styles.genreLabel, isGenreSelected && styles.genreLabelActive]}
+                        >
+                          {g.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Parties Results Scroll */}
+              <ScrollView
+                style={styles.resultsScroll}
+                contentContainerStyle={styles.resultsContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                {partyResults.length > 0 ? (
+                  <>
+                    <View style={styles.resultsHeaderRow}>
+                      <Text style={styles.resultsHeading}>
+                        {query.trim() || selectedGenre || selectedFilter !== 'all'
+                          ? 'MATCHING SCREENINGS'
+                          : 'ALL SCREENING ROOMS'}
+                      </Text>
+                      <Text style={styles.resultsCountBadge}>
+                        {partyResults.length} {partyResults.length === 1 ? 'room' : 'rooms'}
+                      </Text>
+                    </View>
+
+                    {partyResults.map(room => {
+                      const isLive = room.isStreaming || room.status === 'active';
+                      const thumb =
+                        getYouTubeThumbnailDetails(room.streamUrl)?.mqUrl ||
+                        room.thumbnail ||
+                        null;
+                      const participantCount =
+                        (room.participants?.length ||
+                          (room.participants ? Object.keys(room.participants).length : 0)) + 1;
+                      const hostName =
+                        room.creator?.userName ||
+                        room.creator?.name ||
+                        (room.creator?.email ? room.creator.email.split('@')[0] : 'Host');
+
+                      return (
+                        <TouchableOpacity
+                          key={room.roomId}
+                          style={styles.roomResultCard}
+                          onPress={() => handleSelectRoom(room)}
+                          activeOpacity={0.8}
+                        >
+                          {/* Thumbnail / Poster Box */}
+                          <View style={styles.roomThumbBox}>
+                            {thumb && typeof thumb === 'string' && thumb.startsWith('http') ? (
+                              <Image
+                                source={{ uri: thumb }}
+                                style={StyleSheet.absoluteFillObject}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <MaterialIcons
+                                name={
+                                  room.genre === 'Anime'
+                                    ? 'flash-on'
+                                    : room.genre === 'Music'
+                                    ? 'music-note'
+                                    : room.genre === 'Gaming'
+                                    ? 'sports-esports'
+                                    : room.genre === 'Sports'
+                                    ? 'sports-soccer'
+                                    : 'local-movies'
+                                }
+                                size={22}
+                                color={colors.CYAN_ACCENT}
+                              />
+                            )}
+                            {isLive && (
+                              <View style={styles.thumbLiveBadge}>
+                                <View style={styles.thumbLiveDot} />
+                                <Text style={styles.thumbLiveText}>LIVE</Text>
+                              </View>
+                            )}
+                          </View>
+
+                          {/* Info Col */}
+                          <View style={styles.roomInfoCol}>
+                            <View style={styles.roomTitleRow}>
+                              <Text style={styles.roomTitleText} numberOfLines={1}>
+                                {room.name || 'Untitled Party'}
+                              </Text>
+                              {room.isPrivate && (
+                                <MaterialIcons name="lock" size={13} color={colors.FILM_GOLD} />
+                              )}
+                            </View>
+
+                            <Text style={styles.roomHostText} numberOfLines={1}>
+                              Host: <Text style={styles.roomHostName}>{hostName}</Text>
+                            </Text>
+
+                            <View style={styles.roomMetaTagsRow}>
+                              <View style={styles.roomGenrePill}>
+                                <Text style={styles.roomGenrePillText}>
+                                  {room.genre || 'Movies'}
+                                </Text>
+                              </View>
+                              <View style={styles.roomAudiencePill}>
+                                <Ionicons name="people" size={11} color={colors.SUB_TITLE_COLOR} />
+                                <Text style={styles.roomAudienceText}>{participantCount}</Text>
+                              </View>
+                            </View>
+                          </View>
+
+                          {/* Join Action Arrow */}
+                          <View style={styles.roomJoinActionBtn}>
+                            <MaterialIcons
+                              name="arrow-forward-ios"
+                              size={13}
+                              color={colors.CYAN_ACCENT}
+                            />
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <View style={styles.emptyResultsBox}>
+                    <View style={styles.emptyIconWrap}>
+                      <MaterialIcons name="search-off" size={32} color={colors.FILM_GOLD} />
+                    </View>
+                    <Text style={styles.emptyHeading}>No Screenings Found</Text>
+                    <Text style={styles.emptySubheading}>
+                      {query
+                        ? `No rooms matched "${query}". Try another title or host.`
+                        : 'No rooms match the selected atmosphere filters.'}
+                    </Text>
+
+                    {(query || selectedGenre || selectedFilter !== 'all') && (
+                      <TouchableOpacity
+                        style={styles.resetFiltersBtn}
+                        onPress={() => {
+                          setQuery('');
+                          setSelectedGenre(null);
+                          setSelectedFilter('all');
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.resetFiltersBtnText}>Reset Atmosphere Filters</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </ScrollView>
+            </>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -548,35 +930,36 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 380,
-    zIndex: 0,
+    height: 260,
   },
   contentContainer: {
     flex: 1,
   },
+
+  // Search Header
   searchHeaderBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    gap: 10,
+    paddingBottom: 8,
+    gap: 12,
   },
   searchBox: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.SURFACE_ELEVATED,
-    borderRadius: 14,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
     paddingHorizontal: 12,
     height: 46,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
     gap: 8,
   },
   searchInput: {
     flex: 1,
     color: colors.TITLE_COLOR,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
     paddingVertical: 0,
   },
@@ -585,38 +968,271 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   closeBtnText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 14,
+    color: colors.PRIMARY_COLOR,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  // Mode Segment Switcher
+  tabSegmentContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 12,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
+    gap: 4,
+  },
+  tabSegmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 9,
+    gap: 6,
+  },
+  tabSegmentBtnActive: {
+    backgroundColor: colors.PRIMARY_COLOR,
+  },
+  tabSegmentText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  tabSegmentTextActive: {
+    color: colors.TITLE_COLOR,
     fontWeight: '700',
   },
+
+  // Media Autocomplete Suggestions
+  suggestionsContainer: {
+    backgroundColor: colors.SURFACE_COLOR,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.SURFACE_ELEVATED,
+  },
+  suggestionText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
+
+  // Media Card
+  mediaCard: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
+    padding: 10,
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  mediaThumbBox: {
+    width: 120,
+    height: 70,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: colors.BACKGROUND_COLOR,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaThumbImg: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 10,
+  },
+  mediaQualityTag: {
+    position: 'absolute',
+    top: 5,
+    left: 5,
+    backgroundColor: 'rgba(8, 8, 16, 0.78)',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderWidth: 0.5,
+    borderColor: colors.CYAN_ACCENT,
+  },
+  mediaQualityTagText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  mediaDurationBadge: {
+    position: 'absolute',
+    bottom: 5,
+    right: 5,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  mediaDurationText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  mediaInfoCol: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 3,
+  },
+  mediaTitleText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  mediaMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  mediaChannelText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+    flex: 1,
+  },
+  mediaFooterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  mediaViewsText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  watchNowActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    gap: 3,
+  },
+  watchNowActionText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // Discover State for Media
+  initialMediaBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+    gap: 10,
+  },
+  initialMediaIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 16,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  initialMediaTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  initialMediaSub: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  initialMediaTagsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  mediaTagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    gap: 5,
+  },
+  mediaTagText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+
+  // Loading state
+  centerLoadingState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  loadingStateText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+
+  // Status Pills Row (Parties)
   statusPillsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    gap: 8,
-    marginTop: 4,
     marginBottom: 8,
+    gap: 8,
   },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    backgroundColor: colors.SURFACE_COLOR,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
-    backgroundColor: colors.SURFACE_ELEVATED,
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    borderColor: colors.SURFACE_ELEVATED,
     gap: 5,
   },
   statusPillActive: {
-    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    backgroundColor: colors.SURFACE_ELEVATED,
     borderColor: colors.PRIMARY_COLOR,
   },
   statusPillActiveLive: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
     borderColor: colors.LIVE_RED,
   },
   statusPillActiveGold: {
-    backgroundColor: 'rgba(255, 180, 0, 0.15)',
+    backgroundColor: 'rgba(255, 180, 0, 0.12)',
     borderColor: colors.FILM_GOLD,
   },
   statusPillText: {
@@ -625,16 +1241,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statusPillTextActive: {
-    color: colors.PRIMARY_COLOR,
+    color: colors.TITLE_COLOR,
     fontWeight: '700',
   },
   statusPillTextActiveLive: {
     color: colors.LIVE_RED,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   statusPillTextActiveGold: {
     color: colors.FILM_GOLD,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   liveDot: {
     width: 6,
@@ -642,10 +1258,10 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.LIVE_RED,
   },
+
+  // Genre Chips
   genreScrollWrap: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
-    paddingBottom: 10,
+    marginBottom: 8,
   },
   genreScroll: {
     paddingHorizontal: 16,
@@ -654,49 +1270,52 @@ const styles = StyleSheet.create({
   genreChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
     backgroundColor: colors.SURFACE_COLOR,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-    gap: 6,
+    borderColor: colors.SURFACE_ELEVATED,
+    gap: 5,
   },
   genreChipActive: {
     backgroundColor: colors.PRIMARY_COLOR,
     borderColor: colors.PRIMARY_COLOR,
   },
-  genreIconEmoji: {
-    fontSize: 13,
-  },
   genreLabel: {
     color: colors.SUB_TITLE_COLOR,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   genreLabelActive: {
     color: colors.TITLE_COLOR,
     fontWeight: '700',
   },
+
+  // Results Scroll
   resultsScroll: {
     flex: 1,
   },
   resultsContent: {
     paddingHorizontal: 16,
-    paddingTop: 12,
     paddingBottom: 40,
   },
   resultsHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 2,
+    alignItems: 'center',
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  resultsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   resultsHeading: {
-    color: colors.MUTED_COLOR,
+    color: colors.CYAN_ACCENT,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '700',
     letterSpacing: 0.8,
   },
   resultsCountBadge: {
@@ -704,6 +1323,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+
+  // Room Card
   roomResultCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -726,9 +1347,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     position: 'relative',
     overflow: 'hidden',
-  },
-  roomThumbPlaceholderEmoji: {
-    fontSize: 22,
   },
   thumbLiveBadge: {
     position: 'absolute',
@@ -815,6 +1433,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
   },
+
+  // Empty Results
   emptyResultsBox: {
     alignItems: 'center',
     justifyContent: 'center',

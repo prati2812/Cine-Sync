@@ -48,6 +48,12 @@
         }
       }
     },
+    "rooms_playback": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
     "user_rooms": {
       "$userId": {
         ".read": "auth != null && auth.uid === $userId",

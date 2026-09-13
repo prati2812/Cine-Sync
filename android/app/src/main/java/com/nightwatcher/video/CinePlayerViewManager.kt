@@ -40,6 +40,13 @@ class CinePlayerViewManager : SimpleViewManager<CinePlayerView>() {
         view.setVolume(volume)
     }
 
+    @ReactProp(name = "initialPosition", defaultDouble = 0.0)
+    fun setInitialPosition(view: CinePlayerView, positionSeconds: Double) {
+        if (positionSeconds > 0.0) {
+            view.seekTo((positionSeconds * 1000).toLong())
+        }
+    }
+
     override fun getCommandsMap(): Map<String, Int> {
         return mapOf(
             "play" to COMMAND_PLAY,

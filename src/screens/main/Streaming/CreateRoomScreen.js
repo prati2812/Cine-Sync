@@ -28,6 +28,7 @@ import {
   getYouTubeThumbnailDetails,
   fetchMediaMetadata,
 } from '../../../functions';
+import CinemaMediaSearchModal from '../../../components/CinemaMediaSearchModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -123,6 +124,18 @@ const CreateRoomScreen = ({ navigation, route }) => {
   // Video Metadata & Title Auto-Detection
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
   const [autoFilledTitle, setAutoFilledTitle] = useState(null);
+  const [showMediaSearchModal, setShowMediaSearchModal] = useState(false);
+
+  const handleSelectMediaFromSearch = (mediaItem) => {
+    if (!mediaItem) return;
+    if (mediaItem.mediaUrl) {
+      setStreamUrl(mediaItem.mediaUrl);
+    }
+    if (mediaItem.title) {
+      setRoomName(mediaItem.title.slice(0, 50));
+      setAutoFilledTitle(mediaItem.title.slice(0, 50));
+    }
+  };
 
   // Connected Friends for Direct Member Invites
   const [friendsList, setFriendsList] = useState([]);
@@ -434,9 +447,45 @@ const CreateRoomScreen = ({ navigation, route }) => {
     setInviteEmails(inviteEmails.filter(e => e !== emailToRemove));
   };
 
+  const handleWatchSoloNow = () => {
+    if (!roomName.trim() || !streamUrl.trim()) {
+      Alert.alert('Required Fields', 'Please enter a Screening Title and Stream Link.');
+      return;
+    }
+    navigation.replace('Streaming', {
+      roomId: null,
+      isLocalSolo: true,
+      roomName: roomName.trim(),
+      streamUrl: streamUrl.trim(),
+      thumbnail:
+        previewUri ||
+        getYouTubeThumbnail(streamUrl.trim()) ||
+        null,
+    });
+  };
+
   const createRoom = async () => {
     if (!roomName.trim() || !streamUrl.trim()) {
       Alert.alert('Required Fields', 'Please enter a Screening Title and Stream Link.');
+      return;
+    }
+
+    // Strict Watch Party Guard: Disallow creating solo rooms in RTDB
+    if (inviteEmails.length === 0) {
+      Alert.alert(
+        'Watch Party Requires Friends',
+        'Watch Party screening rooms are synchronized for groups. For solo viewing with zero delay and instant playback, tap "Watch Solo Now" or search from Home.',
+        [
+          {
+            text: 'Watch Solo Now',
+            onPress: handleWatchSoloNow,
+          },
+          {
+            text: 'Invite Friends',
+            style: 'cancel',
+          },
+        ]
+      );
       return;
     }
 
@@ -452,7 +501,6 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
     try {
       const roomId = isEditing ? editingRoom.roomId : `room_${Date.now()}`;
-      const roomRef = db.ref(`rooms/${roomId}`);
 
       const roomData = {
         roomId: roomId,
@@ -467,6 +515,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
             },
         streamUrl: streamUrl.trim(),
         participants: [...inviteEmails],
+        isSolo: false,
         thumbnail:
           previewUri ||
           getYouTubeThumbnail(streamUrl.trim()) ||
@@ -494,6 +543,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
         name: roomData.name,
         nameLower: roomData.nameLower,
         role: 'creator',
+        isSolo: false,
         createdAt: roomData.createdAt,
         status: roomData.status,
         isVip: roomData.isVip,
@@ -595,14 +645,14 @@ const CreateRoomScreen = ({ navigation, route }) => {
               </View>
             </View>
 
-            {/* Clean Capsule URL Input */}
+            {/* Clean Capsule URL Input with Dual Mode (Paste & Search) */}
             <View style={styles.urlInputCapsule}>
               <View style={styles.urlInputIconWrap}>
-                <MaterialIcons name="smart-display" size={20} color={colors.CYAN_ACCENT} />
+                <MaterialIcons name="movie-filter" size={20} color={colors.CYAN_ACCENT} />
               </View>
               <TextInput
                 style={styles.urlTextInput}
-                placeholder="Paste YouTube, MP4, or HLS stream link..."
+                placeholder="Paste stream link or search cinema..."
                 placeholderTextColor={colors.MUTED_COLOR}
                 value={streamUrl}
                 onChangeText={setStreamUrl}
@@ -628,8 +678,39 @@ const CreateRoomScreen = ({ navigation, route }) => {
                   <MaterialIcons name="content-paste" size={13} color={colors.CYAN_ACCENT} />
                   <Text style={styles.urlPasteText}>Paste</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.urlSearchMiniBtn}
+                  onPress={() => setShowMediaSearchModal(true)}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="search" size={14} color={colors.PRIMARY_COLOR} />
+                  <Text style={styles.urlSearchMiniText}>Search</Text>
+                </TouchableOpacity>
               </View>
             </View>
+
+            {/* Dual Mode: Search Cinema Media Bar */}
+            <TouchableOpacity
+              style={styles.searchMediaBarBtn}
+              onPress={() => setShowMediaSearchModal(true)}
+              activeOpacity={0.82}
+            >
+              <LinearGradient
+                colors={['rgba(0, 122, 255, 0.16)', 'rgba(124, 58, 237, 0.16)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.searchMediaBarGradient}
+              >
+                <View style={styles.searchMediaBarLeft}>
+                  <MaterialIcons name="search" size={18} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.searchMediaBarText}>Search Cinema & Web Media</Text>
+                </View>
+                <View style={styles.searchMediaBarRight}>
+                  <Text style={styles.searchMediaExploreText}>Browse</Text>
+                  <MaterialIcons name="arrow-forward-ios" size={11} color={colors.CYAN_ACCENT} />
+                </View>
+              </LinearGradient>
+            </TouchableOpacity>
 
             {/* ── LIVE CINEMA POSTER PREVIEW CARD ── */}
             <View style={styles.posterPreviewWrap}>
@@ -651,12 +732,12 @@ const CreateRoomScreen = ({ navigation, route }) => {
                       </View>
                       <View style={styles.posterSourceBadge}>
                         <MaterialIcons
-                          name={isYouTube ? 'play-circle' : isDirectMedia ? 'code' : 'live-tv'}
+                          name={isYouTube ? 'theaters' : isDirectMedia ? 'code' : 'live-tv'}
                           size={12}
                           color="#FFF"
                         />
                         <Text style={styles.posterSourceText}>
-                          {isYouTube ? 'YouTube HD' : isDirectMedia ? 'Direct Stream' : 'Web Stream'}
+                          {isYouTube ? 'Cinema HD' : isDirectMedia ? 'Direct Stream' : 'Web Stream'}
                         </Text>
                       </View>
                     </View>
@@ -678,7 +759,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
                   </View>
                   <Text style={styles.placeholderTitle}>Cinema Stream Preview</Text>
                   <Text style={styles.placeholderSubtitle}>
-                    Enter a YouTube or direct video link above to load the live screening poster.
+                    Paste a media link or search cinema media above to load the live screening poster.
                   </Text>
                 </View>
               )}
@@ -1113,6 +1194,28 @@ const CreateRoomScreen = ({ navigation, route }) => {
               />
             </TouchableOpacity>
 
+            {inviteEmails.length === 0 && (
+              <View style={styles.soloAlertCard}>
+                <View style={styles.soloAlertLeft}>
+                  <MaterialIcons name="info-outline" size={17} color={colors.CYAN_ACCENT} />
+                  <View style={styles.soloAlertTextCol}>
+                    <Text style={styles.soloAlertTitle}>Watch Parties require invited friends</Text>
+                    <Text style={styles.soloAlertSubtitle}>
+                      Want to watch alone with zero delay? Stream solo directly without database storage.
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.watchSoloQuickBtn}
+                  onPress={handleWatchSoloNow}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="play-arrow" size={15} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.watchSoloQuickBtnText}>Watch Solo</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {showEmailInvite && (
               <View style={styles.inviteBody}>
                 {/* ── SUB-SECTION: CONNECTED FRIENDS ── */}
@@ -1288,6 +1391,17 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
       {/* ── STICKY BOTTOM FLOATING CTA BAR ── */}
       <View style={[styles.stickyBottomBar, { paddingBottom: Math.max(insets.bottom, 14) }]}>
+        {inviteEmails.length === 0 && (
+          <TouchableOpacity
+            style={styles.soloStreamSecondaryBtn}
+            onPress={handleWatchSoloNow}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="play-arrow" size={17} color={colors.CYAN_ACCENT} />
+            <Text style={styles.soloStreamSecondaryText}>Watch Solo (Instant Direct Playback)</Text>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={styles.createCtaButton}
           onPress={createRoom}
@@ -1295,7 +1409,11 @@ const CreateRoomScreen = ({ navigation, route }) => {
           disabled={isCreating}
         >
           <LinearGradient
-            colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+            colors={
+              inviteEmails.length === 0
+                ? ['rgba(0, 122, 255, 0.65)', 'rgba(124, 58, 237, 0.65)']
+                : [colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]
+            }
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.createCtaGradient}
@@ -1304,9 +1422,17 @@ const CreateRoomScreen = ({ navigation, route }) => {
               <ActivityIndicator color={colors.TITLE_COLOR} size="small" />
             ) : (
               <>
-                <MaterialIcons name="theaters" size={22} color={colors.TITLE_COLOR} />
+                <MaterialIcons
+                  name={inviteEmails.length === 0 ? 'group-add' : 'theaters'}
+                  size={22}
+                  color={colors.TITLE_COLOR}
+                />
                 <Text style={styles.createCtaText}>
-                  {isEditing ? 'Update Screening Room' : 'Launch Screening Room'}
+                  {isEditing
+                    ? 'Update Screening Room'
+                    : inviteEmails.length === 0
+                    ? 'Launch Watch Party (Invites Required)'
+                    : `Launch Watch Party (${inviteEmails.length} ${inviteEmails.length === 1 ? 'Guest' : 'Guests'})`}
                 </Text>
                 <MaterialIcons name="arrow-forward" size={18} color={colors.TITLE_COLOR} />
               </>
@@ -1314,6 +1440,13 @@ const CreateRoomScreen = ({ navigation, route }) => {
           </LinearGradient>
         </TouchableOpacity>
       </View>
+
+      {/* Cinema Media Search Modal */}
+      <CinemaMediaSearchModal
+        visible={showMediaSearchModal}
+        onClose={() => setShowMediaSearchModal(false)}
+        onSelectMedia={handleSelectMediaFromSearch}
+      />
     </View>
   );
 };
@@ -1473,6 +1606,56 @@ const styles = StyleSheet.create({
     color: colors.CYAN_ACCENT,
     fontSize: 11,
     fontWeight: '700',
+  },
+  urlSearchMiniBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 122, 255, 0.14)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.35)',
+    gap: 4,
+  },
+  urlSearchMiniText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  searchMediaBarBtn: {
+    marginTop: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.25)',
+  },
+  searchMediaBarGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  searchMediaBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchMediaBarText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  searchMediaBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  searchMediaExploreText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '600',
   },
 
   // Live Cinema Poster Preview
@@ -2383,6 +2566,73 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  soloAlertCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(6, 182, 212, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.25)',
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  soloAlertLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
+  },
+  soloAlertTextCol: {
+    marginLeft: 8,
+    flex: 1,
+  },
+  soloAlertTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  soloAlertSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10.5,
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  watchSoloQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    gap: 2,
+  },
+  watchSoloQuickBtnText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  soloStreamSecondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    gap: 6,
+  },
+  soloStreamSecondaryText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -170,6 +170,7 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
     </TouchableOpacity>
   );
 
+  const isSolo = item?.isSolo === true || (!item?.participants || item?.participants?.length === 0);
   const participantCount = item?.participants?.length || 0;
 
   return (
@@ -177,7 +178,13 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
       <TouchableOpacity activeOpacity={0.85} style={styles.roomCard} onPress={onPress}>
         {/* Left accent strip */}
         <LinearGradient
-          colors={isCreator ? ['#F59E0B', '#D97706'] : [colors.GRADIENT_START, colors.GRADIENT_END]}
+          colors={
+            isSolo
+              ? [colors.CYAN_ACCENT, colors.PURPLE_ACCENT]
+              : isCreator
+                ? [colors.FILM_GOLD, '#D97706']
+                : [colors.GRADIENT_START, colors.GRADIENT_END]
+          }
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
           style={styles.roomAccentStrip}
@@ -195,27 +202,50 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
           <View style={styles.roomInfo}>
             <Text style={styles.roomName} numberOfLines={1}>{item.name}</Text>
             <View style={styles.roomMeta}>
-              <MaterialIcons name="person" size={13} color={colors.SUB_TITLE_COLOR} />
-              <Text style={styles.roomCreator} numberOfLines={1}>
-                {isCreator ? 'Created by you' : `by ${item.creator?.userName || 'Host'}`}
-              </Text>
+              {isSolo ? (
+                <>
+                  <MaterialIcons name="person" size={13} color={colors.CYAN_ACCENT} />
+                  <Text style={[styles.roomCreator, styles.roomSoloCreatorText]} numberOfLines={1}>
+                    {isCreator ? 'Personal Cinema • You' : 'Solo Room'}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <MaterialIcons name="person" size={13} color={colors.SUB_TITLE_COLOR} />
+                  <Text style={styles.roomCreator} numberOfLines={1}>
+                    {isCreator ? 'Created by you' : `by ${item.creator?.userName || 'Host'}`}
+                  </Text>
+                </>
+              )}
             </View>
-            <View style={styles.roomParticipantRow}>
-              <MaterialIcons name="group" size={13} color="#38BDF8" />
-              <Text style={styles.roomParticipantText}>
-                {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
-              </Text>
-            </View>
+            {isSolo ? (
+              <View style={styles.roomSoloRow}>
+                {/* <View style={styles.soloActiveDot} />
+                <Text style={styles.roomSoloText}>Solo Mode • Progress Auto-Saved</Text> */}
+              </View>
+            ) : (
+              <View style={styles.roomParticipantRow}>
+                <MaterialIcons name="group" size={13} color="#38BDF8" />
+                <Text style={styles.roomParticipantText}>
+                  {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Right side decorations */}
           <View style={styles.roomCardRight}>
-            {isCreator && (
+            {isSolo ? (
+              <View style={{}}>
+                {/* <MaterialIcons name="person" size={10} color={colors.CYAN_ACCENT} />
+                <Text style={styles.soloBadgeText}>Solo</Text> */}
+              </View>
+            ) : isCreator ? (
               <View style={styles.creatorBadge}>
                 <Ionicons name="star" size={10} color="#FBBF24" />
                 <Text style={styles.creatorBadgeText}>Host</Text>
               </View>
-            )}
+            ) : null}
             <MaterialIcons name="chevron-right" size={22} color="#64748B" />
           </View>
         </View>
@@ -420,6 +450,22 @@ const HomeScreen = () => {
     navigateToRoom(item);
   };
 
+  // Instant Solo Media Playback with 0 Database Writes
+  const handleSelectSoloMedia = useCallback(
+    mediaItem => {
+      if (!mediaItem) return;
+      setIsSearchModalVisible(false);
+      navigation.navigate('Streaming', {
+        roomId: null,
+        streamUrl: mediaItem.mediaUrl,
+        roomName: mediaItem.title,
+        thumbnail: mediaItem.thumbnail,
+        isLocalSolo: true,
+      });
+    },
+    [navigation]
+  );
+
   // Filter & Sort Logic (Optimized with useMemo for Zero-Lag)
   const filtered = useMemo(() => {
     const currentUser = auth().currentUser;
@@ -552,6 +598,9 @@ const HomeScreen = () => {
         {filtered.length > 0 ? (
           (() => {
             const featuredRoom = filtered[0];
+            const isFeaturedSolo =
+              featuredRoom?.isSolo === true ||
+              (!featuredRoom?.participants || featuredRoom?.participants?.length === 0);
             const participantCount =
               (featuredRoom?.participants?.length ||
                 (featuredRoom?.participants ? Object.keys(featuredRoom.participants).length : 0)) + 1;
@@ -567,7 +616,12 @@ const HomeScreen = () => {
               >
                 {/* Top Badges */}
                 <View style={styles.heroBadgeRow}>
-                  {featuredRoom.isStreaming ? (
+                  {isFeaturedSolo ? (
+                    <View style={[styles.liveBadge, styles.soloLiveBadge]}>
+                      <MaterialIcons name="person" size={11} color={colors.CYAN_ACCENT} />
+                      <Text style={[styles.liveBadgeText, { color: colors.CYAN_ACCENT }]}>SOLO CINEMA</Text>
+                    </View>
+                  ) : featuredRoom.isStreaming ? (
                     <View style={styles.liveBadge}>
                       <Animated.View style={[styles.liveDot, animatedPulseStyle]} />
                       <Text style={styles.liveBadgeText}>LIVE SYNC</Text>
@@ -586,20 +640,33 @@ const HomeScreen = () => {
 
                 {/* Title & Info */}
                 <View style={styles.heroDetails}>
-                  <Text style={styles.heroCategory}>
-                    {featuredRoom.isStreaming ? 'FEATURED SCREENING' : 'ACTIVE WATCH PARTY'}
+                  <Text style={[styles.heroCategory, isFeaturedSolo && { color: colors.CYAN_ACCENT }]}>
+                    {isFeaturedSolo
+                      ? 'PERSONAL SCREENING'
+                      : featuredRoom.isStreaming
+                        ? 'FEATURED SCREENING'
+                        : 'ACTIVE WATCH PARTY'}
                   </Text>
                   <Text style={styles.heroTitle} numberOfLines={1}>
                     {featuredRoom.name}
                   </Text>
 
                   <View style={styles.heroStatsRow}>
-                    <View style={styles.heroStatItem}>
-                      <MaterialIcons name="groups" size={15} color="#93C5FD" />
-                      <Text style={styles.heroStatText}>
-                        {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
-                      </Text>
-                    </View>
+                    {isFeaturedSolo ? (
+                      <View style={styles.heroStatItem}>
+                        <MaterialIcons name="person" size={14} color={colors.CYAN_ACCENT} />
+                        <Text style={[styles.heroStatText, { color: colors.CYAN_ACCENT }]}>
+                          Solo Room • Auto-Saved
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.heroStatItem}>
+                        <MaterialIcons name="groups" size={15} color="#93C5FD" />
+                        <Text style={styles.heroStatText}>
+                          {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
+                        </Text>
+                      </View>
+                    )}
                     <Text style={styles.heroStatDivider}>•</Text>
                     <Text style={styles.heroHostText}>
                       Host: <Text style={styles.heroHostName}>{hostName}</Text>
@@ -624,18 +691,18 @@ const HomeScreen = () => {
                     style={styles.heroCtaWrap}
                   >
                     <LinearGradient
-                      colors={['#4B8EFF', '#7C3AED']}
+                      colors={isFeaturedSolo ? [colors.CYAN_ACCENT, colors.PURPLE_ACCENT] : ['#4B8EFF', '#7C3AED']}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 0 }}
                       style={styles.heroCtaGradient}
                     >
                       <Ionicons
-                        name={featuredRoom.isStreaming ? 'play' : 'enter-outline'}
+                        name="play"
                         size={18}
                         color="#FFF"
                       />
                       <Text style={styles.heroCtaText}>
-                        {featuredRoom.isStreaming ? 'Join Party Now' : 'Enter Room'}
+                        {isFeaturedSolo ? 'Watch Solo Now' : featuredRoom.isStreaming ? 'Join Party Now' : 'Enter Room'}
                       </Text>
                     </LinearGradient>
                   </TouchableOpacity>
@@ -851,6 +918,7 @@ const HomeScreen = () => {
         onClose={() => setIsSearchModalVisible(false)}
         rooms={rooms}
         onSelectRoom={onRoomPress}
+        onSelectSoloMedia={handleSelectSoloMedia}
         currentUserEmail={currentUser?.email}
       />
 
@@ -1346,6 +1414,49 @@ const styles = StyleSheet.create({
     color: '#FBBF24',
     fontSize: 11,
     fontWeight: '700',
+  },
+  roomSoloRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  soloActiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  roomSoloText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  roomSoloCreatorText: {
+    color: colors.CYAN_ACCENT,
+    fontWeight: '600',
+  },
+  soloBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderColor: 'rgba(6, 182, 212, 0.4)',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    gap: 4,
+  },
+  soloBadgeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  soloLiveBadge: {
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    borderColor: 'rgba(6, 182, 212, 0.35)',
   },
 
   // ── Swipe Delete ──────────────────

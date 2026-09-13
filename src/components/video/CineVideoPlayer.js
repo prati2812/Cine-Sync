@@ -29,6 +29,7 @@ const CineVideoPlayer = forwardRef((props, ref) => {
   const {
     url,
     playing = true,
+    initialPosition = 0,
     onProgress,
     onStateChange,
     onEnd,
@@ -40,7 +41,7 @@ const CineVideoPlayer = forwardRef((props, ref) => {
   const nativeVideoRef = useRef(null);
   const nativeCinePlayerRef = useRef(null);
   const youtubeEngineRef = useRef(null);
-  const currentTimeRef = useRef(0);
+  const currentTimeRef = useRef(initialPosition || 0);
   const durationRef = useRef(0);
 
   const streamType = useMemo(() => detectStreamType(url), [url]);
@@ -146,6 +147,7 @@ const CineVideoPlayer = forwardRef((props, ref) => {
           ref={nativeCinePlayerRef}
           url={url}
           paused={!playing}
+          initialPosition={initialPosition}
           resizeMode={resizeMode}
           onProgress={onProgress}
           onStateChange={onStateChange}

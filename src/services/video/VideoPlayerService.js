@@ -89,7 +89,7 @@ export function getStreamBadgeInfo(url) {
   const type = detectStreamType(url);
   switch (type) {
     case STREAM_TYPES.YOUTUBE:
-      return { label: 'YouTube Stream', protocol: 'IFrame 4K', isAdaptive: true };
+      return { label: 'Cinema Stream', protocol: 'Direct 4K', isAdaptive: true };
     case STREAM_TYPES.HLS:
       return { label: 'HLS Live Stream', protocol: 'm3u8 Adaptive', isAdaptive: true };
     case STREAM_TYPES.DASH:

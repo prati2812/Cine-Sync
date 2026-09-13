@@ -128,8 +128,8 @@ const LinkPreviewCard = ({ url, navigation, isMyMessage, onLongPress }) => {
           thumbDetails?.maxresUrl ||
           `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
 
-        let videoTitle = 'YouTube Video';
-        let channelName = 'YouTube';
+        let videoTitle = 'Cinema Video';
+        let channelName = 'Cinema Media';
 
         try {
           const oEmbedRes = await fetch(
@@ -149,7 +149,7 @@ const LinkPreviewCard = ({ url, navigation, isMyMessage, onLongPress }) => {
 
         const ytMeta = {
           url,
-          domain: 'youtube.com',
+          domain: 'Cinema Stream',
           title: videoTitle,
           description: channelName,
           image: thumbUrl,
@@ -355,7 +355,7 @@ const LinkPreviewCard = ({ url, navigation, isMyMessage, onLongPress }) => {
           {/* Floating Domain Pill at Top Left */}
           <View style={styles.domainFloatingPill}>
             {metadata.isYouTube ? (
-              <Ionicons name="logo-youtube" size={13} color={colors.LIVE_RED} />
+              <MaterialIcons name="theaters" size={13} color={colors.CYAN_ACCENT} />
             ) : metadata.favicon ? (
               <Image source={{ uri: metadata.favicon }} style={styles.faviconMini} />
             ) : (
@@ -370,7 +370,7 @@ const LinkPreviewCard = ({ url, navigation, isMyMessage, onLongPress }) => {
         /* Compact Domain Header when no image */
         <View style={styles.compactDomainHeader}>
           {metadata.isYouTube ? (
-            <Ionicons name="logo-youtube" size={15} color={colors.LIVE_RED} />
+            <MaterialIcons name="theaters" size={14} color={colors.CYAN_ACCENT} />
           ) : metadata.favicon ? (
             <Image source={{ uri: metadata.favicon }} style={styles.faviconMini} />
           ) : (
