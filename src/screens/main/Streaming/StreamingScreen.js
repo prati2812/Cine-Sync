@@ -16,10 +16,13 @@ import {
   Share,
   BackHandler,
   ActivityIndicator,
+  Image,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CineVideoPlayer from '../../../components/video/CineVideoPlayer';
 import { getStreamBadgeInfo } from '../../../services/video/VideoPlayerService';
+import { searchCinemaMedia } from '../../../services/video/CinemaMediaSearchService';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -89,16 +92,36 @@ const FloatingEmoji = ({ emoji }) => {
 const StreamingScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
   const {
-    streamUrl,
+    streamUrl: initialStreamUrl,
     roomName: initialRoomName,
     roomId: initialRoomId,
     isLocalSolo: initialIsLocalSolo,
     thumbnail: initialThumbnail,
+    channelName: initialChannelName,
+    durationText: initialDurationText,
+    views: initialViews,
   } = route.params || {};
 
   const [currentRoomId, setCurrentRoomId] = useState(initialRoomId || null);
   const roomId = currentRoomId;
   const isLocalSolo = Boolean(initialIsLocalSolo || !initialRoomId);
+
+  // Active solo stream state (allows seamlessly playing recommended videos)
+  const [activeStreamUrl, setActiveStreamUrl] = useState(initialStreamUrl || '');
+  const streamUrl = activeStreamUrl || initialStreamUrl || '';
+  const [soloSelectedTitle, setSoloSelectedTitle] = useState(null);
+  const [activeChannelName, setActiveChannelName] = useState(initialChannelName || '');
+  const [activeViews, setActiveViews] = useState(initialViews || '');
+  const [activeDurationText, setActiveDurationText] = useState(initialDurationText || '');
+
+  // On-demand Notes Sheet state (Completely hidden from main screen by default)
+  const [isNotesSheetVisible, setIsNotesSheetVisible] = useState(false);
+
+  // Up Next & Recommended Cinema for Solo mode
+  const [recommendedMedia, setRecommendedMedia] = useState([]);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
+  const [recommendedContinuationToken, setRecommendedContinuationToken] = useState(null);
+  const [isLoadingMoreRecommendations, setIsLoadingMoreRecommendations] = useState(false);
 
   const safeTopPadding = Math.max(
     insets.top,
@@ -732,9 +755,94 @@ const StreamingScreen = ({ route, navigation }) => {
     };
   }, [savePlaybackOnExit]);
 
-  const roomTitle = roomData?.name || initialRoomName || 'Screening Room';
+  const roomTitle = soloSelectedTitle || roomData?.name || initialRoomName || 'Screening Room';
+  const displayChannelName = activeChannelName || (roomData?.creator?.userName ? `${roomData.creator.userName}` : 'Cinema Studio');
+  const displayViews = activeViews || 'Cinema Stream';
+  const displayDuration = activeDurationText || (duration > 0 ? formatTime(duration) : 'Feature Film');
   const shortRoomId = (currentRoomId ? currentRoomId.replace('room_', '').replace('solo_', '') : 'SOLO').slice(-4);
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+  // Up Next & Recommended Cinema for Solo Mode
+  useEffect(() => {
+    if (!isSoloRoom) return;
+    let isMounted = true;
+    setIsLoadingRecommendations(true);
+
+    const titleToUse = soloSelectedTitle || initialRoomName || roomData?.name || '';
+    const cleanWords = titleToUse
+      .replace(/[\(\)\[\]\{\}\-–—|:;,.]/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(w => w.length > 2)
+      .slice(0, 3)
+      .join(' ');
+
+    const query = cleanWords || 'Movie Trailers 4K';
+
+    searchCinemaMedia(query)
+      .then(items => {
+        if (isMounted) {
+          const currentUrl = streamUrl;
+          const filtered = (items || []).filter(item => item && item.mediaUrl !== currentUrl);
+          setRecommendedMedia(filtered);
+          setRecommendedContinuationToken(items?.continuationToken || null);
+        }
+      })
+      .catch(err => {
+        console.warn('[StreamingScreen] Recommended media error:', err);
+        if (isMounted) {
+          setRecommendedMedia([]);
+          setRecommendedContinuationToken(null);
+        }
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingRecommendations(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isSoloRoom, soloSelectedTitle, initialRoomName, streamUrl, roomData]);
+
+  // Infinite Scroll Pagination for Recommendations in Solo Grid
+  const handleLoadMoreRecommendations = useCallback(async () => {
+    if (isLoadingMoreRecommendations || isLoadingRecommendations || !recommendedContinuationToken) return;
+    setIsLoadingMoreRecommendations(true);
+    try {
+      const nextBatch = await searchCinemaMedia('', recommendedContinuationToken);
+      if (nextBatch && nextBatch.length > 0) {
+        setRecommendedMedia(prev => {
+          const currentUrl = streamUrl;
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueItems = nextBatch.filter(item => !existingIds.has(item.id) && item.mediaUrl !== currentUrl);
+          return [...prev, ...uniqueItems];
+        });
+        setRecommendedContinuationToken(nextBatch.continuationToken || null);
+      } else {
+        setRecommendedContinuationToken(null);
+      }
+    } catch (err) {
+      console.warn('[StreamingScreen] Recommendations pagination error:', err);
+    } finally {
+      setIsLoadingMoreRecommendations(false);
+    }
+  }, [isLoadingMoreRecommendations, isLoadingRecommendations, recommendedContinuationToken, streamUrl]);
+
+  const handleSelectRecommendedMedia = useCallback((item) => {
+    if (!item || !item.mediaUrl) return;
+    setActiveStreamUrl(item.mediaUrl);
+    setSoloSelectedTitle(item.title);
+    setActiveChannelName(item.channelName);
+    setActiveViews(item.views);
+    setActiveDurationText(item.duration);
+    setCurrentTime(0);
+    currentTimeRef.current = 0;
+    setInitialPosition(0);
+    setIsInitialLoading(true);
+    setPlaying(true);
+    setRecommendedContinuationToken(null);
+    saveLocalProgress(item.mediaUrl, 0, 0, currentRoomId);
+  }, [currentRoomId]);
 
   const handleShareScreening = async () => {
     try {
@@ -792,9 +900,6 @@ const StreamingScreen = ({ route, navigation }) => {
                 <Text style={styles.headerTitleText} numberOfLines={1}>
                   {roomTitle}
                 </Text>
-                <View style={styles.hdrTag}>
-                  <Text style={styles.hdrTagText}>{streamBadge.protocol || '4K HDR'}</Text>
-                </View>
               </View>
               <Text style={styles.headerSubtitleText}>
                 {isSoloRoom
@@ -1107,155 +1212,243 @@ const StreamingScreen = ({ route, navigation }) => {
         <View style={styles.adaptiveContentWrap}>
           {isSoloRoom ? (
             /* ============================================================== */
-            /* SOLO CINEMA DASHBOARD (Distraction-Free Personal Theater)     */
+            /* SOLO CINEMA COMPANION (2-Column Grid with Infinite Scroll)    */
             /* ============================================================== */
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              style={{ flex: 1 }}
-            >
-              {/* Solo Cinema Overview Hub */}
-              <View style={styles.soloOverviewCard}>
-                <View style={styles.soloOverviewLeft}>
-                  <View style={styles.soloCinemaIconBox}>
-                    <MaterialIcons name="theaters" size={20} color={colors.CYAN_ACCENT} />
-                  </View>
-                  <View style={styles.soloOverviewTextCol}>
-                    <View style={styles.soloOverviewTitleRow}>
-                      <Text style={styles.soloOverviewTitle} numberOfLines={1}>
-                        {roomTitle}
-                      </Text>
-                      <View style={styles.soloCinemaTag}>
-                        <Text style={styles.soloCinemaTagText}>SOLO</Text>
+            <FlatList
+              data={recommendedMedia}
+              keyExtractor={item => item.id}
+              numColumns={2}
+              columnWrapperStyle={styles.recommendedGridRow}
+              style={styles.soloCompanionScroll}
+              contentContainerStyle={styles.soloCompanionContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              onEndReached={handleLoadMoreRecommendations}
+              onEndReachedThreshold={0.5}
+              ListHeaderComponent={
+                <View style={styles.soloHeaderComponentsWrap}>
+                  {/* ── 1. VIDEO INFO HERO CARD ── */}
+                  <LinearGradient
+                    colors={['#141424', '#0D0D18', '#080810']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.soloInfoCard}
+                  >
+                    <Text style={styles.soloVideoTitle} numberOfLines={2}>
+                      {roomTitle}
+                    </Text>
+
+                    {/* Channel Row (No Direct 4K tag) */}
+                    <View style={styles.soloChannelRow}>
+                      <View style={styles.soloChannelLeft}>
+                        <View style={styles.soloChannelAvatar}>
+                          <MaterialIcons name="theaters" size={13} color={colors.CYAN_ACCENT} />
+                        </View>
+                        <Text style={styles.soloChannelName} numberOfLines={1}>
+                          {displayChannelName}
+                        </Text>
+                        <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
                       </View>
                     </View>
-                    <Text style={styles.soloOverviewSubtitle}>
-                      Personal Cinema • Progress Auto-Saved
-                    </Text>
-                  </View>
-                </View>
 
-                <TouchableOpacity
-                  style={styles.quickBookmarkBtn}
-                  onPress={() => addNote(`Saved milestone @ ${formatTime(currentTime)}`)}
-                  activeOpacity={0.8}
-                >
-                  <MaterialIcons name="bookmark-add" size={15} color={colors.CYAN_ACCENT} />
-                  <Text style={styles.quickBookmarkText}>
-                    + Bookmark @ {formatTime(currentTime)}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Storyboard Header */}
-              <View style={styles.storyboardHeaderRow}>
-                <View style={styles.storyboardTitleGroup}>
-                  <MaterialIcons name="bookmarks" size={16} color={colors.CYAN_ACCENT} />
-                  <Text style={styles.storyboardTitle}>My Cinema Storyboard</Text>
-                  <View style={styles.privateVaultBadge}>
-                    <Text style={styles.privateVaultText}>Private Vault</Text>
-                  </View>
-                </View>
-
-                <Text style={styles.storyboardCountText}>
-                  {notes.length} {notes.length === 1 ? 'bookmark' : 'bookmarks'}
-                </Text>
-              </View>
-
-              {/* Bookmarks List */}
-              <FlatList
-                data={notes}
-                keyExtractor={item => item.id}
-                contentContainerStyle={styles.notesListContainer}
-                showsVerticalScrollIndicator={false}
-                ListEmptyComponent={
-                  <View style={styles.emptyNotesBox}>
-                    <View style={styles.emptyNotesIconCircle}>
-                      <MaterialIcons name="bookmark-border" size={36} color={colors.CYAN_ACCENT} />
-                    </View>
-                    <Text style={styles.emptyNotesTitle}>Personal Cinema Storyboard</Text>
-                    <Text style={styles.emptyNotesSubtitle}>
-                      Save key moments & notes linked to timestamps while watching:
-                      {'\n\n'}• Tap "+ Bookmark" above to mark this exact second.
-                      {'\n'}• Or write a note below and tap Save.
-                      {'\n'}• Tap any saved [ ▶ MM:SS ] pill to jump straight to that moment!
-                    </Text>
-                  </View>
-                }
-                renderItem={({ item }) => (
-                  <View style={styles.noteCard}>
-                    <View style={styles.noteCardTopRow}>
-                      <View style={styles.noteTimestampGroup}>
-                        <TouchableOpacity
-                          style={styles.jumpTimePill}
-                          onPress={() => handleSeekToNote(item.seconds || 0)}
-                          activeOpacity={0.8}
-                        >
-                          <MaterialIcons name="play-arrow" size={13} color={colors.CYAN_ACCENT} />
-                          <Text style={styles.jumpTimeText}>{formatTime(item.seconds || 0)}</Text>
-                        </TouchableOpacity>
-                        <Text style={styles.noteActTag}>{item.tag || 'Scene Bookmark'}</Text>
+                    {/* Metrics Row */}
+                    <View style={styles.soloMetricsRow}>
+                      <View style={styles.soloMetricItem}>
+                        <MaterialIcons name="visibility" size={13} color={colors.SUB_TITLE_COLOR} />
+                        <Text style={styles.soloMetricText}>{displayViews}</Text>
                       </View>
 
-                      <TouchableOpacity
-                        style={styles.noteDeleteBtn}
-                        onPress={() => deleteNote(item.id)}
-                        activeOpacity={0.7}
+                      <View style={styles.soloMetricDivider} />
+
+                      <View style={styles.soloMetricItem}>
+                        <MaterialIcons name="schedule" size={13} color={colors.SUB_TITLE_COLOR} />
+                        <Text style={styles.soloMetricText}>{displayDuration}</Text>
+                      </View>
+
+                      <View style={styles.soloMetricDivider} />
+
+                      <View style={styles.soloMetricItem}>
+                        <MaterialIcons name="cloud-done" size={13} color={colors.ACCEPT_GREEN} />
+                        <Text style={styles.soloAutoSaveText}>Auto-Saved</Text>
+                      </View>
+                    </View>
+                  </LinearGradient>
+
+                  {/* ── 2. QUICK ACTION BAR ── */}
+                  <View style={styles.soloActionBar}>
+                    {/* Notes & Moments Button - Opens On-Demand Bottom Sheet */}
+                    <TouchableOpacity
+                      style={[styles.soloActionBtn, notes.length > 0 && styles.soloActionBtnActive]}
+                      onPress={() => setIsNotesSheetVisible(true)}
+                      activeOpacity={0.78}
+                    >
+                      <MaterialIcons
+                        name="bookmarks"
+                        size={17}
+                        color={notes.length > 0 ? colors.CYAN_ACCENT : colors.TITLE_COLOR}
+                      />
+                      <Text
+                        style={[
+                          styles.soloActionBtnText,
+                          notes.length > 0 && styles.soloActionBtnTextActive,
+                        ]}
                       >
-                        <MaterialIcons name="delete-outline" size={16} color={colors.SUB_TITLE_COLOR} />
-                      </TouchableOpacity>
-                    </View>
-
-                    <Text style={styles.noteContentText}>{item.text}</Text>
-
-                    {/* Frame Snapshot Row */}
-                    <View style={styles.frameSnapshotRow}>
-                      <MaterialIcons name="photo-camera" size={12} color={colors.ACCEPT_GREEN} />
-                      <Text style={styles.frameSnapshotText}>
-                        Timestamp: {formatTime(item.seconds || 0)} • Frame Milestone
+                        Notes {notes.length > 0 ? `(${notes.length})` : ''}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
+
+                    {/* Quick Instant Bookmark Button */}
+                    <TouchableOpacity
+                      style={styles.soloActionBtn}
+                      onPress={() => {
+                        addNote(`Saved milestone @ ${formatTime(currentTime)}`);
+                        setIsNotesSheetVisible(true);
+                      }}
+                      activeOpacity={0.78}
+                    >
+                      <MaterialIcons name="bookmark-add" size={17} color={colors.PRIMARY_COLOR} />
+                      <Text style={styles.soloActionBtnText}>+ Bookmark</Text>
+                    </TouchableOpacity>
+
+                    {/* Share Button */}
+                    <TouchableOpacity
+                      style={styles.soloActionBtn}
+                      onPress={handleShareScreening}
+                      activeOpacity={0.78}
+                    >
+                      <MaterialIcons name="share" size={17} color={colors.FILM_GOLD} />
+                      <Text style={styles.soloActionBtnText}>Share</Text>
+                    </TouchableOpacity>
+
+                    {/* Theater / Fullscreen Button */}
+                    <TouchableOpacity
+                      style={styles.soloActionBtn}
+                      onPress={toggleFullscreen}
+                      activeOpacity={0.78}
+                    >
+                      <MaterialIcons name="fullscreen" size={19} color={colors.TITLE_COLOR} />
+                      <Text style={styles.soloActionBtnText}>Theater</Text>
+                    </TouchableOpacity>
                   </View>
-                )}
-              />
 
-              {/* Solo Bottom Dock: Quick Frame Capture & Note Input */}
-              <View style={styles.soloBottomDock}>
-                <TouchableOpacity
-                  style={styles.cameraSnapBtn}
-                  onPress={() => addNote(`Captured frame at ${formatTime(currentTime)}`)}
-                  activeOpacity={0.8}
-                >
-                  <MaterialIcons name="photo-camera" size={20} color={colors.CYAN_ACCENT} />
-                  <View style={styles.cameraSnapDot} />
-                </TouchableOpacity>
+                  {/* ── 3. UP NEXT & RECOMMENDED GRID HEADER ── */}
+                  <View style={styles.upNextHeaderRow}>
+                    <View style={styles.upNextTitleGroup}>
+                      <MaterialIcons name="auto-awesome" size={15} color={colors.CYAN_ACCENT} />
+                      <Text style={styles.upNextHeading}>UP NEXT & RECOMMENDED</Text>
+                    </View>
+                    <Text style={styles.upNextSubheading}>Instant Play</Text>
+                  </View>
 
-                <View style={styles.soloInputWrap}>
-                  <TextInput
-                    style={styles.soloTextInput}
-                    placeholder={`Add note at ${formatTime(currentTime)}...`}
-                    placeholderTextColor={colors.SUB_TITLE_COLOR}
-                    value={newNoteText}
-                    onChangeText={setNewNoteText}
-                    onSubmitEditing={() => addNote()}
-                  />
-                  <Text style={styles.soloInputTimestamp}>{formatTime(currentTime)}</Text>
+                  {isLoadingRecommendations && (
+                    <View style={styles.upNextLoadingBox}>
+                      <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
+                      <Text style={styles.upNextLoadingText}>Finding related cinema streams...</Text>
+                    </View>
+                  )}
                 </View>
-
+              }
+              renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={styles.saveNoteBtn}
-                  onPress={() => addNote()}
-                  activeOpacity={0.85}
+                  key={item.id}
+                  style={styles.recommendedGridCard}
+                  onPress={() => handleSelectRecommendedMedia(item)}
+                  activeOpacity={0.82}
                 >
                   <LinearGradient
-                    colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
-                    style={styles.saveNoteGradient}
+                    colors={['#131322', '#0A0A12', '#06060A']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 0, y: 1 }}
+                    style={styles.recommendedGridCardGradient}
                   >
-                    <MaterialIcons name="bookmark-add" size={16} color={colors.TITLE_COLOR} />
-                    <Text style={styles.saveNoteBtnText}>Save</Text>
+                    {/* 16:9 Squircle Thumbnail */}
+                    <View style={styles.recommendedGridThumbWrap}>
+                      {item.thumbnail ? (
+                        <Image
+                          source={{ uri: item.thumbnail }}
+                          style={styles.recommendedGridThumbImg}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={styles.recommendedThumbFallback}>
+                          <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
+                        </View>
+                      )}
+
+                      {/* Smooth black card thumbnail fade overlay */}
+                      <LinearGradient
+                        colors={['transparent', 'rgba(10, 10, 18, 0.45)', '#0A0A12']}
+                        locations={[0.2, 0.7, 1]}
+                        style={styles.recommendedThumbFade}
+                        pointerEvents="none"
+                      />
+
+                      {item.duration ? (
+                        <View style={styles.recommendedDurationBadge}>
+                          <Text style={styles.recommendedDurationText}>{item.duration}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    {/* Grid Info */}
+                    <View style={styles.recommendedGridInfo}>
+                      <Text style={styles.recommendedGridTitle} numberOfLines={2}>
+                        {item.title}
+                      </Text>
+
+                      <View style={styles.recommendedGridChannelRow}>
+                        <Text style={styles.recommendedGridChannel} numberOfLines={1}>
+                          {item.channelName}
+                        </Text>
+                        <MaterialIcons name="verified" size={11} color={colors.CYAN_ACCENT} />
+                      </View>
+
+                      <View style={styles.recommendedGridFooterRow}>
+                        {item.views ? (
+                          <Text style={styles.recommendedGridViews} numberOfLines={1}>
+                            {item.views}
+                          </Text>
+                        ) : null}
+                        <View style={styles.recommendedGridPlayPill}>
+                          <MaterialIcons name="play-arrow" size={11} color="#FFF" />
+                          <Text style={styles.recommendedGridPlayText}>Play</Text>
+                        </View>
+                      </View>
+                    </View>
                   </LinearGradient>
                 </TouchableOpacity>
-              </View>
-            </KeyboardAvoidingView>
+              )}
+              ListEmptyComponent={
+                !isLoadingRecommendations ? (
+                  <View style={styles.upNextEmptyBox}>
+                    <MaterialIcons name="theaters" size={26} color={colors.MUTED_COLOR} />
+                    <Text style={styles.upNextEmptyText}>Ready for personal playback</Text>
+                  </View>
+                ) : null
+              }
+              ListFooterComponent={
+                isLoadingMoreRecommendations ? (
+                  <View style={styles.upNextLoadingBox}>
+                    <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
+                    <Text style={styles.upNextLoadingText}>Loading more suggestions...</Text>
+                  </View>
+                ) : recommendedContinuationToken ? (
+                  <TouchableOpacity
+                    style={styles.loadMoreSuggestionsBtn}
+                    onPress={handleLoadMoreRecommendations}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="expand-more" size={18} color={colors.CYAN_ACCENT} />
+                    <Text style={styles.loadMoreSuggestionsText}>Load More Suggestions</Text>
+                  </TouchableOpacity>
+                ) : recommendedMedia.length > 0 ? (
+                  <View style={styles.endOfSuggestionsWrap}>
+                    <MaterialIcons name="check-circle" size={14} color={colors.ACCEPT_GREEN} />
+                    <Text style={styles.endOfSuggestionsText}>All matching suggestions loaded</Text>
+                  </View>
+                ) : null
+              }
+            />
           ) : activeMode === 'notes' ? (
             /* PARTY MODE: Notes Tab */
             <KeyboardAvoidingView
@@ -1550,6 +1743,154 @@ const StreamingScreen = ({ route, navigation }) => {
           )}
         </View>
       )}
+
+      {/* ── ON-DEMAND NOTES & STORYBOARD BOTTOM SHEET MODAL (SOLO COMPANION) ── */}
+      <Modal
+        visible={isNotesSheetVisible}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setIsNotesSheetVisible(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setIsNotesSheetVisible(false)}
+          />
+
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.sheetContentContainer}
+          >
+            {/* Ambient Top Handle Bar */}
+            <View style={styles.sheetHandleBarWrap}>
+              <View style={styles.sheetHandleBar} />
+            </View>
+
+            {/* Sheet Header Row */}
+            <View style={styles.sheetHeaderRow}>
+              <View style={styles.sheetHeaderLeft}>
+                <MaterialIcons name="bookmarks" size={18} color={colors.CYAN_ACCENT} />
+                <Text style={styles.sheetHeaderTitle}>Cinema Storyboard & Notes</Text>
+                <View style={styles.sheetBadgePill}>
+                  <Text style={styles.sheetBadgeText}>{notes.length} saved</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.sheetCloseBtn}
+                onPress={() => setIsNotesSheetVisible(false)}
+                activeOpacity={0.75}
+              >
+                <MaterialIcons name="close" size={20} color={colors.SUB_TITLE_COLOR} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Quick Instant Bookmark Button */}
+            <View style={styles.sheetQuickActionRow}>
+              <TouchableOpacity
+                style={styles.sheetInstantBookmarkBtn}
+                onPress={() => addNote(`Saved milestone @ ${formatTime(currentTime)}`)}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="bookmark-add" size={15} color={colors.CYAN_ACCENT} />
+                <Text style={styles.sheetInstantBookmarkText}>
+                  + Instant Bookmark at {formatTime(currentTime)}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Notes & Milestones List */}
+            <FlatList
+              data={notes}
+              keyExtractor={item => item.id}
+              contentContainerStyle={styles.sheetNotesList}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={
+                <View style={styles.sheetEmptyBox}>
+                  <View style={styles.sheetEmptyIconCircle}>
+                    <MaterialIcons name="bookmark-outline" size={32} color={colors.CYAN_ACCENT} />
+                  </View>
+                  <Text style={styles.sheetEmptyTitle}>No Notes Yet</Text>
+                  <Text style={styles.sheetEmptySubtitle}>
+                    Capture your personal thoughts, key quotes, or scene timestamps while watching.
+                  </Text>
+                </View>
+              }
+              renderItem={({ item }) => (
+                <View style={styles.noteCard}>
+                  <View style={styles.noteCardTopRow}>
+                    <View style={styles.noteTimestampGroup}>
+                      <TouchableOpacity
+                        style={styles.jumpTimePill}
+                        onPress={() => {
+                          handleSeekToNote(item.seconds || 0);
+                          setIsNotesSheetVisible(false);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <MaterialIcons name="play-arrow" size={13} color={colors.CYAN_ACCENT} />
+                        <Text style={styles.jumpTimeText}>{formatTime(item.seconds || 0)}</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.noteActTag}>{item.tag || 'Scene Bookmark'}</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.noteDeleteBtn}
+                      onPress={() => deleteNote(item.id)}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="delete-outline" size={16} color={colors.SUB_TITLE_COLOR} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.noteContentText}>{item.text}</Text>
+                </View>
+              )}
+            />
+
+            {/* Bottom Input Dock inside Sheet */}
+            <View style={styles.sheetInputDock}>
+              <TouchableOpacity
+                style={styles.cameraSnapBtn}
+                onPress={() => addNote(`Captured frame at ${formatTime(currentTime)}`)}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="photo-camera" size={20} color={colors.CYAN_ACCENT} />
+                <View style={styles.cameraSnapDot} />
+              </TouchableOpacity>
+
+              <View style={styles.soloInputWrap}>
+                <TextInput
+                  style={styles.soloTextInput}
+                  placeholder={`Add note at ${formatTime(currentTime)}...`}
+                  placeholderTextColor={colors.SUB_TITLE_COLOR}
+                  value={newNoteText}
+                  onChangeText={setNewNoteText}
+                  onSubmitEditing={() => addNote()}
+                />
+                <Text style={styles.soloInputTimestamp}>{formatTime(currentTime)}</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.saveNoteBtn}
+                onPress={() => addNote()}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                  style={styles.saveNoteGradient}
+                >
+                  <MaterialIcons name="bookmark-add" size={16} color={colors.TITLE_COLOR} />
+                  <Text style={styles.saveNoteBtnText}>Save</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -2119,11 +2460,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   noteCard: {
-    backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 16,
+    backgroundColor: '#0C0C16',
+    borderRadius: 14,
     padding: 12,
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
   },
   noteCardTopRow: {
     flexDirection: 'row',
@@ -2534,6 +2875,458 @@ const styles = StyleSheet.create({
     bottom: 30,
     right: 25,
     zIndex: 60,
+  },
+
+  // ── Solo Cinema Companion & Up Next Hub ──
+  soloCompanionScroll: {
+    flex: 1,
+  },
+  soloCompanionContent: {
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  soloHeaderComponentsWrap: {
+    paddingHorizontal: 16,
+    gap: 14,
+    marginBottom: 14,
+  },
+  soloInfoCard: {
+    backgroundColor: '#0A0A12',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    gap: 10,
+    overflow: 'hidden',
+  },
+  soloVideoTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 16,
+    fontWeight: '800',
+    lineHeight: 22,
+    letterSpacing: 0.2,
+  },
+  soloChannelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  soloChannelLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  soloChannelAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  soloChannelName: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '700',
+    maxWidth: '75%',
+  },
+  soloSpecsBadge: {
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.28)',
+  },
+  soloSpecsText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  soloMetricsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 4,
+  },
+  soloMetricItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  soloMetricText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  soloMetricDivider: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: colors.MUTED_COLOR,
+  },
+  soloAutoSaveText: {
+    color: colors.ACCEPT_GREEN,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // ── Solo Quick Action Bar ──
+  soloActionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  soloActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    backgroundColor: '#0C0C16',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+  },
+  soloActionBtnActive: {
+    borderColor: 'rgba(6, 182, 212, 0.4)',
+    backgroundColor: 'rgba(6, 182, 212, 0.08)',
+  },
+  soloActionBtnText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  soloActionBtnTextActive: {
+    color: colors.CYAN_ACCENT,
+  },
+
+  // ── Up Next & Recommended Cinema ──
+  upNextSection: {
+    gap: 12,
+  },
+  upNextHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  upNextTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  upNextHeading: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  upNextSubheading: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  upNextLoadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 24,
+    backgroundColor: '#0A0A12',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  upNextLoadingText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  recommendedGridRow: {
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  recommendedGridCard: {
+    width: '48.5%',
+    backgroundColor: '#0A0A12',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    overflow: 'hidden',
+  },
+  recommendedGridCardGradient: {
+    flex: 1,
+  },
+  recommendedGridThumbWrap: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    backgroundColor: '#07070E',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  recommendedGridThumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  recommendedThumbFade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 38,
+  },
+  recommendedThumbFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recommendedDurationBadge: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  recommendedDurationText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  recommendedGridInfo: {
+    padding: 8,
+    gap: 3,
+  },
+  recommendedGridTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  recommendedGridChannelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  recommendedGridChannel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 10.5,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  recommendedGridFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 3,
+  },
+  recommendedGridViews: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  recommendedGridPlayPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.PRIMARY_COLOR,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 2,
+  },
+  recommendedGridPlayText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  loadMoreSuggestionsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginVertical: 14,
+    marginHorizontal: 16,
+    paddingVertical: 11,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+  },
+  loadMoreSuggestionsText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  endOfSuggestionsWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 16,
+  },
+  endOfSuggestionsText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  upNextEmptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 28,
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    gap: 6,
+    marginHorizontal: 16,
+  },
+  upNextEmptyText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // ── On-Demand Notes Bottom Sheet Modal ──
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'flex-end',
+  },
+  sheetContentContainer: {
+    backgroundColor: colors.SURFACE_COLOR,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    maxHeight: '75%',
+    paddingBottom: Platform.OS === 'ios' ? 24 : 10,
+  },
+  sheetHandleBarWrap: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  sheetHandleBar: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.MUTED_COLOR,
+  },
+  sheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  sheetHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sheetHeaderTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  sheetBadgePill: {
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  sheetBadgeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  sheetCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetQuickActionRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  sheetInstantBookmarkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(6, 182, 212, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.28)',
+    borderRadius: 10,
+    paddingVertical: 8,
+  },
+  sheetInstantBookmarkText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sheetNotesList: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  sheetEmptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+    gap: 8,
+  },
+  sheetEmptyIconCircle: {
+    width: 54,
+    height: 54,
+    borderRadius: 14,
+    backgroundColor: 'rgba(6, 182, 212, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetEmptyTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sheetEmptySubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 17,
+    maxWidth: 260,
+  },
+  sheetInputDock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.BORDER_SUBTLE,
+    backgroundColor: colors.SURFACE_COLOR,
   },
 });
 

@@ -19,19 +19,127 @@ const suggestionsCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Searches media catalog for videos matching the given query string.
- * @param {string} query - The search query (e.g. "Dune Part 2 trailer")
- * @returns {Promise<Array<{id: string, mediaUrl: string, title: string, channelName: string, duration: string, views: string, thumbnail: string, publishedTime: string}>>}
+ * Normalizes a raw videoRenderer object into a clean media object.
  */
-export async function searchCinemaMedia(query) {
+function parseVideoRenderer(v) {
+  if (!v || !v.videoId) return null;
+  const title =
+    v.title?.runs?.map(r => r.text).join('') || v.title?.simpleText || '';
+  const channelName =
+    v.ownerText?.runs?.[0]?.text ||
+    v.shortBylineText?.runs?.[0]?.text ||
+    'Cinema Studio';
+  const duration = v.lengthText?.simpleText || '';
+  const views = v.viewCountText?.simpleText || v.shortViewCountText?.simpleText || '';
+  const publishedTime = v.publishedTimeText?.simpleText || '';
+  const thumbs = v.thumbnail?.thumbnails || [];
+  let thumbnail = '';
+  if (thumbs.length > 0) {
+    thumbnail = thumbs[thumbs.length - 1]?.url || '';
+  }
+  if (!thumbnail) {
+    thumbnail = `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`;
+  }
+  return {
+    id: v.videoId,
+    mediaUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
+    title: title.trim(),
+    channelName: channelName.trim(),
+    duration: duration.trim(),
+    views: views.trim(),
+    publishedTime: publishedTime.trim(),
+    thumbnail,
+  };
+}
+
+/**
+ * Searches media catalog for videos matching the given query string.
+ * Supports pagination via continuationToken.
+ * @param {string} query - The search query (e.g. "Dune Part 2 trailer")
+ * @param {string|null} continuationToken - Optional token for loading next page
+ * @returns {Promise<Array<{id: string, mediaUrl: string, title: string, channelName: string, duration: string, views: string, thumbnail: string, publishedTime: string}> & {continuationToken?: string|null}}>}
+ */
+export async function searchCinemaMedia(query, continuationToken = null) {
+  // If continuationToken is provided, fetch subsequent page using InnerTube search endpoint
+  if (continuationToken) {
+    try {
+      const url = 'https://www.youtube.com/youtubei/v1/search?prettyPrint=false';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': USER_AGENT,
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB',
+              clientVersion: '2.20240301.00.00',
+              hl: 'en',
+              gl: 'US',
+            },
+          },
+          continuation: continuationToken,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+      }
+
+      const json = await response.json();
+      const results = [];
+      let nextToken = null;
+
+      const cmds = json.onResponseReceivedCommands || [];
+      for (const cmd of cmds) {
+        const items = cmd.appendContinuationItemsAction?.continuationItems || [];
+        for (const item of items) {
+          if (item.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token) {
+            nextToken = item.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+          }
+          const subContents = item.itemSectionRenderer?.contents || [item];
+          for (const subItem of subContents) {
+            if (subItem.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token) {
+              nextToken = subItem.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+            }
+            const video = parseVideoRenderer(subItem.videoRenderer);
+            if (video) {
+              results.push(video);
+            }
+          }
+        }
+      }
+
+      const resArray = [...results];
+      resArray.continuationToken = nextToken;
+      resArray.results = results;
+      return resArray;
+    } catch (err) {
+      console.warn('[CinemaMediaSearchService] Pagination failed:', err?.message || err);
+      const empty = [];
+      empty.continuationToken = null;
+      empty.results = [];
+      return empty;
+    }
+  }
+
   if (!query || typeof query !== 'string' || !query.trim()) {
-    return [];
+    const empty = [];
+    empty.continuationToken = null;
+    return empty;
   }
 
   const cleanQuery = query.trim();
   const cacheKey = cleanQuery.toLowerCase();
 
-  // 1. Check in-memory cache
+  // 1. Check in-memory cache for initial page
   const cached = searchCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
@@ -60,35 +168,49 @@ export async function searchCinemaMedia(query) {
     }
 
     const html = await response.text();
-    const results = parseYouTubeInitialData(html);
+    const parsed = parseYouTubeInitialData(html);
 
     // Save to cache if we got results
-    if (results && results.length > 0) {
+    if (parsed && parsed.length > 0) {
       searchCache.set(cacheKey, {
         timestamp: Date.now(),
-        data: results,
+        data: parsed,
       });
     }
 
-    return results;
+    return parsed;
   } catch (error) {
     console.warn('[CinemaMediaSearchService] Search failed:', error?.message || error);
     // Return cached data if available even if expired, otherwise empty array
     if (cached && cached.data) {
       return cached.data;
     }
-    return [];
+    const empty = [];
+    empty.continuationToken = null;
+    return empty;
   }
+}
+
+/**
+ * Convenience method to fetch next page of media results.
+ */
+export async function fetchNextCinemaMediaPage(continuationToken) {
+  if (!continuationToken) return [];
+  return searchCinemaMedia('', continuationToken);
 }
 
 /**
  * Parses raw HTML response to extract video results from `ytInitialData`.
  * Handles both plain JSON objects and mobile hex-escaped formats.
  * @param {string} html - Raw HTML from youtube.com/results
- * @returns {Array} List of normalized video objects
+ * @returns {Array} List of normalized video objects with continuationToken property
  */
 export function parseYouTubeInitialData(html) {
-  if (!html || typeof html !== 'string') return [];
+  if (!html || typeof html !== 'string') {
+    const empty = [];
+    empty.continuationToken = null;
+    return empty;
+  }
 
   let data = null;
 
@@ -120,59 +242,38 @@ export function parseYouTubeInitialData(html) {
   }
 
   if (!data) {
-    return [];
+    const empty = [];
+    empty.continuationToken = null;
+    return empty;
   }
 
   const results = [];
+  let continuationToken = null;
+
   const contents =
     data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer
       ?.contents || [];
 
   for (const section of contents) {
+    if (section?.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token) {
+      continuationToken = section.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+    }
     const itemSection = section?.itemSectionRenderer?.contents || [];
     for (const item of itemSection) {
-      const v = item?.videoRenderer;
-      if (v && v.videoId) {
-        // Extract title
-        const title =
-          v.title?.runs?.map(r => r.text).join('') || v.title?.simpleText || '';
-
-        // Extract channel / creator name
-        const channelName =
-          v.ownerText?.runs?.[0]?.text ||
-          v.shortBylineText?.runs?.[0]?.text ||
-          'Cinema Studio';
-
-        // Extract duration & views
-        const duration = v.lengthText?.simpleText || '';
-        const views = v.viewCountText?.simpleText || v.shortViewCountText?.simpleText || '';
-        const publishedTime = v.publishedTimeText?.simpleText || '';
-
-        // Extract highest quality thumbnail
-        const thumbs = v.thumbnail?.thumbnails || [];
-        let thumbnail = '';
-        if (thumbs.length > 0) {
-          thumbnail = thumbs[thumbs.length - 1]?.url || '';
-        }
-        if (!thumbnail) {
-          thumbnail = `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`;
-        }
-
-        results.push({
-          id: v.videoId,
-          mediaUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
-          title: title.trim(),
-          channelName: channelName.trim(),
-          duration: duration.trim(),
-          views: views.trim(),
-          publishedTime: publishedTime.trim(),
-          thumbnail,
-        });
+      if (item?.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token) {
+        continuationToken = item.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+      }
+      const video = parseVideoRenderer(item?.videoRenderer);
+      if (video) {
+        results.push(video);
       }
     }
   }
 
-  return results;
+  const responseArray = [...results];
+  responseArray.continuationToken = continuationToken;
+  responseArray.results = results;
+  return responseArray;
 }
 
 /**
@@ -221,6 +322,7 @@ export async function fetchMediaSuggestions(query) {
 
 export default {
   searchCinemaMedia,
+  fetchNextCinemaMediaPage,
   fetchMediaSuggestions,
   parseYouTubeInitialData,
 };

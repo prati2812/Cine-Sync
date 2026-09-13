@@ -460,6 +460,9 @@ const HomeScreen = () => {
         streamUrl: mediaItem.mediaUrl,
         roomName: mediaItem.title,
         thumbnail: mediaItem.thumbnail,
+        channelName: mediaItem.channelName,
+        durationText: mediaItem.duration,
+        views: mediaItem.views,
         isLocalSolo: true,
       });
     },

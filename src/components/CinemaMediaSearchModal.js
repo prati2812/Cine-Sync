@@ -9,6 +9,7 @@ import {
   Easing,
   TextInput,
   ScrollView,
+  FlatList,
   Platform,
   StatusBar,
   Dimensions,
@@ -41,8 +42,10 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [continuationToken, setContinuationToken] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [selectedChip, setSelectedChip] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
 
@@ -61,6 +64,7 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
   // Open/Close transition
   useEffect(() => {
     if (visible) {
+      setContinuationToken(null);
       Animated.parallel([
         Animated.timing(animOpacity, {
           toValue: 1,
@@ -126,17 +130,43 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
     setSuggestions([]);
     setIsLoading(true);
     setHasSearched(true);
+    setContinuationToken(null);
 
     try {
       const items = await searchCinemaMedia(q);
       setResults(items || []);
+      setContinuationToken(items?.continuationToken || null);
     } catch (err) {
       console.warn('[CinemaMediaSearchModal] Search error:', err);
       setResults([]);
+      setContinuationToken(null);
     } finally {
       setIsLoading(false);
     }
   }, [query]);
+
+  // High-performance media pagination (Infinite scroll & load more)
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore || isLoading || !continuationToken) return;
+    setIsLoadingMore(true);
+    try {
+      const nextBatch = await searchCinemaMedia('', continuationToken);
+      if (nextBatch && nextBatch.length > 0) {
+        setResults(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueItems = nextBatch.filter(item => !existingIds.has(item.id));
+          return [...prev, ...uniqueItems];
+        });
+        setContinuationToken(nextBatch.continuationToken || null);
+      } else {
+        setContinuationToken(null);
+      }
+    } catch (err) {
+      console.warn('[CinemaMediaSearchModal] Pagination error:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, isLoading, continuationToken]);
 
   const handleChipPress = (chip) => {
     setSelectedChip(chip.label);
@@ -154,6 +184,7 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
     setQuery('');
     setSuggestions([]);
     setSelectedChip(null);
+    setContinuationToken(null);
   };
 
   const handleSelectCard = (item) => {
@@ -293,6 +324,120 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
               <ActivityIndicator size="large" color={colors.PRIMARY_COLOR} />
               <Text style={styles.loadingText}>Searching Cinema Media...</Text>
             </View>
+          ) : results.length > 0 ? (
+            <FlatList
+              data={results}
+              keyExtractor={(item) => item.id}
+              style={styles.resultsScroll}
+              contentContainerStyle={styles.resultsContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              onEndReached={handleLoadMore}
+              onEndReachedThreshold={0.5}
+              ListHeaderComponent={
+                <View style={styles.resultsHeaderRow}>
+                  <View style={styles.resultsHeaderLeft}>
+                    <MaterialIcons name="theaters" size={15} color={colors.CYAN_ACCENT} />
+                    <Text style={styles.resultsHeading}>SEARCH RESULTS</Text>
+                  </View>
+                </View>
+              }
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.mediaCard}
+                  onPress={() => handleSelectCard(item)}
+                  activeOpacity={0.82}
+                >
+                  <LinearGradient
+                    colors={['#131322', '#0A0A14', '#06060B']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.mediaCardGradient}
+                  >
+                    {/* 16:9 Squircle Thumbnail */}
+                    <View style={styles.mediaThumbBox}>
+                      {item.thumbnail ? (
+                        <Image
+                          source={{ uri: item.thumbnail }}
+                          style={styles.mediaThumbImg}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={styles.thumbFallback}>
+                          <MaterialIcons name="movie" size={28} color={colors.MUTED_COLOR} />
+                        </View>
+                      )}
+
+                      {/* Smooth thumbnail fade into black card */}
+                      <LinearGradient
+                        colors={['transparent', 'rgba(10, 10, 20, 0.35)', '#0A0A14']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.mediaThumbFade}
+                        pointerEvents="none"
+                      />
+
+                      {/* Bottom Duration Badge */}
+                      {item.duration ? (
+                        <View style={styles.durationBadge}>
+                          <Text style={styles.durationBadgeText}>{item.duration}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    {/* Info Column */}
+                    <View style={styles.mediaInfoCol}>
+                      <Text style={styles.mediaTitleText} numberOfLines={2}>
+                        {item.title}
+                      </Text>
+
+                      <View style={styles.mediaMetaRow}>
+                        <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
+                        <Text style={styles.mediaChannelText} numberOfLines={1}>
+                          {item.channelName}
+                        </Text>
+                      </View>
+
+                      <View style={styles.mediaFooterRow}>
+                        {item.views ? (
+                          <Text style={styles.mediaViewsText} numberOfLines={1}>
+                            {item.views}
+                          </Text>
+                        ) : null}
+
+                        <View style={styles.selectActionBadge}>
+                          <MaterialIcons name="add" size={13} color={colors.PRIMARY_COLOR} />
+                          <Text style={styles.selectActionText}>Select</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
+              ListFooterComponent={
+                isLoadingMore ? (
+                  <View style={styles.paginationLoadingWrap}>
+                    <ActivityIndicator size="small" color={colors.PRIMARY_COLOR} />
+                    <Text style={styles.paginationLoadingText}>Loading more cinema media...</Text>
+                  </View>
+                ) : continuationToken ? (
+                  <TouchableOpacity
+                    style={styles.loadMoreBtn}
+                    onPress={handleLoadMore}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="expand-more" size={18} color={colors.CYAN_ACCENT} />
+                    <Text style={styles.loadMoreBtnText}>Load More Results</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.endOfResultsWrap}>
+                    <MaterialIcons name="check-circle" size={14} color={colors.ACCEPT_GREEN} />
+                    <Text style={styles.endOfResultsText}>All matching results loaded</Text>
+                  </View>
+                )
+              }
+            />
           ) : (
             <ScrollView
               style={styles.resultsScroll}
@@ -300,82 +445,7 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {results.length > 0 ? (
-                <>
-                  <View style={styles.resultsHeaderRow}>
-                    <View style={styles.resultsHeaderLeft}>
-                      <MaterialIcons name="theaters" size={15} color={colors.CYAN_ACCENT} />
-                      <Text style={styles.resultsHeading}>SEARCH RESULTS</Text>
-                    </View>
-                    <Text style={styles.resultsCountBadge}>
-                      {results.length} available
-                    </Text>
-                  </View>
-
-                  {results.map((item) => (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={styles.mediaCard}
-                      onPress={() => handleSelectCard(item)}
-                      activeOpacity={0.82}
-                    >
-                      {/* 16:9 Squircle Thumbnail */}
-                      <View style={styles.mediaThumbBox}>
-                        {item.thumbnail ? (
-                          <Image
-                            source={{ uri: item.thumbnail }}
-                            style={styles.mediaThumbImg}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <View style={styles.thumbFallback}>
-                            <MaterialIcons name="movie" size={28} color={colors.MUTED_COLOR} />
-                          </View>
-                        )}
-
-                        {/* Top 4K / HD Quality Badge */}
-                        <View style={styles.qualityBadge}>
-                          <Text style={styles.qualityBadgeText}>CINEMA HD</Text>
-                        </View>
-
-                        {/* Bottom Duration Badge */}
-                        {item.duration ? (
-                          <View style={styles.durationBadge}>
-                            <Text style={styles.durationBadgeText}>{item.duration}</Text>
-                          </View>
-                        ) : null}
-                      </View>
-
-                      {/* Info Column */}
-                      <View style={styles.mediaInfoCol}>
-                        <Text style={styles.mediaTitleText} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-
-                        <View style={styles.mediaMetaRow}>
-                          <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
-                          <Text style={styles.mediaChannelText} numberOfLines={1}>
-                            {item.channelName}
-                          </Text>
-                        </View>
-
-                        <View style={styles.mediaFooterRow}>
-                          {item.views ? (
-                            <Text style={styles.mediaViewsText} numberOfLines={1}>
-                              {item.views}
-                            </Text>
-                          ) : null}
-
-                          <View style={styles.selectActionBadge}>
-                            <MaterialIcons name="add" size={13} color={colors.PRIMARY_COLOR} />
-                            <Text style={styles.selectActionText}>Select</Text>
-                          </View>
-                        </View>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </>
-              ) : hasSearched ? (
+              {hasSearched ? (
                 /* No Results State */
                 <View style={styles.emptyStateBox}>
                   <View style={styles.emptyIconCircle}>
@@ -582,24 +652,35 @@ const styles = StyleSheet.create({
 
   // Media Card (16:9)
   mediaCard: {
-    backgroundColor: colors.SURFACE_COLOR,
+    backgroundColor: '#0A0A14',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: colors.SURFACE_ELEVATED,
-    padding: 10,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  mediaCardGradient: {
     flexDirection: 'row',
     gap: 12,
     alignItems: 'center',
+    padding: 10,
   },
   mediaThumbBox: {
     width: 124,
     height: 72,
     borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: colors.BACKGROUND_COLOR,
+    backgroundColor: '#07070E',
     position: 'relative',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  mediaThumbFade: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: 24,
   },
   mediaThumbImg: {
     ...StyleSheet.absoluteFillObject,
@@ -776,6 +857,51 @@ const styles = StyleSheet.create({
   tagText: {
     color: colors.TITLE_COLOR,
     fontSize: 11,
+    fontWeight: '600',
+  },
+
+  // Media Pagination Controls
+  paginationLoadingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    gap: 10,
+  },
+  paginationLoadingText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  loadMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginVertical: 14,
+    marginHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.28)',
+  },
+  loadMoreBtnText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  endOfResultsWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 20,
+  },
+  endOfResultsText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 12,
     fontWeight: '600',
   },
 });

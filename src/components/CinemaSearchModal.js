@@ -9,6 +9,7 @@ import {
   Easing,
   TextInput,
   ScrollView,
+  FlatList,
   Platform,
   StatusBar,
   Dimensions,
@@ -70,10 +71,12 @@ const CinemaSearchModal = ({
   const [serverResults, setServerResults] = useState([]);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
 
-  // Cinema Media (Solo) states
+  // Cinema Media (Solo) states & Pagination
   const [mediaResults, setMediaResults] = useState([]);
   const [mediaSuggestions, setMediaSuggestions] = useState([]);
+  const [mediaContinuationToken, setMediaContinuationToken] = useState(null);
   const [isSearchingMedia, setIsSearchingMedia] = useState(false);
+  const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
   const [hasSearchedMedia, setHasSearchedMedia] = useState(false);
   const [selectedMediaChip, setSelectedMediaChip] = useState(null);
 
@@ -144,6 +147,7 @@ const CinemaSearchModal = ({
     const q = debouncedQuery.trim();
     if (!q || q.length < 2) {
       setMediaResults([]);
+      setMediaContinuationToken(null);
       setIsSearchingMedia(false);
       return;
     }
@@ -151,14 +155,21 @@ const CinemaSearchModal = ({
     let isMounted = true;
     setIsSearchingMedia(true);
     setHasSearchedMedia(true);
+    setMediaContinuationToken(null);
 
     searchCinemaMedia(q)
       .then(items => {
-        if (isMounted) setMediaResults(items || []);
+        if (isMounted) {
+          setMediaResults(items || []);
+          setMediaContinuationToken(items?.continuationToken || null);
+        }
       })
       .catch(err => {
         console.warn('Media search error:', err);
-        if (isMounted) setMediaResults([]);
+        if (isMounted) {
+          setMediaResults([]);
+          setMediaContinuationToken(null);
+        }
       })
       .finally(() => {
         if (isMounted) setIsSearchingMedia(false);
@@ -204,6 +215,7 @@ const CinemaSearchModal = ({
       setDebouncedQuery('');
       setServerResults([]);
       setMediaResults([]);
+      setMediaContinuationToken(null);
       setMediaSuggestions([]);
       setSelectedFilter('all');
       setSelectedGenre(null);
@@ -321,9 +333,16 @@ const CinemaSearchModal = ({
     setMediaSuggestions([]);
     setIsSearchingMedia(true);
     setHasSearchedMedia(true);
+    setMediaContinuationToken(null);
     searchCinemaMedia(chip.query)
-      .then(items => setMediaResults(items || []))
-      .catch(() => setMediaResults([]))
+      .then(items => {
+        setMediaResults(items || []);
+        setMediaContinuationToken(items?.continuationToken || null);
+      })
+      .catch(() => {
+        setMediaResults([]);
+        setMediaContinuationToken(null);
+      })
       .finally(() => setIsSearchingMedia(false));
   };
 
@@ -332,11 +351,41 @@ const CinemaSearchModal = ({
     setMediaSuggestions([]);
     setIsSearchingMedia(true);
     setHasSearchedMedia(true);
+    setMediaContinuationToken(null);
     searchCinemaMedia(text)
-      .then(items => setMediaResults(items || []))
-      .catch(() => setMediaResults([]))
+      .then(items => {
+        setMediaResults(items || []);
+        setMediaContinuationToken(items?.continuationToken || null);
+      })
+      .catch(() => {
+        setMediaResults([]);
+        setMediaContinuationToken(null);
+      })
       .finally(() => setIsSearchingMedia(false));
   };
+
+  // High-performance media pagination (Infinite scroll & load more)
+  const handleLoadMoreMedia = useCallback(async () => {
+    if (isLoadingMoreMedia || isSearchingMedia || !mediaContinuationToken) return;
+    setIsLoadingMoreMedia(true);
+    try {
+      const nextBatch = await searchCinemaMedia('', mediaContinuationToken);
+      if (nextBatch && nextBatch.length > 0) {
+        setMediaResults(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueItems = nextBatch.filter(item => !existingIds.has(item.id));
+          return [...prev, ...uniqueItems];
+        });
+        setMediaContinuationToken(nextBatch.continuationToken || null);
+      } else {
+        setMediaContinuationToken(null);
+      }
+    } catch (err) {
+      console.warn('Media pagination error:', err);
+    } finally {
+      setIsLoadingMoreMedia(false);
+    }
+  }, [isLoadingMoreMedia, isSearchingMedia, mediaContinuationToken]);
 
   if (!visible) return null;
 
@@ -533,6 +582,118 @@ const CinemaSearchModal = ({
                   <ActivityIndicator size="large" color={colors.PRIMARY_COLOR} />
                   <Text style={styles.loadingStateText}>Searching Cinema Media...</Text>
                 </View>
+              ) : mediaResults.length > 0 ? (
+                <FlatList
+                  data={mediaResults}
+                  keyExtractor={item => item.id}
+                  style={styles.resultsScroll}
+                  contentContainerStyle={styles.resultsContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  onEndReached={handleLoadMoreMedia}
+                  onEndReachedThreshold={0.5}
+                  ListHeaderComponent={
+                    <View style={styles.resultsHeaderRow}>
+                      <View style={styles.resultsHeaderLeft}>
+                        <MaterialIcons name="theaters" size={15} color={colors.CYAN_ACCENT} />
+                        <Text style={styles.resultsHeading}>CINEMA MEDIA RESULTS</Text>
+                      </View>
+                    </View>
+                  }
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.mediaCard}
+                      onPress={() => handleSelectSoloMedia(item)}
+                      activeOpacity={0.82}
+                    >
+                      <LinearGradient
+                        colors={['#131322', '#0A0A14', '#06060B']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.mediaCardGradient}
+                      >
+                        {/* 16:9 Squircle Thumbnail */}
+                        <View style={styles.mediaThumbBox}>
+                          {item.thumbnail ? (
+                            <Image
+                              source={{ uri: item.thumbnail }}
+                              style={styles.mediaThumbImg}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
+                          )}
+
+                          {/* Smooth thumbnail fade into black card */}
+                          <LinearGradient
+                            colors={['transparent', 'rgba(10, 10, 20, 0.35)', '#0A0A14']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.mediaThumbFade}
+                            pointerEvents="none"
+                          />
+
+                          {item.duration ? (
+                            <View style={styles.mediaDurationBadge}>
+                              <Text style={styles.mediaDurationText}>{item.duration}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+
+                        {/* Info Column */}
+                        <View style={styles.mediaInfoCol}>
+                          <Text style={styles.mediaTitleText} numberOfLines={2}>
+                            {item.title}
+                          </Text>
+
+                          <View style={styles.mediaMetaRow}>
+                            <MaterialIcons name="verified" size={12} color={colors.CYAN_ACCENT} />
+                            <Text style={styles.mediaChannelText} numberOfLines={1}>
+                              {item.channelName}
+                            </Text>
+                          </View>
+
+                          <View style={styles.mediaFooterRow}>
+                            {item.views ? (
+                              <Text style={styles.mediaViewsText} numberOfLines={1}>
+                                {item.views}
+                              </Text>
+                            ) : null}
+
+                            {/* Watch Now Button */}
+                            <View style={styles.watchNowActionBtn}>
+                              <MaterialIcons name="play-arrow" size={13} color="#FFF" />
+                              <Text style={styles.watchNowActionText}>Watch Now</Text>
+                            </View>
+                          </View>
+                        </View>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  )}
+                  ListFooterComponent={
+                    isLoadingMoreMedia ? (
+                      <View style={styles.paginationLoadingWrap}>
+                        <ActivityIndicator size="small" color={colors.PRIMARY_COLOR} />
+                        <Text style={styles.paginationLoadingText}>Loading more cinema media...</Text>
+                      </View>
+                    ) : mediaContinuationToken ? (
+                      <TouchableOpacity
+                        style={styles.loadMoreBtn}
+                        onPress={handleLoadMoreMedia}
+                        activeOpacity={0.8}
+                      >
+                        <MaterialIcons name="expand-more" size={18} color={colors.CYAN_ACCENT} />
+                        <Text style={styles.loadMoreBtnText}>Load More Results</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={styles.endOfResultsWrap}>
+                        <MaterialIcons name="check-circle" size={14} color={colors.ACCEPT_GREEN} />
+                        <Text style={styles.endOfResultsText}>All matching results loaded</Text>
+                      </View>
+                    )
+                  }
+                />
               ) : (
                 <ScrollView
                   style={styles.resultsScroll}
@@ -540,77 +701,7 @@ const CinemaSearchModal = ({
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator={false}
                 >
-                  {mediaResults.length > 0 ? (
-                    <>
-                      <View style={styles.resultsHeaderRow}>
-                        <View style={styles.resultsHeaderLeft}>
-                          <MaterialIcons name="theaters" size={15} color={colors.CYAN_ACCENT} />
-                          <Text style={styles.resultsHeading}>CINEMA MEDIA RESULTS</Text>
-                        </View>
-                        <Text style={styles.resultsCountBadge}>
-                          {mediaResults.length} available
-                        </Text>
-                      </View>
-
-                      {mediaResults.map(item => (
-                        <TouchableOpacity
-                          key={item.id}
-                          style={styles.mediaCard}
-                          onPress={() => handleSelectSoloMedia(item)}
-                          activeOpacity={0.82}
-                        >
-                          {/* 16:9 Squircle Thumbnail */}
-                          <View style={styles.mediaThumbBox}>
-                            {item.thumbnail ? (
-                              <Image
-                                source={{ uri: item.thumbnail }}
-                                style={styles.mediaThumbImg}
-                                resizeMode="cover"
-                              />
-                            ) : (
-                              <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
-                            )}
-                            <View style={styles.mediaQualityTag}>
-                              <Text style={styles.mediaQualityTagText}>CINEMA HD</Text>
-                            </View>
-                            {item.duration ? (
-                              <View style={styles.mediaDurationBadge}>
-                                <Text style={styles.mediaDurationText}>{item.duration}</Text>
-                              </View>
-                            ) : null}
-                          </View>
-
-                          {/* Info Column */}
-                          <View style={styles.mediaInfoCol}>
-                            <Text style={styles.mediaTitleText} numberOfLines={2}>
-                              {item.title}
-                            </Text>
-
-                            <View style={styles.mediaMetaRow}>
-                              <MaterialIcons name="verified" size={12} color={colors.CYAN_ACCENT} />
-                              <Text style={styles.mediaChannelText} numberOfLines={1}>
-                                {item.channelName}
-                              </Text>
-                            </View>
-
-                            <View style={styles.mediaFooterRow}>
-                              {item.views ? (
-                                <Text style={styles.mediaViewsText} numberOfLines={1}>
-                                  {item.views}
-                                </Text>
-                              ) : null}
-
-                              {/* Watch Now Button */}
-                              <View style={styles.watchNowActionBtn}>
-                                <MaterialIcons name="play-arrow" size={13} color="#FFF" />
-                                <Text style={styles.watchNowActionText}>Watch Now</Text>
-                              </View>
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      ))}
-                    </>
-                  ) : hasSearchedMedia ? (
+                  {hasSearchedMedia ? (
                     <View style={styles.emptyResultsBox}>
                       <View style={styles.emptyIconWrap}>
                         <MaterialIcons name="search-off" size={32} color={colors.FILM_GOLD} />
@@ -811,75 +902,82 @@ const CinemaSearchModal = ({
                           onPress={() => handleSelectRoom(room)}
                           activeOpacity={0.8}
                         >
-                          {/* Thumbnail / Poster Box */}
-                          <View style={styles.roomThumbBox}>
-                            {thumb && typeof thumb === 'string' && thumb.startsWith('http') ? (
-                              <Image
-                                source={{ uri: thumb }}
-                                style={StyleSheet.absoluteFillObject}
-                                resizeMode="cover"
-                              />
-                            ) : (
-                              <MaterialIcons
-                                name={
-                                  room.genre === 'Anime'
-                                    ? 'flash-on'
-                                    : room.genre === 'Music'
-                                    ? 'music-note'
-                                    : room.genre === 'Gaming'
-                                    ? 'sports-esports'
-                                    : room.genre === 'Sports'
-                                    ? 'sports-soccer'
-                                    : 'local-movies'
-                                }
-                                size={22}
-                                color={colors.CYAN_ACCENT}
-                              />
-                            )}
-                            {isLive && (
-                              <View style={styles.thumbLiveBadge}>
-                                <View style={styles.thumbLiveDot} />
-                                <Text style={styles.thumbLiveText}>LIVE</Text>
-                              </View>
-                            )}
-                          </View>
-
-                          {/* Info Col */}
-                          <View style={styles.roomInfoCol}>
-                            <View style={styles.roomTitleRow}>
-                              <Text style={styles.roomTitleText} numberOfLines={1}>
-                                {room.name || 'Untitled Party'}
-                              </Text>
-                              {room.isPrivate && (
-                                <MaterialIcons name="lock" size={13} color={colors.FILM_GOLD} />
+                          <LinearGradient
+                            colors={['#131322', '#0A0A14']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.roomResultCardGradient}
+                          >
+                            {/* Thumbnail / Poster Box */}
+                            <View style={styles.roomThumbBox}>
+                              {thumb && typeof thumb === 'string' && thumb.startsWith('http') ? (
+                                <Image
+                                  source={{ uri: thumb }}
+                                  style={StyleSheet.absoluteFillObject}
+                                  resizeMode="cover"
+                                />
+                              ) : (
+                                <MaterialIcons
+                                  name={
+                                    room.genre === 'Anime'
+                                      ? 'flash-on'
+                                      : room.genre === 'Music'
+                                      ? 'music-note'
+                                      : room.genre === 'Gaming'
+                                      ? 'sports-esports'
+                                      : room.genre === 'Sports'
+                                      ? 'sports-soccer'
+                                      : 'local-movies'
+                                  }
+                                  size={22}
+                                  color={colors.CYAN_ACCENT}
+                                />
+                              )}
+                              {isLive && (
+                                <View style={styles.thumbLiveBadge}>
+                                  <View style={styles.thumbLiveDot} />
+                                  <Text style={styles.thumbLiveText}>LIVE</Text>
+                                </View>
                               )}
                             </View>
 
-                            <Text style={styles.roomHostText} numberOfLines={1}>
-                              Host: <Text style={styles.roomHostName}>{hostName}</Text>
-                            </Text>
-
-                            <View style={styles.roomMetaTagsRow}>
-                              <View style={styles.roomGenrePill}>
-                                <Text style={styles.roomGenrePillText}>
-                                  {room.genre || 'Movies'}
+                            {/* Info Col */}
+                            <View style={styles.roomInfoCol}>
+                              <View style={styles.roomTitleRow}>
+                                <Text style={styles.roomTitleText} numberOfLines={1}>
+                                  {room.name || 'Untitled Party'}
                                 </Text>
+                                {room.isPrivate && (
+                                  <MaterialIcons name="lock" size={13} color={colors.FILM_GOLD} />
+                                )}
                               </View>
-                              <View style={styles.roomAudiencePill}>
-                                <Ionicons name="people" size={11} color={colors.SUB_TITLE_COLOR} />
-                                <Text style={styles.roomAudienceText}>{participantCount}</Text>
+
+                              <Text style={styles.roomHostText} numberOfLines={1}>
+                                Host: <Text style={styles.roomHostName}>{hostName}</Text>
+                              </Text>
+
+                              <View style={styles.roomMetaTagsRow}>
+                                <View style={styles.roomGenrePill}>
+                                  <Text style={styles.roomGenrePillText}>
+                                    {room.genre || 'Movies'}
+                                  </Text>
+                                </View>
+                                <View style={styles.roomAudiencePill}>
+                                  <Ionicons name="people" size={11} color={colors.SUB_TITLE_COLOR} />
+                                  <Text style={styles.roomAudienceText}>{participantCount}</Text>
+                                </View>
                               </View>
                             </View>
-                          </View>
 
-                          {/* Join Action Arrow */}
-                          <View style={styles.roomJoinActionBtn}>
-                            <MaterialIcons
-                              name="arrow-forward-ios"
-                              size={13}
-                              color={colors.CYAN_ACCENT}
-                            />
-                          </View>
+                            {/* Join Action Arrow */}
+                            <View style={styles.roomJoinActionBtn}>
+                              <MaterialIcons
+                                name="arrow-forward-ios"
+                                size={13}
+                                color={colors.CYAN_ACCENT}
+                              />
+                            </View>
+                          </LinearGradient>
                         </TouchableOpacity>
                       );
                     })}
@@ -1035,25 +1133,35 @@ const styles = StyleSheet.create({
 
   // Media Card
   mediaCard: {
-    backgroundColor: colors.SURFACE_COLOR,
+    backgroundColor: '#0A0A14',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: colors.SURFACE_ELEVATED,
-    padding: 10,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  mediaCardGradient: {
     flexDirection: 'row',
     gap: 12,
     alignItems: 'center',
-    marginBottom: 10,
+    padding: 10,
   },
   mediaThumbBox: {
     width: 120,
     height: 70,
     borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: colors.BACKGROUND_COLOR,
+    backgroundColor: '#07070E',
     position: 'relative',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  mediaThumbFade: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: 24,
   },
   mediaThumbImg: {
     ...StyleSheet.absoluteFillObject,
@@ -1326,14 +1434,17 @@ const styles = StyleSheet.create({
 
   // Room Card
   roomResultCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.SURFACE_COLOR,
+    backgroundColor: '#0A0A14',
     borderRadius: 14,
-    padding: 12,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    overflow: 'hidden',
+  },
+  roomResultCardGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
     gap: 12,
   },
   roomThumbBox: {
@@ -1478,6 +1589,51 @@ const styles = StyleSheet.create({
     color: colors.CYAN_ACCENT,
     fontSize: 12,
     fontWeight: '700',
+  },
+
+  // Media Pagination Controls
+  paginationLoadingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    gap: 10,
+  },
+  paginationLoadingText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  loadMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginVertical: 14,
+    marginHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.28)',
+  },
+  loadMoreBtnText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  endOfResultsWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 20,
+  },
+  endOfResultsText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 
