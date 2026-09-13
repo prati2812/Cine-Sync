@@ -123,6 +123,22 @@ dependencies {
     implementation "com.google.firebase:firebase-auth:23.2.0"
     implementation "com.google.firebase:firebase-database:21.0.0"
     implementation "com.google.firebase:firebase-messaging:24.1.0"
-    implementation "com.google.firebase:firebase-storage:21.0.1"
+    implementation 'com.google.firebase:firebase-storage:21.0.1'
+    
+    // AndroidX Media3 ExoPlayer for Native CinePlayer Service
+    def media3_version = "1.4.1"
+    implementation "androidx.media3:media3-exoplayer:$media3_version"
+    implementation "androidx.media3:media3-ui:$media3_version"
+    implementation "androidx.media3:media3-common:$media3_version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3_version"
+    implementation "androidx.media3:media3-exoplayer-dash:$media3_version"
+
+    // Native YouTube Stream Extractor for CinePlayer
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.5'
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
 }
 apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")

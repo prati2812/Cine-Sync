@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../../config/firebase';
 import colors from '../../theme/Colors';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -31,6 +32,7 @@ const LoginScreen = ({ navigation }) => {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [isEmailFocused, setIsEmailFocused] = useState(false);
   const [isPasswordFocused, setIsPasswordFocused] = useState(false);
 
@@ -39,6 +41,25 @@ const LoginScreen = ({ navigation }) => {
     insets.top,
     Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
   ) + 10;
+
+  // Load remembered email on mount if Remember Me was enabled
+  useEffect(() => {
+    const loadRememberedCredentials = async () => {
+      try {
+        const savedRemember = await AsyncStorage.getItem('@remember_me');
+        if (savedRemember === 'true') {
+          setRememberMe(true);
+          const savedEmail = await AsyncStorage.getItem('@remember_email');
+          if (savedEmail) {
+            setEmail(savedEmail);
+          }
+        }
+      } catch (err) {
+        console.warn('Error loading remembered email:', err);
+      }
+    };
+    loadRememberedCredentials();
+  }, []);
 
   const handleLogin = async () => {
     if (isLoading) return;
@@ -55,6 +76,15 @@ const LoginScreen = ({ navigation }) => {
         password,
       );
       console.log('User signed in:', userCredential.user);
+
+      // Persist or clear remembered email (does NOT save password for security)
+      if (rememberMe) {
+        await AsyncStorage.setItem('@remember_me', 'true');
+        await AsyncStorage.setItem('@remember_email', email.trim());
+      } else {
+        await AsyncStorage.removeItem('@remember_me');
+        await AsyncStorage.removeItem('@remember_email');
+      }
     } catch (error) {
       console.log(error);
       let errorMessage = 'An error occurred during login';
@@ -225,14 +255,27 @@ const LoginScreen = ({ navigation }) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Forgot Password Link */}
-              <TouchableOpacity
-                style={styles.forgotPassBtn}
-                onPress={() => navigation.navigate('ForgetPassword')}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.forgotPassText}>Forgot Password?</Text>
-              </TouchableOpacity>
+              {/* Remember Me & Forgot Password Row */}
+              <View style={styles.rememberForgotRow}>
+                <TouchableOpacity
+                  style={styles.rememberMeBtn}
+                  onPress={() => setRememberMe(!rememberMe)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkboxBox, rememberMe && styles.checkboxBoxChecked]}>
+                    {rememberMe && <MaterialIcons name="check" size={13} color="#FFFFFF" />}
+                  </View>
+                  <Text style={styles.rememberMeText}>Remember me</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.forgotPassBtn}
+                  onPress={() => navigation.navigate('ForgetPassword')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.forgotPassText}>Forgot Password?</Text>
+                </TouchableOpacity>
+              </View>
 
               {/* Primary Actions Row */}
               <View style={styles.actionButtonsRow}>
@@ -444,9 +487,41 @@ const styles = StyleSheet.create({
   eyeToggleBtn: {
     padding: 6,
   },
-  forgotPassBtn: {
-    alignSelf: 'flex-end',
+  rememberForgotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 2,
+    marginTop: -2,
+    marginBottom: 2,
+  },
+  rememberMeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  checkboxBox: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: colors.PRIMARY_COLOR,
+    borderColor: colors.PRIMARY_COLOR,
+  },
+  rememberMeText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  forgotPassBtn: {
+    paddingVertical: 4,
   },
   forgotPassText: {
     fontSize: 12,

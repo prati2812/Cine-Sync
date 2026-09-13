@@ -34,7 +34,7 @@
     "rooms": {
       ".read": "auth != null",
       ".write": "auth != null",
-      ".indexOn": ["createdAt", "isStreaming", "status", "roomId"],
+      ".indexOn": ["createdAt", "isStreaming", "status", "roomId", "genre", "nameLower", "isScheduled"],
       "$roomId": {
         "messages": {
           ".read": "auth != null",
@@ -45,6 +45,21 @@
           ".read": "auth != null",
           ".write": "auth != null",
           ".indexOn": ["timestamp"]
+        }
+      }
+    },
+    "user_rooms": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null",
+        ".indexOn": ["createdAt"]
+      }
+    },
+    "room_presence": {
+      "$roomId": {
+        ".read": "auth != null",
+        "$userId": {
+          ".write": "auth != null && auth.uid === $userId"
         }
       }
     },

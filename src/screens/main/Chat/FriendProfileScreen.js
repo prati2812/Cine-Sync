@@ -162,6 +162,7 @@ const FriendProfileScreen = ({ navigation, route }) => {
   // ── Recent Rooms (Live from Firebase) ─────────────────────
   useEffect(() => {
     if (!targetUserId) return;
+    const currentUser = auth().currentUser;
     const roomsRef = database().ref('rooms');
     const onValue = snapshot => {
       const val = snapshot.val();
@@ -171,17 +172,29 @@ const FriendProfileScreen = ({ navigation, route }) => {
       }
       const participated = Object.values(val).filter(r => {
         if (!r) return false;
-        if (r.creator?.uid === targetUserId || r.creator?.userId === targetUserId) return true;
-        if (r.participants && typeof r.participants === 'object') {
-          return Object.keys(r.participants).includes(targetUserId);
+        const isTargetHost = r.creator?.uid === targetUserId || r.creator?.userId === targetUserId;
+        const isTargetParticipant =
+          (r.participants && typeof r.participants === 'object' && Object.keys(r.participants).includes(targetUserId)) ||
+          (Array.isArray(r.participants) && profileData?.email && r.participants.includes(profileData.email));
+
+        if (!isTargetHost && !isTargetParticipant) return false;
+
+        // Privacy rule: If room is private, only show if visiting user is host or invited participant
+        if (r.isPrivate) {
+          const isVisitorHost = r.creator?.uid === currentUser?.uid || r.creator?.email === currentUser?.email;
+          const isVisitorParticipant =
+            (Array.isArray(r.participants) && currentUser?.email && r.participants.includes(currentUser.email)) ||
+            (r.participants && typeof r.participants === 'object' && currentUser?.uid && Object.keys(r.participants).includes(currentUser.uid));
+          return isVisitorHost || isVisitorParticipant;
         }
-        return false;
+
+        return true;
       });
       setRecentRooms(participated.slice(0, 3));
     };
     roomsRef.on('value', onValue);
     return () => roomsRef.off('value', onValue);
-  }, [targetUserId]);
+  }, [targetUserId, profileData?.email]);
 
   // ── Actions ───────────────────────────────────────────────
   const handleMessage = () => {

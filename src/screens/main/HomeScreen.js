@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -31,6 +31,9 @@ import Swipeable from 'react-native-gesture-handler/Swipeable';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../theme/Colors';
 import { getYouTubeThumbnailDetails } from '../../functions';
+import JoinByCodeModal from '../../components/JoinByCodeModal';
+import CinemaSearchModal from '../../components/CinemaSearchModal';
+import PrivateRoomPinModal from '../../components/PrivateRoomPinModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -227,10 +230,11 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
 const HomeScreen = () => {
   const [rooms, setRooms] = useState([]);
   const [filterType, setFilterType] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('newest');
-  const [searchFocused, setSearchFocused] = useState(false);
-  const [roomCodeInput, setRoomCodeInput] = useState('');
+  const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
+  const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
+  const [isPinModalVisible, setIsPinModalVisible] = useState(false);
+  const [selectedPrivateRoom, setSelectedPrivateRoom] = useState(null);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
 
@@ -249,34 +253,73 @@ const HomeScreen = () => {
     opacity: pulseOpacity.value,
   }));
 
-  // Fetch rooms from Firebase
+  // Scalable Room Fetching for 20M / 5M DAU scale:
+  // 1. Listen to user's personal rooms at user_rooms/${currentUser.uid} (O(1) bandwidth)
+  // 2. Query recent screening rooms with limitToLast(50) indexed on createdAt
   useEffect(() => {
-    const roomsRef = database().ref('rooms');
     const currentUser = auth().currentUser;
     if (!currentUser) return;
 
-    const unsubscribe = roomsRef.on('value', (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const roomsArray = Object.values(data).filter(room => {
-          const isCreator = room.creator.email === currentUser.email;
-          const isParticipant = room.participants?.includes(currentUser.email);
-          return isCreator || isParticipant;
+    let userRoomsMap = {};
+    let recentRoomsMap = {};
+
+    const syncCombinedRooms = () => {
+      const mergedMap = { ...userRoomsMap, ...recentRoomsMap };
+      const roomsArray = Object.values(mergedMap).filter(room => {
+        if (!room) return false;
+        const isCreator =
+          room.creator?.email === currentUser.email ||
+          room.creator?.uid === currentUser.uid;
+        const isParticipant = room.participants?.includes(currentUser.email);
+        return isCreator || isParticipant;
+      });
+      const roomsWithDates = roomsArray.map(room => ({
+        ...room,
+        createdAt: room.createdAt || new Date().toISOString(),
+      }));
+      setRooms(roomsWithDates);
+    };
+
+    // User's dedicated room partition (O(1) isolated read)
+    const userRoomsRef = database().ref(`user_rooms/${currentUser.uid}`);
+    const userRoomsSub = userRoomsRef.on('value', async snapshot => {
+      const val = snapshot.val() || {};
+      const roomIds = Object.keys(val);
+      if (roomIds.length === 0) {
+        userRoomsMap = {};
+        syncCombinedRooms();
+        return;
+      }
+      try {
+        const promises = roomIds.map(id => database().ref(`rooms/${id}`).once('value'));
+        const snapshots = await Promise.all(promises);
+        const fetched = {};
+        snapshots.forEach(s => {
+          const r = s.val();
+          if (r && r.roomId) fetched[r.roomId] = r;
         });
-        const roomsWithDates = roomsArray.map(room => ({
-          ...room,
-          createdAt: room.createdAt || new Date().toISOString(),
-        }));
-        setRooms(roomsWithDates);
-      } else {
-        setRooms([]);
+        userRoomsMap = fetched;
+        syncCombinedRooms();
+      } catch (err) {
+        console.warn('Failed to load user rooms details:', err);
       }
     });
 
-    return () => roomsRef.off('value', unsubscribe);
+    // Recent screening rooms limit query (indexed on createdAt)
+    const recentRoomsQuery = database().ref('rooms').orderByChild('createdAt').limitToLast(50);
+    const recentRoomsSub = recentRoomsQuery.on('value', snapshot => {
+      const data = snapshot.val() || {};
+      recentRoomsMap = data;
+      syncCombinedRooms();
+    });
+
+    return () => {
+      userRoomsRef.off('value', userRoomsSub);
+      recentRoomsQuery.off('value', recentRoomsSub);
+    };
   }, []);
 
-  // Delete Room Logic
+  // Delete Room Logic with multi-path atomic purge
   const deleteRoom = async (roomId) => {
     try {
       const currentUser = auth().currentUser;
@@ -284,7 +327,13 @@ const HomeScreen = () => {
       const roomSnapshot = await roomRef.once('value');
       const roomData = roomSnapshot.val();
 
-      if (roomData.creator.email !== currentUser.email) {
+      if (!roomData) return;
+
+      const isCreator =
+        roomData.creator?.email === currentUser?.email ||
+        roomData.creator?.uid === currentUser?.uid;
+
+      if (!isCreator) {
         Alert.alert('Error', 'Only the room creator can delete this room');
         return;
       }
@@ -295,7 +344,10 @@ const HomeScreen = () => {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            await roomRef.set(null);
+            const updates = {};
+            updates[`rooms/${roomId}`] = null;
+            updates[`user_rooms/${currentUser.uid}/${roomId}`] = null;
+            await database().ref().update(updates);
             Alert.alert('Done', 'Room deleted successfully');
           },
         },
@@ -306,53 +358,18 @@ const HomeScreen = () => {
     }
   };
 
-  // Join Room by Code
-  const handleJoinByCode = async () => {
-    if (!roomCodeInput.trim()) {
-      Alert.alert('Room Code Required', 'Please enter a valid room code.');
-      return;
-    }
-    const code = roomCodeInput.trim();
-    try {
-      const roomRef = database().ref(`rooms/${code}`);
-      const snapshot = await roomRef.once('value');
-      if (snapshot.exists()) {
-        const roomData = snapshot.val();
-        setRoomCodeInput('');
-        onRoomPress(roomData);
-      } else {
-        // Search by roomId property
-        const allRoomsRef = database().ref('rooms');
-        const allSnapshot = await allRoomsRef.once('value');
-        const allData = allSnapshot.val();
-        let foundRoom = null;
-        if (allData) {
-          foundRoom = Object.values(allData).find(
-            r => r.roomId === code || r.name.toLowerCase() === code.toLowerCase()
-          );
-        }
-        if (foundRoom) {
-          setRoomCodeInput('');
-          onRoomPress(foundRoom);
-        } else {
-          Alert.alert('Room Not Found', `No active room found with code "${code}".`);
-        }
-      }
-    } catch (err) {
-      console.error('Error joining room by code:', err);
-      Alert.alert('Error', 'Unable to join room. Please check the code.');
-    }
-  };
-
-  const onRoomPress = (item) => {
+  const navigateToRoom = (item) => {
     const currentUser = auth().currentUser;
-    const isCreator = item.creator.email === currentUser?.email;
+    const isCreator =
+      item.creator?.email === currentUser?.email ||
+      item.creator?.uid === currentUser?.uid;
 
     if (item.isStreaming) {
       navigation.navigate('Streaming', {
         roomId: item.roomId,
         roomName: item.name,
         streamUrl: item.streamUrl,
+        thumbnail: item.thumbnail,
       });
       return;
     }
@@ -363,12 +380,16 @@ const HomeScreen = () => {
           roomId: item.roomId,
           roomName: item.name,
           streamUrl: item.streamUrl,
+          thumbnail: item.thumbnail,
         });
       } else {
         navigation.navigate('WaitingScreen', {
           roomId: item.roomId,
           roomName: item.name,
           streamUrl: item.streamUrl,
+          thumbnail: item.thumbnail,
+          isScheduled: item.isScheduled,
+          scheduledDate: item.scheduledDate,
         });
       }
     } else {
@@ -376,44 +397,61 @@ const HomeScreen = () => {
         roomId: item.roomId,
         roomName: item.name,
         streamUrl: item.streamUrl,
+        thumbnail: item.thumbnail,
+        isScheduled: item.isScheduled,
+        scheduledDate: item.scheduledDate,
       });
     }
   };
 
-  // Filter & Sort Logic
-  const getFilteredRooms = () => {
+  const onRoomPress = (item) => {
+    const currentUser = auth().currentUser;
+    const isCreator =
+      item.creator?.email === currentUser?.email ||
+      item.creator?.uid === currentUser?.uid;
+
+    // If private room with PIN and clicked by guest -> Prompt for PIN!
+    if (item.isPrivate && item.pin && !isCreator) {
+      setSelectedPrivateRoom(item);
+      setIsPinModalVisible(true);
+      return;
+    }
+
+    navigateToRoom(item);
+  };
+
+  // Filter & Sort Logic (Optimized with useMemo for Zero-Lag)
+  const filtered = useMemo(() => {
     const currentUser = auth().currentUser;
     if (!currentUser) return [];
 
-    let filteredRooms = [...rooms];
+    let list = [...rooms];
+
     if (filterType === 'created') {
-      filteredRooms = rooms.filter(room => room.creator.email === currentUser.email);
+      list = list.filter(r => r.creator?.email === currentUser.email);
     } else if (filterType === 'invited') {
-      filteredRooms = rooms.filter(
-        room => room.creator.email !== currentUser.email && room.participants?.includes(currentUser.email)
+      list = list.filter(
+        r => r.creator?.email !== currentUser.email && r.participants?.includes(currentUser.email)
       );
+    } else if (filterType === 'live') {
+      list = list.filter(r => r.isStreaming || r.status === 'active');
+    } else if (filterType === 'scheduled') {
+      list = list.filter(r => r.isScheduled || r.status === 'scheduled');
     }
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      filteredRooms = filteredRooms.filter(
-        room => room.name.toLowerCase().includes(q) || room.creator.email.toLowerCase().includes(q)
-      );
-    }
-
-    return filteredRooms.sort((a, b) => {
+    return list.sort((a, b) => {
       switch (sortBy) {
         case 'newest':
-          return new Date(b.createdAt) - new Date(a.createdAt);
+          return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
         case 'oldest':
-          return new Date(a.createdAt) - new Date(b.createdAt);
+          return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
         case 'alphabetical':
-          return a.name.localeCompare(b.name);
+          return (a.name || '').localeCompare(b.name || '');
         default:
           return 0;
       }
     });
-  };
+  }, [rooms, filterType, sortBy]);
 
   const sortLabels = { newest: 'Newest', oldest: 'Oldest', alphabetical: 'A-Z' };
   const cycleSortBy = () => {
@@ -421,7 +459,6 @@ const HomeScreen = () => {
     setSortBy(next[sortBy]);
   };
 
-  const filtered = getFilteredRooms();
   const currentUser = auth().currentUser;
 
   // Handle Hero Banner Join Party Action
@@ -473,16 +510,37 @@ const HomeScreen = () => {
             </View>
           </View>
 
-          {/* Profile Shortcut */}
-          <TouchableOpacity
-            style={styles.profileAvatarBtn}
-            onPress={() => navigation.navigate('Profile')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.profileAvatarBox}>
-              <Ionicons name="person" size={17} color={colors.TITLE_COLOR} />
-            </View>
-          </TouchableOpacity>
+          {/* Header Right Actions */}
+          <View style={styles.headerRightActions}>
+            {/* Cinema Spotlight Search Trigger */}
+            <TouchableOpacity
+              style={styles.headerSearchBtn}
+              onPress={() => setIsSearchModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="search" size={20} color={colors.TITLE_COLOR} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerCodeBtn}
+              onPress={() => setIsJoinModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="pin" size={16} color={colors.CYAN_ACCENT} />
+              <Text style={styles.headerCodeBtnText}>Enter Code</Text>
+            </TouchableOpacity>
+
+            {/* Profile Shortcut */}
+            <TouchableOpacity
+              style={styles.profileAvatarBtn}
+              onPress={() => navigation.navigate('Profile')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.profileAvatarBox}>
+                <Ionicons name="person" size={17} color={colors.TITLE_COLOR} />
+              </View>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -490,84 +548,6 @@ const HomeScreen = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* ── SEARCH & FILTER CONTROLS ──────────────────────────── */}
-        <View style={styles.searchSection}>
-          <View style={[styles.searchBox, searchFocused && styles.searchBoxFocused]}>
-            <MaterialIcons
-              name="search"
-              size={20}
-              color={searchFocused ? '#1D8CF8' : '#707693'}
-              style={{ marginRight: 10 }}
-            />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search rooms..."
-              placeholderTextColor="#5F647D"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
-                <MaterialIcons name="close" size={18} color="#707693" />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Filter Chips */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterScroll}
-          >
-            {[
-              { key: 'all', label: 'All Rooms', icon: 'apps' },
-              { key: 'created', label: 'My Rooms', icon: 'movie-creation' },
-              { key: 'invited', label: 'Invited', icon: 'group' },
-            ].map(f => {
-              const isActive = filterType === f.key;
-              return (
-                <TouchableOpacity
-                  key={f.key}
-                  activeOpacity={0.8}
-                  onPress={() => setFilterType(f.key)}
-                  style={styles.filterChipWrap}
-                >
-                  {isActive ? (
-                    <LinearGradient
-                      colors={['#1D8CF8', '#0052FF']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.filterChipActive}
-                    >
-                      <MaterialIcons name={f.icon} size={16} color="#FFF" />
-                      <Text style={styles.filterChipTextActive}>{f.label}</Text>
-                    </LinearGradient>
-                  ) : (
-                    <View style={styles.filterChip}>
-                      <MaterialIcons name={f.icon} size={16} color="#94A3B8" />
-                      <Text style={styles.filterChipText}>{f.label}</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-
-          {/* Sort & Room Count */}
-          <View style={styles.sortRow}>
-            <TouchableOpacity activeOpacity={0.7} style={styles.sortBtn} onPress={cycleSortBy}>
-              <MaterialIcons name="sort" size={16} color="#FBBF24" />
-              <Text style={styles.sortLabel}>{sortLabels[sortBy]}</Text>
-              <MaterialIcons name="swap-vert" size={14} color="#94A3B8" />
-            </TouchableOpacity>
-            <Text style={styles.roomCount}>
-              {filtered.length} {filtered.length === 1 ? 'room' : 'rooms'}
-            </Text>
-          </View>
-        </View>
-
         {/* ── HERO FEATURED WATCH PARTY ──────────────────────────── */}
         {filtered.length > 0 ? (
           (() => {
@@ -717,25 +697,71 @@ const HomeScreen = () => {
           </View>
         )}
 
-        {/* ── JOIN VIA ROOM CODE ─────────────────────────────────── */}
-        <View style={styles.codeSection}>
-          <View style={styles.codeInputBox}>
-            <MaterialIcons name="tag" size={22} color="#4CD7F6" style={{ marginRight: 6 }} />
-            <TextInput
-              style={styles.codeInput}
-              placeholder="Enter 6-digit Room Code..."
-              placeholderTextColor="#64748B"
-              value={roomCodeInput}
-              onChangeText={text => setRoomCodeInput(text.toUpperCase())}
-              autoCapitalize="characters"
-              maxLength={8}
-            />
+        {/* ── CINEMA CATEGORY FILTERS & QUICK SORT ROW ───────────── */}
+        <View style={styles.categoryFilterSection}>
+          <View style={styles.categoryFilterRow}>
+            <View style={styles.categoryScrollContainer}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.filterScroll}
+              >
+                {[
+                  { key: 'all', label: 'All Rooms', icon: 'apps' },
+                  { key: 'live', label: 'Live Now', icon: 'stream', isLive: true },
+                  { key: 'created', label: 'My Rooms', icon: 'movie-creation' },
+                  { key: 'invited', label: 'Invited', icon: 'group' },
+                  { key: 'scheduled', label: 'Scheduled', icon: 'event' },
+                ].map(f => {
+                  const isActive = filterType === f.key;
+                  return (
+                    <TouchableOpacity
+                      key={f.key}
+                      activeOpacity={0.8}
+                      onPress={() => setFilterType(f.key)}
+                      style={styles.filterChipWrap}
+                    >
+                      {isActive ? (
+                        <LinearGradient
+                          colors={[colors.PRIMARY_COLOR, '#0052FF']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.filterChipActive}
+                        >
+                          <MaterialIcons name={f.icon} size={15} color="#FFF" />
+                          <Text style={styles.filterChipTextActive}>{f.label}</Text>
+                        </LinearGradient>
+                      ) : (
+                        <View style={styles.filterChip}>
+                          <MaterialIcons
+                            name={f.icon}
+                            size={15}
+                            color={f.isLive ? colors.LIVE_RED : colors.SUB_TITLE_COLOR}
+                          />
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              f.isLive && { color: colors.LIVE_RED, fontWeight: '700' },
+                            ]}
+                          >
+                            {f.label}
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            {/* Compact Sort Button */}
             <TouchableOpacity
-              activeOpacity={0.8}
-              style={styles.codeJoinBtn}
-              onPress={handleJoinByCode}
+              activeOpacity={0.75}
+              style={styles.sortBtnCompact}
+              onPress={cycleSortBy}
             >
-              <Text style={styles.codeJoinText}>Join</Text>
+              <MaterialIcons name="sort" size={16} color={colors.FILM_GOLD} />
+              <Text style={styles.sortLabelCompact}>{sortLabels[sortBy]}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -746,6 +772,9 @@ const HomeScreen = () => {
             <View style={styles.activeTitleWrap}>
               <MaterialIcons name="stream" size={20} color="#1D8CF8" />
               <Text style={styles.activeTitle}>Active Rooms</Text>
+              <View style={styles.roomCountBadge}>
+                <Text style={styles.roomCountText}>{filtered.length}</Text>
+              </View>
             </View>
             <Text style={styles.activeSubtitle}>Live Now</Text>
           </View>
@@ -772,13 +801,22 @@ const HomeScreen = () => {
                 <Ionicons name="film-outline" size={34} color="#FBBF24" />
               </View>
               <Text style={styles.emptyTitle}>
-                {searchQuery ? 'No matching rooms found' : 'No Active Rooms'}
+                {filterType !== 'all' ? 'No Rooms in This Category' : 'No Active Rooms'}
               </Text>
               <Text style={styles.emptySub}>
-                {searchQuery
-                  ? 'Try a different search keyword'
+                {filterType !== 'all'
+                  ? 'Switch categories above or tap 🔍 to search all screenings.'
                   : 'Tap the + button to create your first watch party!'}
               </Text>
+              {filterType !== 'all' && (
+                <TouchableOpacity
+                  style={styles.emptyResetBtn}
+                  onPress={() => setFilterType('all')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.emptyResetText}>View All Rooms</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>
@@ -799,6 +837,37 @@ const HomeScreen = () => {
           <MaterialIcons name="add" size={32} color="#FFF" />
         </LinearGradient>
       </TouchableOpacity>
+
+      {/* ── 6-DIGIT JOIN BY CODE MODAL (Isolated State & Zero-Lag) ── */}
+      <JoinByCodeModal
+        visible={isJoinModalVisible}
+        onClose={() => setIsJoinModalVisible(false)}
+        onJoinRoom={onRoomPress}
+      />
+
+      {/* ── CINEMA SPOTLIGHT SEARCH MODAL (Concept 3 - Isolated Zero-Lag) ── */}
+      <CinemaSearchModal
+        visible={isSearchModalVisible}
+        onClose={() => setIsSearchModalVisible(false)}
+        rooms={rooms}
+        onSelectRoom={onRoomPress}
+        currentUserEmail={currentUser?.email}
+      />
+
+      {/* ── PRIVATE ROOM PIN VERIFICATION MODAL ── */}
+      <PrivateRoomPinModal
+        visible={isPinModalVisible}
+        room={selectedPrivateRoom}
+        onClose={() => {
+          setIsPinModalVisible(false);
+          setSelectedPrivateRoom(null);
+        }}
+        onSuccess={targetRoom => {
+          setIsPinModalVisible(false);
+          setSelectedPrivateRoom(null);
+          navigateToRoom(targetRoom);
+        }}
+      />
     </View>
   );
 };
@@ -870,6 +939,28 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     marginLeft: 4,
   },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerCodeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    gap: 5,
+  },
+  headerCodeBtnText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
   profileAvatarBtn: {
     padding: 2,
   },
@@ -883,98 +974,98 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
-  // ── Search & Filters ──────────────
-  searchSection: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    gap: 10,
+  headerSearchBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  searchBox: {
+
+  // ── Cinema Category Filters & Quick Sort Row ──────
+  categoryFilterSection: {
+    paddingHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  categoryFilterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#121320',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    height: 46,
-    borderWidth: 1,
-    borderColor: '#202236',
+    gap: 8,
   },
-  searchBoxFocused: {
-    borderColor: '#1D8CF8',
-    backgroundColor: '#161726',
-  },
-  searchInput: {
+  categoryScrollContainer: {
     flex: 1,
-    color: '#E4E1ED',
-    fontSize: 14,
-    fontWeight: '400',
   },
-
+  sortBtnCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 36,
+    paddingHorizontal: 10,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    gap: 5,
+  },
+  sortLabelCompact: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '700',
+  },
   filterScroll: {
     gap: 8,
     paddingVertical: 2,
   },
   filterChipWrap: {
-    borderRadius: 14,
+    borderRadius: 12,
     overflow: 'hidden',
   },
   filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: '#161726',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
     borderWidth: 1,
-    borderColor: '#23263B',
+    borderColor: colors.BORDER_SUBTLE,
     gap: 6,
   },
   filterChipActive: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 12,
     gap: 6,
   },
   filterChipText: {
-    color: '#CBD5E1',
-    fontSize: 13,
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
     fontWeight: '600',
   },
   filterChipTextActive: {
-    color: '#FFF',
-    fontSize: 13,
+    color: '#FFFFFF',
+    fontSize: 12,
     fontWeight: '700',
   },
-
-  sortRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 4,
-  },
-  sortBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: '#161726',
-    borderRadius: 10,
+  roomCountBadge: {
+    backgroundColor: 'rgba(0, 122, 255, 0.12)',
     borderWidth: 1,
-    borderColor: '#23263B',
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sortLabel: {
-    color: '#E2E8F0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  roomCount: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '500',
+  roomCountText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   // ── Hero Banner ───────────────────
@@ -1127,41 +1218,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 14,
-  },
-
-  // ── Code Section ──────────────────
-  codeSection: {
-    paddingHorizontal: 16,
-    marginTop: 14,
-  },
-  codeInputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#131422',
-    borderRadius: 16,
-    paddingLeft: 14,
-    paddingRight: 6,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#1F2136',
-  },
-  codeInput: {
-    flex: 1,
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-  codeJoinBtn: {
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 12,
-  },
-  codeJoinText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700',
   },
 
   // ── Active Section ────────────────
@@ -1343,6 +1399,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  emptyResetBtn: {
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+  },
+  emptyResetText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
   },
 
   // ── FAB ───────────────────────────

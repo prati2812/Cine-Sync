@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,8 @@ import {
   Share,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import YoutubePlayer from 'react-native-youtube-iframe';
+import CineVideoPlayer from '../../../components/video/CineVideoPlayer';
+import { getStreamBadgeInfo } from '../../../services/video/VideoPlayerService';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -103,8 +104,8 @@ const StreamingScreen = ({ route, navigation }) => {
   const [isCreator, setIsCreator] = useState(false);
   const [roomData, setRoomData] = useState(null);
 
-  // Adaptive Switcher: 'notes' (Solo) vs 'chat' (Party)
-  const [activeMode, setActiveMode] = useState('notes');
+  // Adaptive Switcher: 'chat' (Party Default) vs 'notes' (Solo)
+  const [activeMode, setActiveMode] = useState('chat');
   const hasAutoSetDefaultModeRef = useRef(false);
 
   // Chat State
@@ -162,42 +163,16 @@ const StreamingScreen = ({ route, navigation }) => {
     }
   };
 
-  const getYoutubeVideoId = url => {
-    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    const match = url?.match(regExp);
-    return match && match[7].length === 11 ? match[7] : false;
-  };
-
-  const videoId = getYoutubeVideoId(streamUrl);
-
   useEffect(() => {
-    if (!videoId) {
-      Alert.alert('Invalid URL', 'The provided YouTube URL is not valid.', [
+    if (!streamUrl || !streamUrl.trim()) {
+      Alert.alert('Invalid Stream', 'No streaming URL provided for this room.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     }
-  }, [videoId, navigation]);
+  }, [streamUrl, navigation]);
 
   const [creatorLeft, setCreatorLeft] = useState(false);
-
-  // Track playback time & duration periodically
-  useEffect(() => {
-    let interval;
-    if (playing) {
-      interval = setInterval(async () => {
-        if (!playerRef.current) return;
-        try {
-          const t = await playerRef.current.getCurrentTime();
-          const d = await playerRef.current.getDuration();
-          if (typeof t === 'number') setCurrentTime(t);
-          if (typeof d === 'number' && d > 0) setDuration(d);
-        } catch (e) {
-          // ignore
-        }
-      }, 500);
-    }
-    return () => interval && clearInterval(interval);
-  }, [playing]);
+  const streamBadge = useMemo(() => getStreamBadgeInfo(streamUrl), [streamUrl]);
 
   // Auto-hide controls overlay after 3.5s
   const resetControlsTimeout = () => {
@@ -269,14 +244,10 @@ const StreamingScreen = ({ route, navigation }) => {
       }
       setParticipantProfiles(profiles);
 
-      // Adaptive default: only set ONCE on initial load so user can freely switch tabs
+      // Default to Party Chat on initial load
       if (!hasAutoSetDefaultModeRef.current) {
         hasAutoSetDefaultModeRef.current = true;
-        if (uniqueEmails.length <= 1) {
-          setActiveMode('notes');
-        } else {
-          setActiveMode('chat');
-        }
+        setActiveMode('chat');
       }
     };
 
@@ -366,15 +337,17 @@ const StreamingScreen = ({ route, navigation }) => {
 
       if (playerRef.current) {
         if (data.isPlaying) {
+          playerRef.current.play();
           const elapsed = (Date.now() - data.updatedAt) / 1000;
-          const targetTime = data.currentTime + elapsed;
+          const targetTime = (data.currentTime || 0) + elapsed;
           playerRef.current.getCurrentTime().then(viewerTime => {
-            if (Math.abs(viewerTime - targetTime) > 1.5) {
-              playerRef.current.seekTo(targetTime, true);
+            if (Math.abs((viewerTime || 0) - targetTime) > 1.5) {
+              playerRef.current.seekTo(targetTime);
             }
           });
         } else {
-          await playerRef.current.seekTo(data.currentTime, true);
+          playerRef.current.pause();
+          playerRef.current.seekTo(data.currentTime || 0);
         }
       }
       isSyncingRef.current = false;
@@ -439,7 +412,7 @@ const StreamingScreen = ({ route, navigation }) => {
 
   const handleSeekToNote = seconds => {
     if (!playerRef.current) return;
-    playerRef.current.seekTo(seconds, true);
+    playerRef.current.seekTo(seconds);
     setCurrentTime(seconds);
     if (isCreator) {
       debouncedPushPlaybackState(playing);
@@ -522,6 +495,13 @@ const StreamingScreen = ({ route, navigation }) => {
   const togglePlayPause = () => {
     const next = !playing;
     setPlaying(next);
+    if (playerRef.current) {
+      if (next) {
+        playerRef.current.play();
+      } else {
+        playerRef.current.pause();
+      }
+    }
     if (isCreator) {
       pushPlaybackState(next);
     }
@@ -530,9 +510,9 @@ const StreamingScreen = ({ route, navigation }) => {
   const handleRewind10 = async () => {
     if (!playerRef.current) return;
     try {
-      const t = await playerRef.current.getCurrentTime();
+      const t = (await playerRef.current.getCurrentTime()) || currentTime || 0;
       const target = Math.max(0, t - 10);
-      playerRef.current.seekTo(target, true);
+      playerRef.current.seekTo(target);
       setCurrentTime(target);
       if (isCreator) debouncedPushPlaybackState(playing);
     } catch (e) {}
@@ -541,9 +521,9 @@ const StreamingScreen = ({ route, navigation }) => {
   const handleForward10 = async () => {
     if (!playerRef.current) return;
     try {
-      const t = await playerRef.current.getCurrentTime();
+      const t = (await playerRef.current.getCurrentTime()) || currentTime || 0;
       const target = t + 10;
-      playerRef.current.seekTo(target, true);
+      playerRef.current.seekTo(target);
       setCurrentTime(target);
       if (isCreator) debouncedPushPlaybackState(playing);
     } catch (e) {}
@@ -560,6 +540,19 @@ const StreamingScreen = ({ route, navigation }) => {
       }
     }
     navigation.goBack();
+  };
+
+  const handleShareScreening = async () => {
+    try {
+      const cleanCode = (roomId || '').replace('room_', '');
+      const pinText = roomData?.isPrivate && roomData?.pin ? `\nAccess PIN: ${roomData.pin}` : '';
+      await Share.share({
+        title: `Cine-Sync: ${roomTitle}`,
+        message: `🎬 Join my Cine-Sync Watch Party "${roomTitle}" in Live Sync!\nRoom Code: #${cleanCode}${pinText}\nLaunch Cine-Sync to watch together!`,
+      });
+    } catch (e) {
+      console.log('Error sharing screening:', e);
+    }
   };
 
   const roomTitle = roomData?.name || initialRoomName || 'Screening Room';
@@ -591,10 +584,10 @@ const StreamingScreen = ({ route, navigation }) => {
           <View style={styles.headerLeft}>
             <TouchableOpacity
               onPress={handleGoBack}
-              style={styles.backBtnCircle}
+              style={styles.backBtnSquircle}
               activeOpacity={0.75}
             >
-              <MaterialIcons name="arrow-back-ios-new" size={17} color={colors.TITLE_COLOR} />
+              <MaterialIcons name="arrow-back-ios-new" size={16} color={colors.TITLE_COLOR} />
             </TouchableOpacity>
 
             <View style={styles.headerTitleCol}>
@@ -603,11 +596,11 @@ const StreamingScreen = ({ route, navigation }) => {
                   {roomTitle}
                 </Text>
                 <View style={styles.hdrTag}>
-                  <Text style={styles.hdrTagText}>4K HDR</Text>
+                  <Text style={styles.hdrTagText}>{streamBadge.protocol || '4K HDR'}</Text>
                 </View>
               </View>
               <Text style={styles.headerSubtitleText}>
-                Live Sync Theater #{shortRoomId}
+                Live Sync Room #{shortRoomId}
               </Text>
             </View>
           </View>
@@ -621,18 +614,10 @@ const StreamingScreen = ({ route, navigation }) => {
 
             <TouchableOpacity
               style={styles.headerActionBtn}
-              onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
+              onPress={handleShareScreening}
               activeOpacity={0.75}
             >
-              <MaterialIcons name="screen-share" size={18} color={colors.SUB_TITLE_COLOR} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.headerActionBtn}
-              onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
-              activeOpacity={0.75}
-            >
-              <MaterialIcons name="tune" size={18} color={colors.CYAN_ACCENT} />
+              <MaterialIcons name="share" size={18} color={colors.PRIMARY_COLOR} />
             </TouchableOpacity>
           </View>
         </View>
@@ -646,55 +631,30 @@ const StreamingScreen = ({ route, navigation }) => {
           { height: isLandscape ? height : VIDEO_HEIGHT },
         ]}
       >
+        {/* Universal Video Engine (Zero Controls, Plays YouTube & Custom Streams) */}
+        <CineVideoPlayer
+          ref={playerRef}
+          url={streamUrl}
+          playing={playing}
+          onProgress={({ currentTime: cur, duration: dur }) => {
+            if (typeof cur === 'number') setCurrentTime(cur);
+            if (typeof dur === 'number' && dur > 0) setDuration(dur);
+          }}
+          onStateChange={({ isPlaying }) => {
+            if (typeof isPlaying === 'boolean' && isPlaying !== playing) {
+              setPlaying(isPlaying);
+              if (isCreator) debouncedPushPlaybackState(isPlaying);
+            }
+          }}
+          style={StyleSheet.absoluteFill}
+        />
+
+        {/* Tap backdrop to toggle Cine-Sync controls */}
         <TouchableOpacity
           style={StyleSheet.absoluteFill}
           activeOpacity={1}
           onPress={resetControlsTimeout}
-        >
-          {videoId ? (
-            <YoutubePlayer
-              ref={playerRef}
-              height={isLandscape ? height : VIDEO_HEIGHT}
-              width={width}
-              play={playing}
-              videoId={videoId}
-              initialPlayerParams={{
-                controls: 0,
-                modestbranding: 1,
-                preventFullScreen: false,
-                rel: 0,
-              }}
-              onChangeState={state => {
-                if (state === 'playing') {
-                  setPlaying(true);
-                  if (isCreator) debouncedPushPlaybackState(true);
-                } else if (state === 'paused') {
-                  setPlaying(false);
-                  if (isCreator) pushPlaybackState(false);
-                }
-              }}
-            />
-          ) : (
-            <View style={styles.errorVideo}>
-              <Text style={{ color: colors.TITLE_COLOR }}>Invalid Video Stream</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        {/* Live Sync Telemetry Watermarks */}
-        <View style={styles.telemetryWatermarkBar} pointerEvents="none">
-          <View style={styles.syncBufferBadge}>
-            <Animated.View style={[styles.syncBufferDot, { opacity: syncPulseAnim }]} />
-            <Text style={styles.syncBufferText}>SYNC BUFFER: 0.08s</Text>
-          </View>
-          <View style={styles.spatialAudioBadge}>
-            <Text style={styles.spatialAudioText}>SPATIAL 3D</Text>
-          </View>
-        </View>
-
-        <View style={styles.resolutionTag} pointerEvents="none">
-          <Text style={styles.resolutionText}>1080p 60fps</Text>
-        </View>
+        />
 
         {/* Video Overlays: Host Paused */}
         {creatorLeft && (
@@ -708,6 +668,27 @@ const StreamingScreen = ({ route, navigation }) => {
         {/* Player Controls Overlay */}
         {showControls && (
           <View style={styles.controlsOverlay} pointerEvents="box-none">
+            {/* Top Bar inside Overlay */}
+            <View style={styles.overlayTopBar}>
+              <View style={styles.overlaySyncPill}>
+                <Animated.View style={[styles.syncBufferDot, { opacity: syncPulseAnim }]} />
+                <Text style={styles.overlaySyncText}>Live Synced</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.fullscreenBtn}
+                onPress={toggleFullscreen}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons
+                  name={isLandscape ? 'fullscreen-exit' : 'fullscreen'}
+                  size={20}
+                  color="#FFF"
+                />
+              </TouchableOpacity>
+            </View>
+
+            {/* Center Controls */}
             <View style={styles.centerControlsRow}>
               {/* -10s */}
               <TouchableOpacity
@@ -715,23 +696,23 @@ const StreamingScreen = ({ route, navigation }) => {
                 onPress={handleRewind10}
                 activeOpacity={0.8}
               >
-                <MaterialIcons name="replay-10" size={20} color={colors.TITLE_COLOR} />
+                <MaterialIcons name="replay-10" size={22} color="#FFF" />
               </TouchableOpacity>
 
-              {/* Play / Pause with Gradient */}
+              {/* Play / Pause with Gradient Squircle */}
               <TouchableOpacity
                 style={styles.playPauseGlowBtn}
                 onPress={togglePlayPause}
                 activeOpacity={0.85}
               >
                 <LinearGradient
-                  colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                  colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
                   style={styles.playPauseGradient}
                 >
                   <MaterialIcons
                     name={playing ? 'pause' : 'play-arrow'}
-                    size={28}
-                    color={colors.TITLE_COLOR}
+                    size={30}
+                    color="#FFF"
                   />
                 </LinearGradient>
               </TouchableOpacity>
@@ -742,7 +723,7 @@ const StreamingScreen = ({ route, navigation }) => {
                 onPress={handleForward10}
                 activeOpacity={0.8}
               >
-                <MaterialIcons name="forward-10" size={20} color={colors.TITLE_COLOR} />
+                <MaterialIcons name="forward-10" size={22} color="#FFF" />
               </TouchableOpacity>
             </View>
 
@@ -760,14 +741,8 @@ const StreamingScreen = ({ route, navigation }) => {
                   <Text style={styles.timeTotalText}>{formatTime(duration)}</Text>
                   <View style={styles.syncLockBadge}>
                     <Animated.View style={[styles.syncLockDot, { opacity: syncPulseAnim }]} />
-                    <Text style={styles.syncLockText}>Sync Lock</Text>
+                    <Text style={styles.syncLockText}>Sync Locked</Text>
                   </View>
-                </View>
-
-                <View style={styles.telemetryQuickBtns}>
-                  <TouchableOpacity onPress={toggleFullscreen} activeOpacity={0.75}>
-                    <MaterialIcons name="fullscreen" size={18} color={colors.CYAN_ACCENT} />
-                  </TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -784,34 +759,7 @@ const StreamingScreen = ({ route, navigation }) => {
       {!isLandscape && (
         <View style={styles.stateSwitcherDock}>
           <View style={styles.stateSwitcherContainer}>
-            {/* Solo Notes Tab */}
-            <TouchableOpacity
-              style={[
-                styles.switcherTabBtn,
-                activeMode === 'notes' && styles.switcherTabActive,
-              ]}
-              onPress={() => setActiveMode('notes')}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons
-                name="edit-note"
-                size={18}
-                color={activeMode === 'notes' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
-              />
-              <Text
-                style={[
-                  styles.switcherTabText,
-                  activeMode === 'notes' && styles.switcherTabTextActive,
-                ]}
-              >
-                Personal Notes
-              </Text>
-              <View style={styles.switcherBadgeSolo}>
-                <Text style={styles.switcherBadgeSoloText}>{notes.length}</Text>
-              </View>
-            </TouchableOpacity>
-
-            {/* Party Chat Tab */}
+            {/* Party Live Chat Tab (Primary) */}
             <TouchableOpacity
               style={[
                 styles.switcherTabBtn,
@@ -831,12 +779,41 @@ const StreamingScreen = ({ route, navigation }) => {
                   activeMode === 'chat' && styles.switcherTabTextActive,
                 ]}
               >
-                Party Live Chat
+                Live Theater Chat
               </Text>
               <View style={styles.switcherBadgeParty}>
                 <View style={styles.partyLiveMiniDot} />
-                <Text style={styles.switcherBadgePartyText}>{participants.length}</Text>
+                <Text style={styles.switcherBadgePartyText}>{messages.length}</Text>
               </View>
+            </TouchableOpacity>
+
+            {/* Scene Notes Tab (Secondary) */}
+            <TouchableOpacity
+              style={[
+                styles.switcherTabBtn,
+                activeMode === 'notes' && styles.switcherTabActive,
+              ]}
+              onPress={() => setActiveMode('notes')}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name="edit-note"
+                size={18}
+                color={activeMode === 'notes' ? colors.TITLE_COLOR : colors.SUB_TITLE_COLOR}
+              />
+              <Text
+                style={[
+                  styles.switcherTabText,
+                  activeMode === 'notes' && styles.switcherTabTextActive,
+                ]}
+              >
+                Scene Notes
+              </Text>
+              {notes.length > 0 && (
+                <View style={styles.switcherBadgeSolo}>
+                  <Text style={styles.switcherBadgeSoloText}>{notes.length}</Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -979,58 +956,59 @@ const StreamingScreen = ({ route, navigation }) => {
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
               style={{ flex: 1 }}
             >
-              {/* Connected Audience Presence Row */}
-              <View style={styles.audiencePresenceRow}>
-                <View style={styles.audiencePresenceHeader}>
-                  <View style={styles.audienceLeftTitle}>
-                    <Text style={styles.audienceTitleText}>CONNECTED THEATER</Text>
-                    <View style={styles.liveAudiencePill}>
-                      <Text style={styles.liveAudiencePillText}>{participants.length} LIVE</Text>
-                    </View>
-                  </View>
-
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate('StreamInfo', { roomId, roomName: roomTitle, streamUrl })}
-                    activeOpacity={0.75}
-                  >
-                    <Text style={styles.inviteFriendsLink}>+ Invite Friends</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Audience Avatar Scroll Reel */}
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.avatarScrollTrack}
-                >
-                  {participants.map(p => (
-                    <View key={p.id} style={styles.audienceItemCol}>
-                      <View style={[styles.audienceAvatarWrap, { borderColor: p.color }]}>
-                        <Text style={styles.audienceInitialText}>{p.initial}</Text>
+              {/* Compact Audience & Invite Bar */}
+              <View style={styles.compactAudienceBar}>
+                <View style={styles.audienceLeftStack}>
+                  <View style={styles.avatarStackRow}>
+                    {participants.slice(0, 5).map((p, idx) => (
+                      <View
+                        key={p.id}
+                        style={[
+                          styles.audienceSquircleAvatar,
+                          {
+                            backgroundColor: p.color,
+                            marginLeft: idx > 0 ? -8 : 0,
+                            zIndex: 10 - idx,
+                          },
+                        ]}
+                      >
+                        <Text style={styles.audienceInitialsText}>{p.initial}</Text>
                         {p.isHost && (
-                          <View style={styles.hostCrownBadge}>
-                            <Text style={styles.hostCrownStar}>★</Text>
+                          <View style={styles.miniHostBadge}>
+                            <MaterialIcons name="workspace-premium" size={8} color={colors.FILM_GOLD} />
                           </View>
                         )}
                         <View
                           style={[
-                            styles.audienceMicBeacon,
+                            styles.miniPresenceDot,
                             { backgroundColor: p.isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
                           ]}
-                        >
-                          <MaterialIcons
-                            name={p.isOnline ? 'mic' : 'mic-off'}
-                            size={7}
-                            color={colors.BACKGROUND_COLOR}
-                          />
-                        </View>
+                        />
                       </View>
-                      <Text style={styles.audienceNameText} numberOfLines={1}>
-                        {p.name}
-                      </Text>
-                    </View>
-                  ))}
-                </ScrollView>
+                    ))}
+                    {participants.length > 5 && (
+                      <View style={[styles.audienceSquircleAvatar, styles.extraCountAvatar, { marginLeft: -8 }]}>
+                        <Text style={styles.extraCountText}>+{participants.length - 5}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.liveAudienceBadge}>
+                    <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
+                    <Text style={styles.liveAudienceText}>
+                      {participants.length} {participants.length === 1 ? 'Viewer' : 'Viewers'}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.quickInviteBtn}
+                  onPress={handleShareScreening}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="person-add-alt" size={13} color={colors.PRIMARY_COLOR} style={{ marginRight: 4 }} />
+                  <Text style={styles.quickInviteBtnText}>+ Invite</Text>
+                </TouchableOpacity>
               </View>
 
               {/* Chat Stream */}
@@ -1041,8 +1019,9 @@ const StreamingScreen = ({ route, navigation }) => {
                 showsVerticalScrollIndicator={false}
                 ListHeaderComponent={
                   <View style={styles.systemChatEventPill}>
+                    <MaterialIcons name="auto-awesome" size={12} color={colors.FILM_GOLD} style={{ marginRight: 5 }} />
                     <Text style={styles.systemChatEventText}>
-                      ✨ Spatial Audio synchronized for all {participants.length} viewers
+                      Spatial Audio synchronized for all {participants.length} viewers
                     </Text>
                   </View>
                 }
@@ -1179,7 +1158,7 @@ const styles = StyleSheet.create({
     gap: 10,
     flex: 1,
   },
-  backBtnCircle: {
+  backBtnSquircle: {
     width: 36,
     height: 36,
     borderRadius: 10,
@@ -1277,24 +1256,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  telemetryWatermarkBar: {
-    position: 'absolute',
-    top: 10,
-    left: 12,
+  overlayTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingTop: 10,
   },
-  syncBufferBadge: {
+  overlaySyncPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
     backgroundColor: 'rgba(8, 8, 16, 0.75)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    borderColor: 'rgba(6, 182, 212, 0.35)',
   },
   syncBufferDot: {
     width: 5,
@@ -1302,41 +1280,21 @@ const styles = StyleSheet.create({
     borderRadius: 2.5,
     backgroundColor: colors.CYAN_ACCENT,
   },
-  syncBufferText: {
+  overlaySyncText: {
     color: colors.CYAN_ACCENT,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  spatialAudioBadge: {
+  fullscreenBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     backgroundColor: 'rgba(8, 8, 16, 0.75)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(124, 58, 237, 0.3)',
-  },
-  spatialAudioText: {
-    color: colors.PURPLE_ACCENT,
-    fontSize: 9,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  resolutionTag: {
-    position: 'absolute',
-    top: 10,
-    right: 12,
-    backgroundColor: 'rgba(8, 8, 16, 0.75)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-  },
-  resolutionText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 9,
-    fontWeight: '600',
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   creatorLeftOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1468,11 +1426,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  telemetryQuickBtns: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
+
 
   // ── State Switcher Dock ──
   stateSwitcherDock: {
@@ -1763,103 +1717,101 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── VIEW B: Multi-Participant Party ──
-  audiencePresenceRow: {
+  // ── VIEW B: Multi-Participant Party Compact Bar ──
+  compactAudienceBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 8,
     backgroundColor: colors.SURFACE_COLOR,
     borderBottomWidth: 1,
     borderBottomColor: colors.BORDER_SUBTLE,
   },
-  audiencePresenceHeader: {
+  audienceLeftStack: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
+    gap: 10,
   },
-  audienceLeftTitle: {
+  avatarStackRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
   },
-  audienceTitleText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
-  liveAudiencePill: {
-    backgroundColor: colors.ACCEPT_GREEN_GLOW,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 200, 83, 0.3)',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 6,
-  },
-  liveAudiencePillText: {
-    color: colors.ACCEPT_GREEN,
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  inviteFriendsLink: {
-    color: colors.PRIMARY_COLOR,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  avatarScrollTrack: {
-    gap: 12,
-  },
-  audienceItemCol: {
-    alignItems: 'center',
-    gap: 4,
-    width: 48,
-  },
-  audienceAvatarWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    borderWidth: 1.5,
+  audienceSquircleAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.SURFACE_COLOR,
     position: 'relative',
   },
-  audienceInitialText: {
+  audienceInitialsText: {
     color: colors.TITLE_COLOR,
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '700',
   },
-  hostCrownBadge: {
+  miniHostBadge: {
     position: 'absolute',
-    top: -4,
-    right: -4,
-    width: 14,
-    height: 14,
-    borderRadius: 4,
-    backgroundColor: colors.FILM_GOLD,
+    top: -3,
+    right: -3,
+    width: 11,
+    height: 11,
+    borderRadius: 3,
+    backgroundColor: 'rgba(8, 8, 16, 0.9)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  hostCrownStar: {
-    color: colors.BACKGROUND_COLOR,
-    fontSize: 9,
-    fontWeight: '900',
-  },
-  audienceMicBeacon: {
+  miniPresenceDot: {
     position: 'absolute',
     bottom: -2,
     right: -2,
-    width: 12,
-    height: 12,
-    borderRadius: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 6,
+    height: 6,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: colors.SURFACE_COLOR,
   },
-  audienceNameText: {
+  extraCountAvatar: {
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderColor: colors.SURFACE_COLOR,
+  },
+  extraCountText: {
     color: colors.SUB_TITLE_COLOR,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  liveAudienceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.ACCEPT_GREEN_GLOW,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.25)',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 8,
+  },
+  liveAudienceText: {
+    color: colors.ACCEPT_GREEN,
     fontSize: 10,
-    fontWeight: '500',
-    textAlign: 'center',
+    fontWeight: '700',
+  },
+  quickInviteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 122, 255, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  quickInviteBtnText: {
+    color: colors.PRIMARY_COLOR,
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   // Chat Stream
@@ -1965,10 +1917,17 @@ const styles = StyleSheet.create({
     borderTopColor: colors.BORDER_SUBTLE,
   },
   reactionEmojiBtn: {
-    padding: 4,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
   },
   reactionEmojiText: {
-    fontSize: 20,
+    fontSize: 18,
   },
 
   // Party Bottom Input Bar

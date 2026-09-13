@@ -35,3 +35,29 @@ Whenever generating, modifying, or refactoring code for this React Native codeba
 ## HEADER 3. Consistent Header Pattern
 - **MANDATORY**: Whenever a screen requires a top header bar, follow the established header design pattern used in `HomeScreen` / `src/components/Header.js`.
 - Include safe-area top padding, brand/title typography, left back or brand icon button, and right status or action shortcuts.
+
+---
+
+## ⏹️ 4. Squircle Shapes & Ambient Glow (No Circular Backgrounds)
+- **MANDATORY**: Never use circular background orbs, circular avatar containers, or circular button backgrounds (`borderRadius: width / 2`).
+- Use modern squircle radiuses (`borderRadius: 8` to `16`) for cards, buttons, badges, and avatars.
+- Follow the established Login/Sign-up ambient top glow linear gradient pattern (`rgba(124, 58, 237, 0.18)` / `rgba(0, 122, 255, 0.08)`) over `colors.BACKGROUND_COLOR` (`#080810`).
+
+---
+
+## ⚡ 5. Production-Ready, Scalable & Zero-Lag Standards
+- **ZERO UI LAG (60/120 FPS)**:
+  - Keep screens fast, fluid, and responsive without jank or frame drops.
+  - Animate with `useNativeDriver: true` whenever using Animated.
+  - Avoid unnecessary re-renders in large lists; use `React.memo`, `useCallback`, and `useMemo` for derived states or callbacks passed to children.
+  - Debounce search inputs, network fetches, and rapid realtime triggers.
+- **SCALABLE PRODUCTION ARCHITECTURE**:
+  - Code must be clean, modular, and maintainable. Large modals or complex sub-features should be cleanly separated into dedicated components.
+  - Always implement robust error boundaries/try-catch blocks, input validation, loading skeletons, and graceful fallback states.
+  - Direct database operations must be secured, indexed, and fail-safe with appropriate timeouts.
+
+---
+
+## 🎭 6. Vector Icons Exclusively (NO EMOJIS in UI)
+- **MANDATORY**: Always use professional vector icon sets (`MaterialIcons`, `Ionicons`, etc.) for buttons, chips, genre badges, cards, indicators, and actions.
+- **NO RAW UNICODE EMOJIS**: Do not use raw emojis (e.g., 🍿, ⚡, 🎵, ⚽, 🎮, 🎲, 🚀) as icons or decorations in UI elements. Use crisp, scalable vector icons with appropriate theme color tokens.
