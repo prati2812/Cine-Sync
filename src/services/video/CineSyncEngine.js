@@ -49,14 +49,31 @@ export const getServerNow = () => Date.now() + serverTimeOffset;
  */
 export const calculateDeadReckoningPosition = packet => {
   if (!packet) return 0;
-  if (packet.state !== 'PLAY') return packet.position || 0;
+  if (packet.state !== 'PLAY' || packet.isHostDisconnected) return packet.position || 0;
 
+  const rate = packet.rate || 1.0;
+
+  // 1. If packet was received live on this client, use monotonic local clock
+  if (typeof packet._localReceivedAt === 'number') {
+    const serverNow = getServerNow();
+    const packetServerTime = packet.serverTime || serverNow;
+    const serverElapsedSecs = Math.max(0, (serverNow - packetServerTime) / 1000);
+    // If the packet was emitted > 4s ago on server, viewer joined an ongoing screening late
+    if (serverElapsedSecs > 4.0) {
+      const elapsedSinceArrival = Math.max(0, (Date.now() - packet._localReceivedAt) / 1000);
+      return Math.max(0, (packet.position || 0) + (serverElapsedSecs + elapsedSinceArrival) * rate);
+    }
+
+    const elapsedLocalSecs = Math.max(0, (Date.now() - packet._localReceivedAt) / 1000);
+    return Math.max(0, (packet.position || 0) + elapsedLocalSecs * rate);
+  }
+
+  // 2. Fallback for initial state before packet listener attaches
   const serverNow = getServerNow();
   const packetServerTime = packet.serverTime || serverNow;
   const elapsedSecs = Math.max(0, (serverNow - packetServerTime) / 1000);
-  const rate = packet.rate || 1.0;
 
-  return (packet.position || 0) + elapsedSecs * rate;
+  return Math.max(0, (packet.position || 0) + elapsedSecs * rate);
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -67,15 +84,27 @@ export const calculateDeadReckoningPosition = packet => {
  * Saves video playback progress locally in AsyncStorage
  * Persists under mediaKey (streamUrl), extraKey (roomId), and dedicated room info.
  */
-export const saveLocalProgress = async (mediaKey, currentTime, duration, extraKey = null) => {
+export const saveLocalProgress = async (mediaKey, currentTime, duration, extraKey = null, metadata = {}) => {
   if ((!mediaKey && !extraKey) || typeof currentTime !== 'number' || currentTime < 1) return;
   try {
+    // If we have previous saved metadata, preserve it if current metadata fields are omitted
+    let existingMeta = {};
+    const primaryKey = mediaKey || extraKey;
+    try {
+      const prev = await AsyncStorage.getItem(`${PROGRESS_KEY_PREFIX}${encodeURIComponent(primaryKey)}`);
+      if (prev) existingMeta = JSON.parse(prev);
+    } catch (e) {}
+
     const data = {
       position: Math.floor(currentTime),
       duration: Math.floor(duration || 0),
-      mediaKey: mediaKey || extraKey,
-      roomId: extraKey || null,
+      mediaKey: primaryKey,
+      roomId: extraKey || existingMeta.roomId || null,
       updatedAt: Date.now(),
+      title: metadata.title || existingMeta.title || null,
+      thumbnail: metadata.thumbnail || existingMeta.thumbnail || null,
+      channelName: metadata.channelName || existingMeta.channelName || null,
+      isSolo: metadata.isSolo !== undefined ? metadata.isSolo : (existingMeta.isSolo !== undefined ? existingMeta.isSolo : !extraKey),
     };
     const jsonStr = JSON.stringify(data);
 
@@ -103,6 +132,51 @@ export const saveLocalProgress = async (mediaKey, currentTime, duration, extraKe
   } catch (err) {
     // silent catch
   }
+};
+
+/**
+ * Retrieves all in-progress continue watching items across all videos/rooms
+ */
+export const getAllContinueWatching = async () => {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const progressKeys = allKeys.filter(k => k.startsWith(PROGRESS_KEY_PREFIX));
+    if (progressKeys.length === 0) return [];
+    const pairs = await AsyncStorage.multiGet(progressKeys);
+    const map = new Map();
+    for (const [key, value] of pairs) {
+      if (!value) continue;
+      try {
+        const item = JSON.parse(value);
+        if (item && typeof item.position === 'number' && item.position >= 1) {
+          const uniqueKey = item.mediaKey || item.roomId || key;
+          if (!map.has(uniqueKey) || (item.updatedAt || 0) > (map.get(uniqueKey)?.updatedAt || 0)) {
+            map.set(uniqueKey, item);
+          }
+        }
+      } catch (e) {}
+    }
+    const list = Array.from(map.values());
+    list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return list;
+  } catch (err) {
+    return [];
+  }
+};
+
+/**
+ * Removes a specific video from the continue watching queue
+ */
+export const removeContinueWatchingItem = async (mediaKey, extraKey = null) => {
+  try {
+    if (mediaKey) {
+      await AsyncStorage.removeItem(`${PROGRESS_KEY_PREFIX}${encodeURIComponent(mediaKey)}`);
+    }
+    if (extraKey) {
+      await AsyncStorage.removeItem(`${PROGRESS_KEY_PREFIX}${encodeURIComponent(extraKey)}`);
+      await AsyncStorage.removeItem(`@cine_room_last_playback_${encodeURIComponent(extraKey)}`);
+    }
+  } catch (err) {}
 };
 
 /**
@@ -193,6 +267,8 @@ export class CineSyncSession {
     this.lastReceivedVersion = -1;
     this.lastPacket = null;
     this.isApplyingRemote = false;
+    this.isSeekingLocally = false;
+    this.seekCooldownUntil = 0;
     this.safetyHeartbeatInterval = null;
     this.lastProgressSaveTime = 0;
     this.syncRef = roomId ? database().ref(`rooms_playback/${roomId}`) : null;
@@ -248,7 +324,7 @@ export class CineSyncSession {
       }
       this.notifyStatus('SOLO_MODE', 0);
     } else {
-      // Switched to Party mode (friend joined): initialize group sync
+      // Switched to Party mode: initialize group sync
       if (this.isHost) {
         if (!this.safetyHeartbeatInterval) {
           this.safetyHeartbeatInterval = setInterval(() => {
@@ -279,10 +355,19 @@ export class CineSyncSession {
     }
 
     if (!this.isHost || !this.syncRef) return;
+
+    let precisePos = currentTime;
+    try {
+      const cur = await this.playerRef?.current?.getCurrentTime();
+      if (typeof cur === 'number' && cur >= 0) {
+        precisePos = cur;
+      }
+    } catch (e) {}
+
     this.version += 1;
     const packet = {
       state: 'PLAY',
-      position: Math.max(0, currentTime || 0),
+      position: Math.max(0, precisePos || 0),
       serverTime: database.ServerValue.TIMESTAMP,
       rate: 1.0,
       v: this.version,
@@ -291,6 +376,13 @@ export class CineSyncSession {
 
     try {
       await this.syncRef.set(packet);
+      if (this.roomId) {
+        database().ref(`rooms/${this.roomId}/playback`).update({
+          currentTime: Math.max(0, precisePos || 0),
+          isPlaying: true,
+          lastUpdated: database.ServerValue.TIMESTAMP,
+        }).catch(() => {});
+      }
       this.notifyStatus('HOST_PLAYING', 0);
     } catch (err) {
       console.warn('[CineSyncEngine] Failed to push PLAY:', err);
@@ -311,10 +403,19 @@ export class CineSyncSession {
     }
 
     if (!this.isHost || !this.syncRef) return;
+
+    let precisePos = currentTime;
+    try {
+      const cur = await this.playerRef?.current?.getCurrentTime();
+      if (typeof cur === 'number' && cur >= 0) {
+        precisePos = cur;
+      }
+    } catch (e) {}
+
     this.version += 1;
     const packet = {
       state: 'PAUSE',
-      position: Math.max(0, currentTime || 0),
+      position: Math.max(0, precisePos || 0),
       serverTime: database.ServerValue.TIMESTAMP,
       rate: 1.0,
       v: this.version,
@@ -323,6 +424,13 @@ export class CineSyncSession {
 
     try {
       await this.syncRef.set(packet);
+      if (this.roomId) {
+        database().ref(`rooms/${this.roomId}/playback`).update({
+          currentTime: Math.max(0, precisePos || 0),
+          isPlaying: false,
+          lastUpdated: database.ServerValue.TIMESTAMP,
+        }).catch(() => {});
+      }
       this.notifyStatus('HOST_PAUSED', 0);
     } catch (err) {
       console.warn('[CineSyncEngine] Failed to push PAUSE:', err);
@@ -355,6 +463,13 @@ export class CineSyncSession {
 
     try {
       await this.syncRef.set(packet);
+      if (this.roomId) {
+        database().ref(`rooms/${this.roomId}/playback`).update({
+          currentTime: Math.max(0, targetSeconds || 0),
+          isPlaying: Boolean(isPlaying),
+          lastUpdated: database.ServerValue.TIMESTAMP,
+        }).catch(() => {});
+      }
       this.notifyStatus(isPlaying ? 'HOST_PLAYING' : 'HOST_PAUSED', 0);
     } catch (err) {
       console.warn('[CineSyncEngine] Failed to push SEEK:', err);
@@ -397,46 +512,76 @@ export class CineSyncSession {
         return;
       }
       this.lastReceivedVersion = packet.v || 0;
+      // Stamp local monotonic arrival time to eliminate cross-device clock skew
+      packet._localReceivedAt = Date.now();
       this.lastPacket = packet;
 
       this.isApplyingRemote = true;
-
       try {
-        if (packet.state === 'PAUSE') {
-          if (this.onRemotePlayStateChange) {
-            this.onRemotePlayStateChange(false);
-          }
-          if (this.playerRef?.current) {
-            this.playerRef.current.pause();
-            this.playerRef.current.seekTo(packet.position || 0);
-          }
-          this.notifyStatus('SYNC_LOCKED', 0);
-        } else if (packet.state === 'PLAY') {
-          if (this.onRemotePlayStateChange) {
-            this.onRemotePlayStateChange(true);
-          }
-          const targetTime = calculateDeadReckoningPosition(packet);
-
-          if (this.playerRef?.current) {
-            this.playerRef.current.play();
-            const viewerCurrent = await this.playerRef.current.getCurrentTime();
-            const drift = Math.abs((viewerCurrent || 0) - targetTime);
-
-            // Re-align if drift exceeds 0.4s
-            if (drift > 0.4) {
-              this.playerRef.current.seekTo(targetTime);
-            }
-          }
-          this.notifyStatus('SYNC_LOCKED', 0);
-        }
-      } catch (err) {
-        console.warn('[CineSyncEngine] Error applying remote sync:', err);
+        await this.realignToHost(true);
       } finally {
         setTimeout(() => {
           this.isApplyingRemote = false;
-        }, 400);
+        }, 500);
       }
     });
+  }
+
+  /**
+   * Re-aligns viewer playback to the host's extrapolated Dead Reckoning timestamp.
+   * Accounts for any elapsed buffering or loading time.
+   */
+  async realignToHost(force = false) {
+    if (!this.lastPacket || this.isHost || this.isSolo) return;
+    const now = Date.now();
+    if (!force && (this.isSeekingLocally || now < this.seekCooldownUntil)) return;
+
+    try {
+      if (this.lastPacket.state === 'PAUSE' || this.lastPacket.isHostDisconnected) {
+        if (this.onRemotePlayStateChange) {
+          this.onRemotePlayStateChange(false);
+        }
+        if (this.playerRef?.current) {
+          this.playerRef.current.pause();
+          const viewerCurrent = (await this.playerRef.current.getCurrentTime()) || 0;
+          const targetPos = this.lastPacket.position || 0;
+          // Only seek if paused at a noticeable difference (> 0.35s) to avoid buffer-clearing churn
+          if (Math.abs(viewerCurrent - targetPos) > 0.35) {
+            this.playerRef.current.seekTo(targetPos);
+          }
+        }
+        this.notifyStatus('SYNC_LOCKED', 0);
+        return;
+      }
+
+      if (this.lastPacket.state === 'PLAY') {
+        if (this.onRemotePlayStateChange) {
+          this.onRemotePlayStateChange(true);
+        }
+        const targetTime = calculateDeadReckoningPosition(this.lastPacket);
+        if (this.playerRef?.current) {
+          this.playerRef.current.play();
+          const viewerCurrent = (await this.playerRef.current.getCurrentTime()) || 0;
+          const drift = Math.abs(viewerCurrent - targetTime);
+
+          // CRITICAL ZERO-LAG OPTIMIZATION:
+          // If viewer is already within 0.4s of targetTime, calling seekTo flushes
+          // ExoPlayer's decoder buffers and causes an artificial 1.5s freeze.
+          // Simply calling play() starts playback synchronously in < 20ms.
+          if (drift > 0.4) {
+            this.isSeekingLocally = true;
+            this.seekCooldownUntil = now + 1200;
+            this.playerRef.current.seekTo(targetTime);
+            setTimeout(() => {
+              this.isSeekingLocally = false;
+            }, 1200);
+          }
+        }
+        this.notifyStatus('SYNC_LOCKED', 0);
+      }
+    } catch (err) {
+      console.warn('[CineSyncEngine] Error in realignToHost:', err);
+    }
   }
 
   /**
@@ -457,17 +602,23 @@ export class CineSyncSession {
     }
 
     // In Viewer mode: Dead-Reckoning alignment check
-    if (!this.lastPacket || this.isApplyingRemote) return;
-    if (this.lastPacket.state !== 'PLAY') return;
+    if (!this.lastPacket || this.isApplyingRemote || this.isSeekingLocally) return;
+    if (now < this.seekCooldownUntil) return;
+    if (this.lastPacket.state !== 'PLAY' || this.lastPacket.isHostDisconnected) return;
 
     const expectedHostTime = calculateDeadReckoningPosition(this.lastPacket);
     const driftSeconds = Math.abs((viewerCurrentTime || 0) - expectedHostTime);
 
-    // If drift exceeds 0.65s (noticeable lag), smoothly re-align
-    if (driftSeconds > 0.65) {
+    // If drift exceeds 1.0s (noticeable lag), smoothly re-align with seek cooldown
+    if (driftSeconds > 1.0) {
       this.notifyStatus('RE_SYNCING', driftSeconds);
       if (this.playerRef?.current) {
+        this.isSeekingLocally = true;
+        this.seekCooldownUntil = now + 1500;
         this.playerRef.current.seekTo(expectedHostTime);
+        setTimeout(() => {
+          this.isSeekingLocally = false;
+        }, 1500);
       }
     } else {
       this.notifyStatus('SYNC_LOCKED', driftSeconds);

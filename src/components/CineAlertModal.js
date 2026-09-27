@@ -875,11 +875,6 @@ const styles = StyleSheet.create({
     height: 46,
     borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 6,
   },
   confirmGradient: {
     flex: 1,

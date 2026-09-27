@@ -4,14 +4,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   FlatList,
   TextInput,
   KeyboardAvoidingView,
   Platform,
   Animated,
   StatusBar,
-  ScrollView,
   useWindowDimensions,
   Share,
   BackHandler,
@@ -21,14 +19,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CineVideoPlayer from '../../../components/video/CineVideoPlayer';
-import { getStreamBadgeInfo } from '../../../services/video/VideoPlayerService';
 import { searchCinemaMedia } from '../../../services/video/CinemaMediaSearchService';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import Orientation from 'react-native-orientation-locker';
 import { auth, database } from '../../../config/firebase';
 import { createSyncSession, saveLocalProgress, getLocalProgress } from '../../../services/video/CineSyncEngine';
+import { showCineAlert } from '../../../components/CineAlert';
+import { toggleWatchlist, isItemInWatchlist, subscribeWatchlist } from '../../../services/video/WatchlistService';
 import colors from '../../../theme/Colors';
 
 const AVATAR_COLORS = [
@@ -110,9 +108,20 @@ const StreamingScreen = ({ route, navigation }) => {
   const [activeStreamUrl, setActiveStreamUrl] = useState(initialStreamUrl || '');
   const streamUrl = activeStreamUrl || initialStreamUrl || '';
   const [soloSelectedTitle, setSoloSelectedTitle] = useState(null);
+  const [activeThumbnail, setActiveThumbnail] = useState(initialThumbnail || null);
   const [activeChannelName, setActiveChannelName] = useState(initialChannelName || '');
   const [activeViews, setActiveViews] = useState(initialViews || '');
   const [activeDurationText, setActiveDurationText] = useState(initialDurationText || '');
+
+  // Watch Later / Wishlist State for Solo Cinema
+  const [watchlistItems, setWatchlistItems] = useState([]);
+
+  useEffect(() => {
+    const unsub = subscribeWatchlist(items => {
+      setWatchlistItems(items);
+    });
+    return () => unsub();
+  }, []);
 
   // On-demand Notes Sheet state (Completely hidden from main screen by default)
   const [isNotesSheetVisible, setIsNotesSheetVisible] = useState(false);
@@ -136,6 +145,8 @@ const StreamingScreen = ({ route, navigation }) => {
   const [playing, setPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isVideoEnded, setIsVideoEnded] = useState(false);
+  const [scrubberWidth, setScrubberWidth] = useState(0);
   const [initialPosition, setInitialPosition] = useState(0);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const currentTimeRef = useRef(0);
@@ -200,20 +211,25 @@ const StreamingScreen = ({ route, navigation }) => {
     };
   }, []);
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(() => {
     if (isLandscape) {
       Orientation.lockToPortrait();
     } else {
       Orientation.lockToLandscapeLeft();
     }
-  };
+  }, [isLandscape]);
 
   useEffect(() => {
     setIsInitialLoading(true);
     if (!streamUrl || !streamUrl.trim()) {
-      Alert.alert('Invalid Stream', 'No streaming URL provided for this room.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      showCineAlert({
+        type: 'danger',
+        icon: 'error-outline',
+        title: 'Invalid Stream',
+        message: 'No streaming URL provided for this cinema room.',
+        confirmText: 'Return',
+        onConfirm: () => navigation.goBack(),
+      });
     }
     // Safety failsafe: Ensure initial loader never hangs indefinitely
     const fallbackTimer = setTimeout(() => {
@@ -223,7 +239,6 @@ const StreamingScreen = ({ route, navigation }) => {
   }, [streamUrl, navigation]);
 
   const [creatorLeft, setCreatorLeft] = useState(false);
-  const streamBadge = useMemo(() => getStreamBadgeInfo(streamUrl), [streamUrl]);
 
   // Detected if room is for self (no friends invited) or direct solo stream
   const isSoloRoom = useMemo(() => {
@@ -421,7 +436,7 @@ const StreamingScreen = ({ route, navigation }) => {
       session.destroy(currentTimeRef.current, durationRef.current);
       syncSessionRef.current = null;
     };
-  }, [currentRoomId, isLocalSolo, isCreator, streamUrl, isSoloRoom]);
+  }, [currentRoomId, isLocalSolo, isCreator, streamUrl, isSoloRoom, participants.length]);
 
   // Dynamically update solo vs party mode when participants join or leave
   useEffect(() => {
@@ -452,10 +467,16 @@ const StreamingScreen = ({ route, navigation }) => {
     return () => notesRef.off('value', onNotesHandler);
   }, [currentRoomId]);
 
-  const addNote = async (customText = null) => {
+  const addNote = useCallback(async (customText = null) => {
     const user = auth().currentUser;
     if (!user) {
-      Alert.alert('Sign In Required', 'Please sign in to save cinema notes.');
+      showCineAlert({
+        type: 'action',
+        icon: 'lock',
+        title: 'Sign In Required',
+        message: 'Please sign in to save cinema notes.',
+        confirmText: 'OK',
+      });
       return;
     }
     const textToSave = (typeof customText === 'string' ? customText : newNoteText).trim();
@@ -473,30 +494,35 @@ const StreamingScreen = ({ route, navigation }) => {
         const db = database();
 
         const newRoomData = {
-          roomId: targetRoomId,
-          name: roomTitle,
-          nameLower: roomTitle.toLowerCase(),
-          streamUrl: streamUrl,
-          thumbnail: initialThumbnail || null,
-          isSolo: true,
-          isPrivate: true,
-          isStreaming: true,
-          createdAt: new Date().toISOString(),
+          createdAt: database.ServerValue.TIMESTAMP,
+          createdBy: user.uid,
           creator: {
             uid: user.uid,
-            email: user.email,
-            userName: user.displayName || user.email?.split('@')[0] || 'Host',
+            userName: user.email?.split('@')[0] || 'Me',
           },
-          playback: {
-            currentTime: roundedSecs,
-            isPlaying: playing,
-            lastUpdated: database.ServerValue.TIMESTAMP,
+          currentMediaUrl: streamUrl || '',
+          duration: durationRef.current || 0,
+          isLive: false,
+          isPrivate: true,
+          isStreaming: false,
+          name: roomTitle,
+          participants: {
+            [user.uid]: {
+              joinedAt: database.ServerValue.TIMESTAMP,
+              role: 'creator',
+              userName: user.email?.split('@')[0] || 'Me',
+            },
           },
+          pin: '',
+          position: roundedSecs,
+          sourceType: 'youtube',
+          status: 'active',
+          thumbnail: initialThumbnail || null,
         };
 
         const updates = {};
         updates[`rooms/${targetRoomId}`] = newRoomData;
-        updates[`user_rooms/${user.uid}/${targetRoomId}`] = {
+        updates[`userRooms/${user.uid}/${targetRoomId}`] = {
           roomId: targetRoomId,
           name: roomTitle,
           nameLower: roomTitle.toLowerCase(),
@@ -539,9 +565,15 @@ const StreamingScreen = ({ route, navigation }) => {
       setNewNoteText('');
     } catch (e) {
       console.log('Error adding note:', e);
-      Alert.alert('Save Error', 'Unable to save note to cloud storyboard.');
+      showCineAlert({
+        type: 'danger',
+        icon: 'cloud-off',
+        title: 'Save Error',
+        message: 'Unable to save note to cloud storyboard.',
+        confirmText: 'OK',
+      });
     }
-  };
+  }, [currentRoomId, newNoteText, currentTime, streamUrl, initialThumbnail, roomTitle]);
 
   const deleteNote = async noteId => {
     const user = auth().currentUser;
@@ -556,7 +588,7 @@ const StreamingScreen = ({ route, navigation }) => {
     }
   };
 
-  const handleSeekToNote = seconds => {
+  const handleSeekToNote = useCallback(seconds => {
     if (!playerRef.current) return;
     playerRef.current.seekTo(seconds);
     currentTimeRef.current = seconds;
@@ -567,7 +599,7 @@ const StreamingScreen = ({ route, navigation }) => {
     } else {
       saveLocalProgress(streamUrl || currentRoomId, seconds, dur, currentRoomId);
     }
-  };
+  }, [duration, isCreator, isLocalSolo, playing, streamUrl, currentRoomId]);
 
   // ──────────────────────────────────────────────────────────────
   // Chat & Reactions Logic (Only for multi-user watch parties)
@@ -716,6 +748,61 @@ const StreamingScreen = ({ route, navigation }) => {
     } catch (e) {}
   };
 
+  const handleSeek = useCallback(
+    (targetSeconds) => {
+      if (!playerRef.current) return;
+      resetControlsTimeout();
+      setIsVideoEnded(false);
+      isSeekingRef.current = true;
+      if (seekLockTimeoutRef.current) clearTimeout(seekLockTimeoutRef.current);
+      seekLockTimeoutRef.current = setTimeout(() => {
+        isSeekingRef.current = false;
+      }, 800);
+
+      const maxDur = durationRef.current || duration || 0;
+      const bounded = Math.max(0, maxDur > 0 ? Math.min(maxDur, targetSeconds) : targetSeconds);
+      playerRef.current.seekTo(bounded);
+      currentTimeRef.current = bounded;
+      setCurrentTime(bounded);
+      const dur = durationRef.current || duration;
+      if (isCreator && syncSessionRef.current && !isLocalSolo) {
+        syncSessionRef.current.pushSeek(bounded, playing, dur);
+      } else {
+        saveLocalProgress(streamUrl || currentRoomId, bounded, dur, currentRoomId);
+      }
+    },
+    [duration, isCreator, isLocalSolo, playing, streamUrl, currentRoomId, resetControlsTimeout]
+  );
+
+  const handleScrubberTouch = useCallback(
+    (evt) => {
+      const dur = durationRef.current || duration;
+      if (!dur || dur <= 0 || scrubberWidth <= 0) return;
+      const touchX = Math.max(0, Math.min(scrubberWidth, evt.nativeEvent.locationX));
+      const ratio = touchX / scrubberWidth;
+      const target = ratio * dur;
+      handleSeek(target);
+    },
+    [duration, scrubberWidth, handleSeek]
+  );
+
+  const handleReplay = useCallback(() => {
+    setIsVideoEnded(false);
+    currentTimeRef.current = 0;
+    setCurrentTime(0);
+    playerRef.current?.seekTo(0);
+    playerRef.current?.play();
+    setPlaying(true);
+    const dur = durationRef.current || duration;
+    if (isCreator && syncSessionRef.current && !isLocalSolo) {
+      syncSessionRef.current.pushSeek(0, true, dur);
+      syncSessionRef.current.pushPlay(0, dur);
+    } else {
+      saveLocalProgress(streamUrl || currentRoomId, 0, dur, currentRoomId);
+    }
+    resetControlsTimeout();
+  }, [duration, isCreator, isLocalSolo, streamUrl, currentRoomId, resetControlsTimeout]);
+
   const savePlaybackOnExit = useCallback(async () => {
     const cur = currentTimeRef.current;
     const dur = durationRef.current;
@@ -758,7 +845,6 @@ const StreamingScreen = ({ route, navigation }) => {
   const roomTitle = soloSelectedTitle || roomData?.name || initialRoomName || 'Screening Room';
   const displayChannelName = activeChannelName || (roomData?.creator?.userName ? `${roomData.creator.userName}` : 'Cinema Studio');
   const displayViews = activeViews || 'Cinema Stream';
-  const displayDuration = activeDurationText || (duration > 0 ? formatTime(duration) : 'Feature Film');
   const shortRoomId = (currentRoomId ? currentRoomId.replace('room_', '').replace('solo_', '') : 'SOLO').slice(-4);
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
@@ -770,7 +856,7 @@ const StreamingScreen = ({ route, navigation }) => {
 
     const titleToUse = soloSelectedTitle || initialRoomName || roomData?.name || '';
     const cleanWords = titleToUse
-      .replace(/[\(\)\[\]\{\}\-–—|:;,.]/g, ' ')
+      .replace(/[()[\]{}\-–—|:;,.]/g, ' ')
       .trim()
       .split(/\s+/)
       .filter(w => w.length > 2)
@@ -832,6 +918,7 @@ const StreamingScreen = ({ route, navigation }) => {
     if (!item || !item.mediaUrl) return;
     setActiveStreamUrl(item.mediaUrl);
     setSoloSelectedTitle(item.title);
+    setActiveThumbnail(item.thumbnail || null);
     setActiveChannelName(item.channelName);
     setActiveViews(item.views);
     setActiveDurationText(item.duration);
@@ -844,12 +931,79 @@ const StreamingScreen = ({ route, navigation }) => {
     saveLocalProgress(item.mediaUrl, 0, 0, currentRoomId);
   }, [currentRoomId]);
 
-  const handleShareScreening = async () => {
+  const isCurrentInWatchlist = useMemo(() => {
+    return isItemInWatchlist(streamUrl || roomTitle, watchlistItems);
+  }, [streamUrl, roomTitle, watchlistItems]);
+
+  const handleToggleWatchlist = useCallback(async () => {
+    if (!streamUrl && !roomTitle) return;
+
+    const itemToSave = {
+      id: streamUrl || `solo_${Date.now()}`,
+      mediaKey: streamUrl,
+      streamUrl: streamUrl,
+      title: roomTitle,
+      thumbnail: activeThumbnail || initialThumbnail || roomData?.thumbnail || null,
+      channelName: displayChannelName,
+      duration: activeDurationText || initialDurationText || '',
+      views: displayViews || '',
+    };
+
+    const isNowSaved = await toggleWatchlist(itemToSave);
+
+    showCineAlert({
+      presentationStyle: 'bottomSheet',
+      type: isNowSaved ? 'success' : 'info',
+      icon: isNowSaved ? 'playlist-add-check' : 'remove-circle-outline',
+      title: isNowSaved ? 'Saved to Watch Later' : 'Removed from Watch Later',
+      message: isNowSaved
+        ? `"${roomTitle}" has been added to your Watch Later list.`
+        : `"${roomTitle}" was removed from your Watch Later list.`,
+      confirmText: 'OK',
+    });
+  }, [
+    streamUrl,
+    roomTitle,
+    activeThumbnail,
+    initialThumbnail,
+    roomData?.thumbnail,
+    displayChannelName,
+    activeDurationText,
+    initialDurationText,
+    displayViews,
+  ]);
+
+  const handleToggleRecommendedWatchlist = useCallback(async (item) => {
+    if (!item) return;
+    const isNowSaved = await toggleWatchlist({
+      id: item.mediaUrl || item.id,
+      mediaKey: item.mediaUrl || item.id,
+      streamUrl: item.mediaUrl,
+      title: item.title,
+      thumbnail: item.thumbnail,
+      channelName: item.channelName,
+      duration: item.duration,
+      views: item.views,
+    });
+
+    showCineAlert({
+      presentationStyle: 'bottomSheet',
+      type: isNowSaved ? 'success' : 'info',
+      icon: isNowSaved ? 'playlist-add-check' : 'remove-circle-outline',
+      title: isNowSaved ? 'Saved to Watch Later' : 'Removed from Watch Later',
+      message: isNowSaved
+        ? `"${item.title}" added to your Watch Later list.`
+        : `"${item.title}" removed from your Watch Later list.`,
+      confirmText: 'OK',
+    });
+  }, []);
+
+  const handleShareScreening = useCallback(async () => {
     try {
       if (isSoloRoom || isLocalSolo) {
         await Share.share({
           title: `Cine-Sync: ${roomTitle}`,
-          message: `🎬 Streaming "${roomTitle}" on Cine-Sync!\n${streamUrl}\nStream anytime with 100% native cinema audio & video!`,
+          message: `Streaming "${roomTitle}" on Cine-Sync!\n${streamUrl}\nStream anytime with 100% native cinema audio & video!`,
         });
         return;
       }
@@ -857,12 +1011,270 @@ const StreamingScreen = ({ route, navigation }) => {
       const pinText = roomData?.isPrivate && roomData?.pin ? `\nAccess PIN: ${roomData.pin}` : '';
       await Share.share({
         title: `Cine-Sync: ${roomTitle}`,
-        message: `🎬 Join my Cine-Sync Watch Party "${roomTitle}" in Live Sync!\nRoom Code: #${cleanCode}${pinText}\nLaunch Cine-Sync to watch together!`,
+        message: `Join my Cine-Sync Watch Party "${roomTitle}" in Live Sync!\nRoom Code: #${cleanCode}${pinText}\nLaunch Cine-Sync to watch together!`,
       });
     } catch (e) {
       console.log('Error sharing screening:', e);
     }
-  };
+  }, [isSoloRoom, isLocalSolo, roomTitle, streamUrl, currentRoomId, roomData]);
+
+  // ── Solo Screening: 2-Column Grid Header ──
+  const renderSoloListHeader = useCallback(() => {
+    return (
+      <View style={styles.soloHeaderWrapper}>
+        {/* ── 1. HERO VIDEO INFO ── */}
+        <View style={styles.heroVideoInfo}>
+          {/* Movie Title */}
+          <Text style={styles.heroMovieTitle} numberOfLines={2}>
+            {roomTitle}
+          </Text>
+
+          {/* Cinema Badge Row (4K Ultra HD, Auto-Saved) */}
+          <View style={styles.cinemaBadgeRow}>
+            {/* 4K Chip */}
+            <View style={styles.chip4K}>
+              <Text style={styles.chip4KText}>4K Ultra HD</Text>
+            </View>
+
+            {/* Auto-Saved Badge */}
+            <View style={styles.chipAutoSaved}>
+              <MaterialIcons name="done" size={13} color={colors.ACCEPT_GREEN} />
+              <Text style={styles.chipAutoSavedText}>Auto-Saved</Text>
+            </View>
+          </View>
+
+          {/* Channel / Source Details */}
+          <View style={styles.channelDetailsRow}>
+            <View style={styles.channelLeft}>
+              <View style={styles.channelAvatarSquircle}>
+                <Text style={styles.channelAvatarInitials}>
+                  {getInitials(displayChannelName)}
+                </Text>
+              </View>
+              <View style={styles.channelMetaCol}>
+                <View style={styles.channelNameRow}>
+                  <Text style={styles.channelNameText} numberOfLines={1}>
+                    {displayChannelName}
+                  </Text>
+                  <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
+                </View>
+                <Text style={styles.channelSubtext} numberOfLines={1}>
+                  {displayViews && displayViews !== 'Cinema Stream'
+                    ? `${displayViews} • 4K Remastered`
+                    : 'SyncLabs Cinema Archive • 4K Remastered'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* ── 2. QUICK ACTION BAR (3-Column Equal Grid) ── */}
+        <View style={styles.quickActionBar}>
+          {/* Button 1: Watch Later / Wishlist */}
+          <TouchableOpacity
+            style={[
+              styles.quickActionBtn,
+              isCurrentInWatchlist && styles.quickActionBtnActive,
+            ]}
+            onPress={handleToggleWatchlist}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons
+              name={isCurrentInWatchlist ? 'playlist-add-check' : 'watch-later'}
+              size={20}
+              color={isCurrentInWatchlist ? colors.ACCEPT_GREEN : colors.FILM_GOLD}
+            />
+            <Text
+              style={[
+                styles.quickActionLabel,
+                isCurrentInWatchlist && { color: colors.ACCEPT_GREEN, fontWeight: '700' },
+              ]}
+            >
+              {isCurrentInWatchlist ? 'In Watchlist' : 'Watch Later'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Button 2: Share */}
+          <TouchableOpacity
+            style={styles.quickActionBtn}
+            onPress={handleShareScreening}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="share" size={20} color={colors.FILM_GOLD} />
+            <Text style={styles.quickActionLabel}>Share</Text>
+          </TouchableOpacity>
+
+          {/* Button 3: Theater */}
+          <TouchableOpacity
+            style={styles.quickActionBtn}
+            onPress={toggleFullscreen}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="desktop-windows" size={20} color={colors.CYAN_ACCENT} />
+            <Text style={styles.quickActionLabel}>Theater</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── 3. MORE LIKE THIS SECTION HEADER ── */}
+        <View style={styles.recommendedGridHeader}>
+          <View style={styles.recommendedHeaderLeft}>
+            <MaterialIcons name="auto-awesome" size={15} color={colors.CYAN_ACCENT} />
+            <Text style={styles.recommendedHeaderTitle}>MORE LIKE THIS</Text>
+          </View>
+          {recommendedMedia.length > 0 && (
+            <View style={styles.recommendedBadgeCount}>
+              <Text style={styles.recommendedBadgeCountText}>{recommendedMedia.length} STREAMS</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }, [
+    roomTitle,
+    displayChannelName,
+    displayViews,
+    isCurrentInWatchlist,
+    handleToggleWatchlist,
+    handleShareScreening,
+    toggleFullscreen,
+    recommendedMedia.length,
+  ]);
+
+  // ── Solo Screening: 2-Column Faded Black Card ──
+  const renderRecommendedGridCard = useCallback(
+    ({ item }) => {
+      const cardWidth = Math.floor((width - 42) / 2);
+      const isRecSaved = isItemInWatchlist(item.mediaUrl || item.id, watchlistItems);
+      return (
+        <TouchableOpacity
+          key={item.id}
+          style={[styles.recommendedGridCard, { width: cardWidth }]}
+          onPress={() => handleSelectRecommendedMedia(item)}
+          activeOpacity={0.84}
+        >
+          <LinearGradient
+            colors={[colors.SURFACE_ELEVATED, colors.BACKGROUND_COLOR, '#06060A']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.recommendedCardGradient}
+          >
+            {/* 16:9 Squircle Thumbnail Box */}
+            <View style={styles.recommendedThumbBox}>
+              {item.thumbnail ? (
+                <Image
+                  source={{ uri: item.thumbnail }}
+                  style={styles.recommendedThumbImg}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={styles.recommendedThumbFallback}>
+                  <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
+                </View>
+              )}
+
+              {/* Bottom Thumbnail Gradient Fade into Black Card */}
+              <LinearGradient
+                colors={['transparent', 'rgba(10, 10, 18, 0.45)', colors.BACKGROUND_COLOR]}
+                locations={[0.2, 0.7, 1]}
+                style={styles.recommendedThumbFade}
+                pointerEvents="none"
+              />
+
+              {/* Quick Watch Later Action Button */}
+              <TouchableOpacity
+                style={[
+                  styles.recWatchLaterBtn,
+                  isRecSaved && styles.recWatchLaterBtnActive,
+                ]}
+                onPress={() => handleToggleRecommendedWatchlist(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons
+                  name={isRecSaved ? 'playlist-add-check' : 'watch-later'}
+                  size={14}
+                  color={isRecSaved ? colors.ACCEPT_GREEN : '#FFFFFF'}
+                />
+              </TouchableOpacity>
+
+              {item.duration ? (
+                <View style={styles.recommendedDurationBadge}>
+                  <Text style={styles.recommendedDurationText}>{item.duration}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Info Container */}
+            <View style={styles.recommendedCardInfo}>
+              <Text style={styles.recommendedCardTitle} numberOfLines={2}>
+                {item.title}
+              </Text>
+
+              <View style={styles.recommendedChannelRow}>
+                <Text style={styles.recommendedChannelText} numberOfLines={1}>
+                  {item.channelName || 'SyncLabs Cinema'}
+                </Text>
+                <MaterialIcons name="verified" size={11} color={colors.CYAN_ACCENT} />
+              </View>
+
+              <View style={styles.recommendedFooterRow}>
+                {item.views ? (
+                  <Text style={styles.recommendedViewsText} numberOfLines={1}>
+                    {item.views}
+                  </Text>
+                ) : null}
+                <View style={styles.recommendedPlayPill}>
+                  <MaterialIcons name="play-arrow" size={11} color="#FFF" />
+                  <Text style={styles.recommendedPlayText}>Play</Text>
+                </View>
+              </View>
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      );
+    },
+    [width, handleSelectRecommendedMedia, handleToggleRecommendedWatchlist, watchlistItems]
+  );
+
+  // ── Solo Screening: Infinite Pagination Footer ──
+  const renderSoloListFooter = useCallback(() => {
+    if (isLoadingMoreRecommendations) {
+      return (
+        <View style={styles.gridFooterLoader}>
+          <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
+          <Text style={styles.gridFooterLoadingText}>Discovering more cinema streams...</Text>
+        </View>
+      );
+    }
+    if (!recommendedContinuationToken && recommendedMedia.length > 0) {
+      return (
+        <View style={styles.gridEndNotice}>
+          <View style={styles.gridEndLine} />
+          <Text style={styles.gridEndText}>END OF RECOMMENDATIONS</Text>
+          <View style={styles.gridEndLine} />
+        </View>
+      );
+    }
+    return <View style={styles.gridBottomSpacer} />;
+  }, [isLoadingMoreRecommendations, recommendedContinuationToken, recommendedMedia.length]);
+
+  // ── Solo Screening: Empty State ──
+  const renderSoloListEmpty = useCallback(() => {
+    if (isLoadingRecommendations) {
+      return (
+        <View style={styles.gridEmptyBox}>
+          <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
+          <Text style={styles.gridEmptyLoadingText}>Finding related cinema streams...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.gridEmptyBox}>
+        <MaterialIcons name="theaters" size={32} color={colors.MUTED_COLOR} />
+        <Text style={styles.gridEmptyText}>No matching cinema streams found</Text>
+      </View>
+    );
+  }, [isLoadingRecommendations]);
 
   return (
     <View style={[styles.container, isLandscape && styles.containerLandscape]}>
@@ -883,54 +1295,40 @@ const StreamingScreen = ({ route, navigation }) => {
         </View>
       )}
 
-      {/* ── TOP HEADER BAR ── */}
+      {/* ── TOP HEADER BAR (Stitch AI Architecture) ── */}
       {!isLandscape && (
         <View style={[styles.topHeader, { paddingTop: safeTopPadding }]}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity
-              onPress={handleGoBack}
-              style={styles.backBtnSquircle}
-              activeOpacity={0.75}
-            >
-              <MaterialIcons name="arrow-back-ios-new" size={16} color={colors.TITLE_COLOR} />
-            </TouchableOpacity>
+          {/* Back Button Squircle */}
+          <TouchableOpacity
+            onPress={handleGoBack}
+            style={styles.backBtnSquircle}
+            activeOpacity={0.75}
+            accessibilityLabel="Go Back"
+          >
+            <MaterialIcons name="arrow-back-ios-new" size={16} color={colors.TITLE_COLOR} />
+          </TouchableOpacity>
 
-            <View style={styles.headerTitleCol}>
-              <View style={styles.titleWithBadgeRow}>
-                <Text style={styles.headerTitleText} numberOfLines={1}>
-                  {roomTitle}
-                </Text>
-              </View>
-              <Text style={styles.headerSubtitleText}>
-                {isSoloRoom
-                  ? (currentRoomId ? `Personal Cinema #${shortRoomId}` : 'Personal Cinema • Direct Stream')
-                  : `Live Sync Room #${shortRoomId}`}
-              </Text>
+          {/* Center Title & Room Meta */}
+          <View style={styles.headerCenterCol}>
+            <Text style={styles.headerTitleText} numberOfLines={1}>
+              {roomTitle}
+            </Text>
+            <Text style={styles.headerSubtitleText} numberOfLines={1}>
+              {isSoloRoom
+                ? 'Cinema Screening'
+                : (currentRoomId ? `Live Sync Room • #${shortRoomId}` : 'Live Cinema Sync')}
+            </Text>
+          </View>
+
+          {/* Right Live Status Squircle Badge (Only for Live Watch Party) or Balanced Spacer */}
+          {!isSoloRoom ? (
+            <View style={styles.liveStreamBadge}>
+              <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
+              <Text style={styles.liveStreamText}>LIVE</Text>
             </View>
-          </View>
-
-          {/* Right Action Icons */}
-          <View style={styles.headerRightActions}>
-            {isSoloRoom ? (
-              <View style={styles.soloHeaderBadge}>
-                <MaterialIcons name="person" size={11} color={colors.CYAN_ACCENT} />
-                <Text style={styles.soloHeaderBadgeText}>SOLO</Text>
-              </View>
-            ) : (
-              <View style={styles.liveStreamBadge}>
-                <Animated.View style={[styles.liveDotSolid, { opacity: livePulseAnim }]} />
-                <Text style={styles.liveStreamText}>LIVE</Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={styles.headerActionBtn}
-              onPress={handleShareScreening}
-              activeOpacity={0.75}
-            >
-              <MaterialIcons name="share" size={18} color={colors.PRIMARY_COLOR} />
-            </TouchableOpacity>
-          </View>
+          ) : (
+            <View style={styles.headerRightSpacer} />
+          )}
         </View>
       )}
 
@@ -993,6 +1391,11 @@ const StreamingScreen = ({ route, navigation }) => {
             setIsInitialLoading(false);
             console.warn('[StreamingScreen] Player Error:', error);
           }}
+          onEnd={() => {
+            setIsVideoEnded(true);
+            setPlaying(false);
+            setShowControls(true);
+          }}
           style={StyleSheet.absoluteFill}
         />
 
@@ -1025,109 +1428,149 @@ const StreamingScreen = ({ route, navigation }) => {
           <View style={styles.controlsOverlay} pointerEvents="box-none">
             {/* Top Bar inside Overlay */}
             <View style={styles.overlayTopBar}>
-              <View style={styles.overlaySyncPill}>
-                <Animated.View
-                  style={[
-                    styles.syncBufferDot,
-                    {
-                      backgroundColor: isSoloRoom ? colors.CYAN_ACCENT : colors.ACCEPT_GREEN,
-                      opacity: syncPulseAnim,
-                    },
-                  ]}
-                />
-                <Text style={styles.overlaySyncText}>
-                  {isSoloRoom ? 'Solo Cinema' : 'Live Synced'}
-                </Text>
-              </View>
+              {!isSoloRoom ? (
+                <View style={styles.overlaySyncPill}>
+                  <Animated.View
+                    style={[
+                      styles.syncBufferDot,
+                      {
+                        backgroundColor: syncStateInfo.isSynced
+                          ? colors.ACCEPT_GREEN
+                          : colors.FILM_GOLD,
+                        opacity: syncPulseAnim,
+                      },
+                    ]}
+                  />
+                  <Text style={styles.overlaySyncText}>
+                    {syncStateInfo.isSynced
+                      ? 'Live Synced'
+                      : 'Re-syncing'}
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.overlayTopBarSpacer} />
+              )}
 
               <TouchableOpacity
-                style={styles.fullscreenBtn}
+                style={styles.theaterExpandBtn}
                 onPress={toggleFullscreen}
                 activeOpacity={0.8}
+                accessibilityLabel="Theater Mode"
               >
                 <MaterialIcons
                   name={isLandscape ? 'fullscreen-exit' : 'fullscreen'}
-                  size={20}
+                  size={18}
                   color="#FFF"
                 />
               </TouchableOpacity>
             </View>
 
-            {/* Center Controls */}
-            <View style={styles.centerControlsRow}>
-              {/* -10s */}
-              <TouchableOpacity
-                style={styles.seekStepBtn}
-                onPress={handleRewind10}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="replay-10" size={22} color="#FFF" />
-              </TouchableOpacity>
-
-              {/* Play / Pause with Gradient Squircle */}
-              <TouchableOpacity
-                style={styles.playPauseGlowBtn}
-                onPress={togglePlayPause}
-                activeOpacity={0.85}
-              >
-                <LinearGradient
-                  colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
-                  style={styles.playPauseGradient}
+            {/* Center Controls (Host & Solo Only; Viewer controls hidden) */}
+            {isSoloRoom || isCreator ? (
+              <View style={styles.centerControlsRow}>
+                {/* -10s */}
+                <TouchableOpacity
+                  style={styles.seekStepBtn}
+                  onPress={handleRewind10}
+                  activeOpacity={0.8}
+                  accessibilityLabel="Rewind 10 seconds"
                 >
-                  <MaterialIcons
-                    name={playing ? 'pause' : 'play-arrow'}
-                    size={30}
-                    color="#FFF"
-                  />
-                </LinearGradient>
-              </TouchableOpacity>
+                  <MaterialIcons name="replay-10" size={22} color="#FFF" />
+                </TouchableOpacity>
 
-              {/* +10s */}
-              <TouchableOpacity
-                style={styles.seekStepBtn}
-                onPress={handleForward10}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="forward-10" size={22} color="#FFF" />
-              </TouchableOpacity>
-            </View>
+                {/* Play / Pause / Replay with Glowing Squircle */}
+                {isVideoEnded ? (
+                  <TouchableOpacity
+                    style={styles.playPauseGlowBtn}
+                    onPress={handleReplay}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Replay Video"
+                  >
+                    <LinearGradient
+                      colors={[colors.PRIMARY_COLOR, colors.CYAN_ACCENT]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.playPauseGradient}
+                    >
+                      <MaterialIcons name="replay" size={28} color="#FFF" />
+                    </LinearGradient>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.playPauseGlowBtn}
+                    onPress={togglePlayPause}
+                    activeOpacity={0.85}
+                    accessibilityLabel={playing ? 'Pause' : 'Play'}
+                  >
+                    <LinearGradient
+                      colors={[colors.PRIMARY_COLOR, colors.CYAN_ACCENT]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.playPauseGradient}
+                    >
+                      <MaterialIcons
+                        name={playing ? 'pause' : 'play-arrow'}
+                        size={30}
+                        color="#FFF"
+                        style={{ marginLeft: playing ? 0 : 2 }}
+                      />
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
 
-            {/* Bottom Scrubber & Time Counter */}
-            <View style={styles.bottomScrubberRow}>
-              <View style={styles.scrubberTrack}>
-                <View style={[styles.scrubberBuffered, { width: '55%' }]} />
-                <View style={[styles.scrubberFill, { width: `${progressPercent}%` }]} />
+                {/* +10s */}
+                <TouchableOpacity
+                  style={styles.seekStepBtn}
+                  onPress={handleForward10}
+                  activeOpacity={0.8}
+                  accessibilityLabel="Forward 10 seconds"
+                >
+                  <MaterialIcons name="forward-10" size={22} color="#FFF" />
+                </TouchableOpacity>
               </View>
-
-              <View style={styles.scrubberMetaRow}>
-                <View style={styles.timeCounterGroup}>
-                  <Text style={styles.timeCurrentText}>{formatTime(currentTime)}</Text>
-                  <Text style={styles.timeDivider}>/</Text>
-                  <Text style={styles.timeTotalText}>{formatTime(duration)}</Text>
-                  <View style={styles.syncLockBadge}>
-                    <Animated.View
-                      style={[
-                        styles.syncLockDot,
-                        {
-                          backgroundColor: syncStateInfo.isSolo || isSoloRoom
-                            ? colors.CYAN_ACCENT
-                            : syncStateInfo.isSynced
-                            ? colors.ACCEPT_GREEN
-                            : colors.FILM_GOLD,
-                          opacity: syncPulseAnim,
-                        },
-                      ]}
-                    />
-                    <Text style={styles.syncLockText}>
-                      {syncStateInfo.isSolo || isSoloRoom
-                        ? 'Solo Mode • Progress Saved'
-                        : syncStateInfo.isSynced
-                        ? 'Sync Locked'
-                        : 'Re-syncing'}
-                    </Text>
-                  </View>
+            ) : (
+              <View style={styles.centerControlsRow}>
+                <View style={styles.centerViewerSyncedPill}>
+                  <MaterialIcons name="sync" size={14} color={colors.CYAN_ACCENT} />
+                  <Text style={styles.centerViewerSyncedText}>Controlled by Host • Synced</Text>
                 </View>
               </View>
+            )}
+
+            {/* Bottom Scrubber & Time Counter (Interactive Touch Scrubber) */}
+            <View style={styles.bottomScrubberRow}>
+              <View
+                style={styles.scrubberTouchArea}
+                onLayout={e => {
+                  const w = e.nativeEvent.layout.width;
+                  if (w > 0) setScrubberWidth(w);
+                }}
+                onStartShouldSetResponder={() => isSoloRoom || isCreator}
+                onMoveShouldSetResponder={() => isSoloRoom || isCreator}
+                onResponderGrant={handleScrubberTouch}
+                onResponderMove={handleScrubberTouch}
+              >
+                <View style={styles.scrubberTrack}>
+                  <View style={[styles.scrubberFill, { width: `${progressPercent}%` }]} />
+                </View>
+
+                {/* Glowing Squircle Thumb Indicator */}
+                <View
+                  style={[
+                    styles.scrubberThumb,
+                    { left: `${progressPercent}%` },
+                  ]}
+                />
+              </View>
+
+              {/* High-Contrast Time Counter */}
+              <Text style={styles.highContrastTimeCounter}>
+                {duration > 0
+                  ? `${formatTime(currentTime)} / ${formatTime(duration)}`
+                  : activeDurationText
+                  ? `${formatTime(currentTime)} / ${activeDurationText}`
+                  : `${formatTime(currentTime)} • LIVE`}
+              </Text>
             </View>
           </View>
         )}
@@ -1212,242 +1655,22 @@ const StreamingScreen = ({ route, navigation }) => {
         <View style={styles.adaptiveContentWrap}>
           {isSoloRoom ? (
             /* ============================================================== */
-            /* SOLO CINEMA COMPANION (2-Column Grid with Infinite Scroll)    */
+            /* CINEMA SCREENING COMPANION (2-Column Infinite Grid)           */
             /* ============================================================== */
             <FlatList
               data={recommendedMedia}
-              keyExtractor={item => item.id}
+              keyExtractor={(item, index) => item.id || `rec_${index}`}
               numColumns={2}
               columnWrapperStyle={styles.recommendedGridRow}
-              style={styles.soloCompanionScroll}
-              contentContainerStyle={styles.soloCompanionContent}
+              contentContainerStyle={styles.soloGridScrollContent}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               onEndReached={handleLoadMoreRecommendations}
               onEndReachedThreshold={0.5}
-              ListHeaderComponent={
-                <View style={styles.soloHeaderComponentsWrap}>
-                  {/* ── 1. VIDEO INFO HERO CARD ── */}
-                  <LinearGradient
-                    colors={['#141424', '#0D0D18', '#080810']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.soloInfoCard}
-                  >
-                    <Text style={styles.soloVideoTitle} numberOfLines={2}>
-                      {roomTitle}
-                    </Text>
-
-                    {/* Channel Row (No Direct 4K tag) */}
-                    <View style={styles.soloChannelRow}>
-                      <View style={styles.soloChannelLeft}>
-                        <View style={styles.soloChannelAvatar}>
-                          <MaterialIcons name="theaters" size={13} color={colors.CYAN_ACCENT} />
-                        </View>
-                        <Text style={styles.soloChannelName} numberOfLines={1}>
-                          {displayChannelName}
-                        </Text>
-                        <MaterialIcons name="verified" size={13} color={colors.CYAN_ACCENT} />
-                      </View>
-                    </View>
-
-                    {/* Metrics Row */}
-                    <View style={styles.soloMetricsRow}>
-                      <View style={styles.soloMetricItem}>
-                        <MaterialIcons name="visibility" size={13} color={colors.SUB_TITLE_COLOR} />
-                        <Text style={styles.soloMetricText}>{displayViews}</Text>
-                      </View>
-
-                      <View style={styles.soloMetricDivider} />
-
-                      <View style={styles.soloMetricItem}>
-                        <MaterialIcons name="schedule" size={13} color={colors.SUB_TITLE_COLOR} />
-                        <Text style={styles.soloMetricText}>{displayDuration}</Text>
-                      </View>
-
-                      <View style={styles.soloMetricDivider} />
-
-                      <View style={styles.soloMetricItem}>
-                        <MaterialIcons name="cloud-done" size={13} color={colors.ACCEPT_GREEN} />
-                        <Text style={styles.soloAutoSaveText}>Auto-Saved</Text>
-                      </View>
-                    </View>
-                  </LinearGradient>
-
-                  {/* ── 2. QUICK ACTION BAR ── */}
-                  <View style={styles.soloActionBar}>
-                    {/* Notes & Moments Button - Opens On-Demand Bottom Sheet */}
-                    <TouchableOpacity
-                      style={[styles.soloActionBtn, notes.length > 0 && styles.soloActionBtnActive]}
-                      onPress={() => setIsNotesSheetVisible(true)}
-                      activeOpacity={0.78}
-                    >
-                      <MaterialIcons
-                        name="bookmarks"
-                        size={17}
-                        color={notes.length > 0 ? colors.CYAN_ACCENT : colors.TITLE_COLOR}
-                      />
-                      <Text
-                        style={[
-                          styles.soloActionBtnText,
-                          notes.length > 0 && styles.soloActionBtnTextActive,
-                        ]}
-                      >
-                        Notes {notes.length > 0 ? `(${notes.length})` : ''}
-                      </Text>
-                    </TouchableOpacity>
-
-                    {/* Quick Instant Bookmark Button */}
-                    <TouchableOpacity
-                      style={styles.soloActionBtn}
-                      onPress={() => {
-                        addNote(`Saved milestone @ ${formatTime(currentTime)}`);
-                        setIsNotesSheetVisible(true);
-                      }}
-                      activeOpacity={0.78}
-                    >
-                      <MaterialIcons name="bookmark-add" size={17} color={colors.PRIMARY_COLOR} />
-                      <Text style={styles.soloActionBtnText}>+ Bookmark</Text>
-                    </TouchableOpacity>
-
-                    {/* Share Button */}
-                    <TouchableOpacity
-                      style={styles.soloActionBtn}
-                      onPress={handleShareScreening}
-                      activeOpacity={0.78}
-                    >
-                      <MaterialIcons name="share" size={17} color={colors.FILM_GOLD} />
-                      <Text style={styles.soloActionBtnText}>Share</Text>
-                    </TouchableOpacity>
-
-                    {/* Theater / Fullscreen Button */}
-                    <TouchableOpacity
-                      style={styles.soloActionBtn}
-                      onPress={toggleFullscreen}
-                      activeOpacity={0.78}
-                    >
-                      <MaterialIcons name="fullscreen" size={19} color={colors.TITLE_COLOR} />
-                      <Text style={styles.soloActionBtnText}>Theater</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* ── 3. UP NEXT & RECOMMENDED GRID HEADER ── */}
-                  <View style={styles.upNextHeaderRow}>
-                    <View style={styles.upNextTitleGroup}>
-                      <MaterialIcons name="auto-awesome" size={15} color={colors.CYAN_ACCENT} />
-                      <Text style={styles.upNextHeading}>UP NEXT & RECOMMENDED</Text>
-                    </View>
-                    <Text style={styles.upNextSubheading}>Instant Play</Text>
-                  </View>
-
-                  {isLoadingRecommendations && (
-                    <View style={styles.upNextLoadingBox}>
-                      <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
-                      <Text style={styles.upNextLoadingText}>Finding related cinema streams...</Text>
-                    </View>
-                  )}
-                </View>
-              }
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.recommendedGridCard}
-                  onPress={() => handleSelectRecommendedMedia(item)}
-                  activeOpacity={0.82}
-                >
-                  <LinearGradient
-                    colors={['#131322', '#0A0A12', '#06060A']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 0, y: 1 }}
-                    style={styles.recommendedGridCardGradient}
-                  >
-                    {/* 16:9 Squircle Thumbnail */}
-                    <View style={styles.recommendedGridThumbWrap}>
-                      {item.thumbnail ? (
-                        <Image
-                          source={{ uri: item.thumbnail }}
-                          style={styles.recommendedGridThumbImg}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={styles.recommendedThumbFallback}>
-                          <MaterialIcons name="movie" size={24} color={colors.MUTED_COLOR} />
-                        </View>
-                      )}
-
-                      {/* Smooth black card thumbnail fade overlay */}
-                      <LinearGradient
-                        colors={['transparent', 'rgba(10, 10, 18, 0.45)', '#0A0A12']}
-                        locations={[0.2, 0.7, 1]}
-                        style={styles.recommendedThumbFade}
-                        pointerEvents="none"
-                      />
-
-                      {item.duration ? (
-                        <View style={styles.recommendedDurationBadge}>
-                          <Text style={styles.recommendedDurationText}>{item.duration}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {/* Grid Info */}
-                    <View style={styles.recommendedGridInfo}>
-                      <Text style={styles.recommendedGridTitle} numberOfLines={2}>
-                        {item.title}
-                      </Text>
-
-                      <View style={styles.recommendedGridChannelRow}>
-                        <Text style={styles.recommendedGridChannel} numberOfLines={1}>
-                          {item.channelName}
-                        </Text>
-                        <MaterialIcons name="verified" size={11} color={colors.CYAN_ACCENT} />
-                      </View>
-
-                      <View style={styles.recommendedGridFooterRow}>
-                        {item.views ? (
-                          <Text style={styles.recommendedGridViews} numberOfLines={1}>
-                            {item.views}
-                          </Text>
-                        ) : null}
-                        <View style={styles.recommendedGridPlayPill}>
-                          <MaterialIcons name="play-arrow" size={11} color="#FFF" />
-                          <Text style={styles.recommendedGridPlayText}>Play</Text>
-                        </View>
-                      </View>
-                    </View>
-                  </LinearGradient>
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                !isLoadingRecommendations ? (
-                  <View style={styles.upNextEmptyBox}>
-                    <MaterialIcons name="theaters" size={26} color={colors.MUTED_COLOR} />
-                    <Text style={styles.upNextEmptyText}>Ready for personal playback</Text>
-                  </View>
-                ) : null
-              }
-              ListFooterComponent={
-                isLoadingMoreRecommendations ? (
-                  <View style={styles.upNextLoadingBox}>
-                    <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
-                    <Text style={styles.upNextLoadingText}>Loading more suggestions...</Text>
-                  </View>
-                ) : recommendedContinuationToken ? (
-                  <TouchableOpacity
-                    style={styles.loadMoreSuggestionsBtn}
-                    onPress={handleLoadMoreRecommendations}
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons name="expand-more" size={18} color={colors.CYAN_ACCENT} />
-                    <Text style={styles.loadMoreSuggestionsText}>Load More Suggestions</Text>
-                  </TouchableOpacity>
-                ) : recommendedMedia.length > 0 ? (
-                  <View style={styles.endOfSuggestionsWrap}>
-                    <MaterialIcons name="check-circle" size={14} color={colors.ACCEPT_GREEN} />
-                    <Text style={styles.endOfSuggestionsText}>All matching suggestions loaded</Text>
-                  </View>
-                ) : null
-              }
+              renderItem={renderRecommendedGridCard}
+              ListHeaderComponent={renderSoloListHeader}
+              ListFooterComponent={renderSoloListFooter}
+              ListEmptyComponent={renderSoloListEmpty}
             />
           ) : activeMode === 'notes' ? (
             /* PARTY MODE: Notes Tab */
@@ -1460,7 +1683,7 @@ const StreamingScreen = ({ route, navigation }) => {
                   <View style={styles.storyboardTitleGroup}>
                     <Text style={styles.storyboardTitle}>My Stream Storyboard</Text>
                     <View style={styles.privateVaultBadge}>
-                      <Text style={styles.privateVaultText}>Private Vault</Text>
+                      <Text style={styles.privateVaultText}>Cinema Storyboard</Text>
                     </View>
                   </View>
                   <Text style={styles.storyboardSubtitle}>
@@ -1488,7 +1711,7 @@ const StreamingScreen = ({ route, navigation }) => {
                 ListEmptyComponent={
                   <View style={styles.emptyNotesBox}>
                     <MaterialIcons name="bookmark-outline" size={42} color={colors.CYAN_ACCENT} />
-                    <Text style={styles.emptyNotesTitle}>Personal Notes & Bookmarks</Text>
+                    <Text style={styles.emptyNotesTitle}>Cinema Notes & Bookmarks</Text>
                     <Text style={styles.emptyNotesSubtitle}>
                       Save your thoughts linked to timestamps while watching:
                       {'\n'}• Tap "+ Bookmark" above to mark this exact second.
@@ -1815,7 +2038,7 @@ const StreamingScreen = ({ route, navigation }) => {
                   </View>
                   <Text style={styles.sheetEmptyTitle}>No Notes Yet</Text>
                   <Text style={styles.sheetEmptySubtitle}>
-                    Capture your personal thoughts, key quotes, or scene timestamps while watching.
+                    Capture your thoughts, key quotes, or scene timestamps while watching.
                   </Text>
                 </View>
               }
@@ -1924,109 +2147,60 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.BORDER_SUBTLE,
     zIndex: 50,
   },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+  headerCenterCol: {
     flex: 1,
+    paddingHorizontal: 12,
+    alignItems: 'center',
   },
   backBtnSquircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.BORDER_SUBTLE,
   },
-  headerTitleCol: {
-    flex: 1,
-  },
-  titleWithBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
   headerTitleText: {
     color: colors.TITLE_COLOR,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
-    maxWidth: '75%',
-  },
-  hdrTag: {
-    backgroundColor: colors.FILM_GOLD_GLOW,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 180, 0, 0.3)',
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 4,
-  },
-  hdrTagText: {
-    color: colors.FILM_GOLD,
-    fontSize: 9,
-    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 0.2,
   },
   headerSubtitleText: {
     color: colors.SUB_TITLE_COLOR,
     fontSize: 11,
     fontWeight: '500',
-    marginTop: 1,
+    textAlign: 'center',
+    marginTop: 2,
   },
-  headerRightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  headerRightSpacer: {
+    width: 40,
   },
   liveStreamBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.LIVE_RED_GLOW,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    gap: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderColor: 'rgba(239, 68, 68, 0.4)',
   },
   liveDotSolid: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: colors.LIVE_RED,
   },
   liveStreamText: {
     color: colors.LIVE_RED,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  soloHeaderBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(6, 182, 212, 0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.35)',
-  },
-  soloHeaderBadgeText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  headerActionBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
   },
 
   // ── Video Section ──
@@ -2052,6 +2226,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 10,
   },
+  overlayTopBarSpacer: {
+    flex: 1,
+  },
   overlaySyncPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2075,11 +2252,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  fullscreenBtn: {
+  theaterExpandBtn: {
     width: 34,
     height: 34,
-    borderRadius: 10,
-    backgroundColor: 'rgba(8, 8, 16, 0.75)',
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
@@ -2126,6 +2303,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 24,
   },
+  centerViewerSyncedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 12,
+  },
+  centerViewerSyncedText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   seekStepBtn: {
     width: 38,
     height: 38,
@@ -2141,11 +2334,11 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 14,
     overflow: 'hidden',
-    shadowColor: colors.PRIMARY_COLOR,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 14,
-    elevation: 6,
+    shadowColor: colors.CYAN_ACCENT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 16,
+    elevation: 8,
   },
   playPauseGradient: {
     flex: 1,
@@ -2153,11 +2346,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Bottom Scrubber Bar
+  // Bottom Scrubber Bar & Timers
   bottomScrubberRow: {
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    backgroundColor: 'rgba(8, 8, 16, 0.7)',
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+    paddingTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(8, 8, 16, 0.8)',
+  },
+  scrubberTouchArea: {
+    flex: 1,
+    height: 32,
+    justifyContent: 'center',
   },
   scrubberTrack: {
     height: 4,
@@ -2166,62 +2368,32 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  scrubberBuffered: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
   scrubberFill: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
+    height: '100%',
     backgroundColor: colors.CYAN_ACCENT,
   },
-  scrubberMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 6,
+  scrubberThumb: {
+    position: 'absolute',
+    top: 9,
+    width: 14,
+    height: 14,
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: colors.CYAN_ACCENT,
+    shadowColor: colors.CYAN_ACCENT,
+    shadowRadius: 8,
+    shadowOpacity: 0.8,
+    elevation: 6,
+    marginLeft: -7,
   },
-  timeCounterGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  timeCurrentText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  timeDivider: {
-    color: colors.MUTED_COLOR,
-    fontSize: 11,
-  },
-  timeTotalText: {
-    color: colors.SUB_TITLE_COLOR,
+  highContrastTimeCounter: {
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  syncLockBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    marginLeft: 6,
-  },
-  syncLockDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.ACCEPT_GREEN,
-  },
-  syncLockText: {
-    color: colors.ACCEPT_GREEN,
-    fontSize: 10,
     fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.9)',
+    letterSpacing: 0.4,
+    flexShrink: 0,
   },
 
 
@@ -2877,216 +3049,231 @@ const styles = StyleSheet.create({
     zIndex: 60,
   },
 
-  // ── Solo Cinema Companion & Up Next Hub ──
-  soloCompanionScroll: {
-    flex: 1,
-  },
-  soloCompanionContent: {
-    paddingTop: 12,
+  // ── Cinema Screening Companion & 2-Column Infinite Grid Hub ──
+  soloGridScrollContent: {
     paddingBottom: 40,
   },
-  soloHeaderComponentsWrap: {
-    paddingHorizontal: 16,
+  soloHeaderWrapper: {
     gap: 14,
-    marginBottom: 14,
+    marginBottom: 12,
   },
-  soloInfoCard: {
-    backgroundColor: '#0A0A12',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.07)',
+  heroVideoInfo: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
     gap: 10,
-    overflow: 'hidden',
   },
-  soloVideoTitle: {
+  heroMovieTitle: {
     color: colors.TITLE_COLOR,
-    fontSize: 16,
-    fontWeight: '800',
-    lineHeight: 22,
+    fontSize: 18,
+    fontWeight: '700',
+    lineHeight: 24,
     letterSpacing: 0.2,
   },
-  soloChannelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  soloChannelLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flex: 1,
-  },
-  soloChannelAvatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  soloChannelName: {
-    color: colors.TITLE_COLOR,
-    fontSize: 13,
-    fontWeight: '700',
-    maxWidth: '75%',
-  },
-  soloSpecsBadge: {
-    backgroundColor: 'rgba(6, 182, 212, 0.12)',
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.28)',
-  },
-  soloSpecsText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  soloMetricsRow: {
+  cinemaBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingTop: 4,
+    paddingVertical: 2,
   },
-  soloMetricItem: {
+  chip4K: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.4)',
+    backgroundColor: 'rgba(6, 182, 212, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chip4KText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  chipAutoSaved: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 200, 83, 0.3)',
+    backgroundColor: 'rgba(0, 200, 83, 0.12)',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
   },
-  soloMetricText: {
-    color: colors.SUB_TITLE_COLOR,
+  chipAutoSavedText: {
+    color: colors.ACCEPT_GREEN,
     fontSize: 11,
     fontWeight: '600',
   },
-  soloMetricDivider: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: colors.MUTED_COLOR,
-  },
-  soloAutoSaveText: {
-    color: colors.ACCEPT_GREEN,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-
-  // ── Solo Quick Action Bar ──
-  soloActionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  soloActionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    backgroundColor: '#0C0C16',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.07)',
-  },
-  soloActionBtnActive: {
-    borderColor: 'rgba(6, 182, 212, 0.4)',
-    backgroundColor: 'rgba(6, 182, 212, 0.08)',
-  },
-  soloActionBtnText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  soloActionBtnTextActive: {
-    color: colors.CYAN_ACCENT,
-  },
-
-  // ── Up Next & Recommended Cinema ──
-  upNextSection: {
-    gap: 12,
-  },
-  upNextHeaderRow: {
+  channelDetailsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 2,
+    paddingTop: 2,
   },
-  upNextTitleGroup: {
+  channelLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  channelAvatarSquircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelAvatarInitials: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  channelMetaCol: {
+    flex: 1,
+    gap: 2,
+  },
+  channelNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  channelNameText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  channelSubtext: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+  },
+
+  // ── Quick Action Bar (3-Column Equal Grid) ──
+  quickActionBar: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  quickActionBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    gap: 6,
+  },
+  quickActionBtnActive: {
+    borderColor: 'rgba(0, 200, 83, 0.40)',
+    backgroundColor: 'rgba(0, 200, 83, 0.08)',
+  },
+  quickActionLabel: {
+    color: colors.TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+
+  // Quick Watch Later in Recommendation Thumbnail
+  recWatchLaterBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: 'rgba(15, 15, 26, 0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
+  },
+  recWatchLaterBtnActive: {
+    backgroundColor: 'rgba(0, 200, 83, 0.22)',
+    borderColor: colors.ACCEPT_GREEN,
+  },
+
+  // ── More Like This Section Header ──
+  recommendedGridHeader: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 8,
+    paddingBottom: 2,
+  },
+  recommendedHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  upNextHeading: {
+  recommendedHeaderTitle: {
     color: colors.TITLE_COLOR,
     fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.6,
+    fontWeight: '700',
+    letterSpacing: 0.8,
   },
-  upNextSubheading: {
-    color: colors.MUTED_COLOR,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  upNextLoadingBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 24,
-    backgroundColor: '#0A0A12',
-    borderRadius: 12,
+  recommendedBadgeCount: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: colors.BORDER_SUBTLE,
   },
-  upNextLoadingText: {
-    color: colors.SUB_TITLE_COLOR,
-    fontSize: 12,
-    fontWeight: '600',
+  recommendedBadgeCountText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
   },
+
+  // ── Faded Black Recommended Grid Card (Matching Design Standard) ──
   recommendedGridRow: {
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     marginBottom: 12,
   },
   recommendedGridCard: {
-    width: '48.5%',
-    backgroundColor: '#0A0A12',
+    backgroundColor: colors.SURFACE_COLOR,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.07)',
+    borderColor: colors.BORDER_SUBTLE,
     overflow: 'hidden',
   },
-  recommendedGridCardGradient: {
+  recommendedCardGradient: {
     flex: 1,
   },
-  recommendedGridThumbWrap: {
+  recommendedThumbBox: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: '#07070E',
+    backgroundColor: colors.SURFACE_ELEVATED,
     position: 'relative',
     overflow: 'hidden',
   },
-  recommendedGridThumbImg: {
+  recommendedThumbImg: {
     width: '100%',
     height: '100%',
+  },
+  recommendedThumbFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   recommendedThumbFade: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: 38,
-  },
-  recommendedThumbFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    height: 34,
   },
   recommendedDurationBadge: {
     position: 'absolute',
@@ -3101,103 +3288,166 @@ const styles = StyleSheet.create({
   },
   recommendedDurationText: {
     color: '#FFF',
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  recommendedGridInfo: {
+  recommendedCardInfo: {
     padding: 8,
     gap: 3,
+    backgroundColor: 'transparent',
   },
-  recommendedGridTitle: {
+  recommendedCardTitle: {
     color: colors.TITLE_COLOR,
     fontSize: 12,
     fontWeight: '700',
     lineHeight: 16,
   },
-  recommendedGridChannelRow: {
+  recommendedChannelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     marginTop: 2,
   },
-  recommendedGridChannel: {
+  recommendedChannelText: {
     color: colors.SUB_TITLE_COLOR,
     fontSize: 10.5,
     fontWeight: '600',
     flexShrink: 1,
   },
-  recommendedGridFooterRow: {
+  recommendedFooterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 3,
+    marginTop: 4,
   },
-  recommendedGridViews: {
+  recommendedViewsText: {
     color: colors.MUTED_COLOR,
     fontSize: 10,
     fontWeight: '500',
     flexShrink: 1,
   },
-  recommendedGridPlayPill: {
+  recommendedPlayPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.PRIMARY_COLOR,
+    gap: 2,
+    backgroundColor: 'rgba(6, 182, 212, 0.2)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
-    gap: 2,
+    borderWidth: 0.5,
+    borderColor: 'rgba(6, 182, 212, 0.4)',
   },
-  recommendedGridPlayText: {
-    color: '#FFF',
-    fontSize: 10,
-    fontWeight: '800',
+  recommendedPlayText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 9.5,
+    fontWeight: '700',
   },
-  loadMoreSuggestionsBtn: {
+
+  // ── Grid Footer & Empty States ──
+  gridFooterLoader: {
+    paddingVertical: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  gridFooterLoadingText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  gridEndNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    marginVertical: 14,
-    marginHorizontal: 16,
-    paddingVertical: 11,
-    backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    paddingVertical: 24,
+    paddingHorizontal: 24,
+    gap: 12,
   },
-  loadMoreSuggestionsText: {
+  gridEndLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.BORDER_SUBTLE,
+  },
+  gridEndText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  gridBottomSpacer: {
+    height: 28,
+  },
+  gridEmptyBox: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  gridEmptyLoadingText: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+  },
+  gridEmptyText: {
+    color: colors.MUTED_COLOR,
+    fontSize: 12,
+  },
+  browseAllText: {
     color: colors.CYAN_ACCENT,
     fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  endOfSuggestionsWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 16,
-  },
-  endOfSuggestionsText: {
-    color: colors.MUTED_COLOR,
-    fontSize: 11,
     fontWeight: '600',
   },
-  upNextEmptyBox: {
+
+  // ── Saved Milestones Preview ──
+  storyboardPreviewSection: {
+    paddingHorizontal: 16,
+    marginTop: 6,
+    gap: 8,
+  },
+  storyboardPreviewHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 28,
-    backgroundColor: colors.SURFACE_COLOR,
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  milestoneMiniCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.SURFACE_ELEVATED,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.BORDER_SUBTLE,
-    gap: 6,
-    marginHorizontal: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
-  upNextEmptyText: {
-    color: colors.MUTED_COLOR,
-    fontSize: 12,
-    fontWeight: '600',
+  milestoneMiniLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  milestoneTimePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  milestoneTimeText: {
+    color: colors.CYAN_ACCENT,
+    fontSize: 10.5,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  milestoneMiniText: {
+    color: colors.TITLE_COLOR,
+    fontSize: 11.5,
+    flex: 1,
   },
 
   // ── On-Demand Notes Bottom Sheet Modal ──

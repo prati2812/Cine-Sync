@@ -7,6 +7,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import colors from '../theme/Colors';
 
 import HomeScreen from '../screens/main/HomeScreen';
+import LibraryScreen from '../screens/main/Library/LibraryScreen';
 import FriendsScreen from '../screens/main/Chat/FriendsScreen';
 import UserProfileScreen from '../screens/main/Settings/UserProfileScreen';
 
@@ -25,6 +26,20 @@ const MainTabs = () => {
           tabBarIcon: ({ focused }) => (
             <Icon
               name={focused ? 'home' : 'home-outline'}
+              size={22}
+              color={focused ? '#FFF' : colors.MUTED_COLOR}
+            />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Library"
+        component={LibraryScreen}
+        options={{
+          tabBarLabel: 'Library',
+          tabBarIcon: ({ focused }) => (
+            <Icon
+              name={focused ? 'play-circle' : 'play-circle-outline'}
               size={22}
               color={focused ? '#FFF' : colors.MUTED_COLOR}
             />
@@ -121,7 +136,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.BORDER_SUBTLE,
     paddingBottom: 14,
     paddingTop: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
   },
   tabButton: {
     flex: 1,
@@ -132,25 +147,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 24,
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
   },
   inactiveTab: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 3,
   },
   tabText: {
-    fontSize: 11,
+    fontSize: 10.5,
     color: colors.MUTED_COLOR,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   tabTextFocused: {
-    fontSize: 13,
+    fontSize: 11.5,
     color: '#FFF',
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });
 

@@ -82,7 +82,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
 
   // Form states
   const [streamUrl, setStreamUrl] = useState(
-    editingRoom?.streamUrl || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
+    editingRoom?.streamUrl || editingRoom?.mediaUrl || editingRoom?.url || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
   );
   const [roomName, setRoomName] = useState(
     editingRoom?.name || 'Friday Night Sci-Fi Marathon'

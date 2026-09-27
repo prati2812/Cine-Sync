@@ -6,13 +6,13 @@ import {
   StyleSheet,
   ScrollView,
   Dimensions,
-  Alert,
   ImageBackground,
   Share,
   Animated,
   Easing,
   StatusBar,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth, database } from '../../../config/firebase';
@@ -21,6 +21,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { getYouTubeThumbnailDetails } from '../../../functions';
+import { showCineAlert } from '../../../components/CineAlert';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -295,18 +296,35 @@ const WaitingScreen = ({ route, navigation }) => {
   const roomPin = roomData?.pin || null;
   const isPrivate = !!roomData?.isPrivate;
 
-  // Actions
   const handleLaunchScreening = async () => {
     if (!isCreator) {
-      Alert.alert('Host Only', 'Only the room creator can launch the screening room.');
+      showCineAlert({
+        type: 'info',
+        icon: 'lock',
+        title: 'Host Only',
+        message: 'Only the room creator can launch the screening room.',
+        confirmText: 'Got It',
+      });
       return;
     }
 
     const roomRef = database().ref(`rooms/${roomId}`);
     try {
-      await roomRef.update({
-        isStreaming: true,
-      });
+      // Pre-seed playback node alongside room status so viewers and host start in perfect sync from 0:00
+      await Promise.all([
+        roomRef.update({
+          isStreaming: true,
+          hostOffline: false,
+        }),
+        database().ref(`rooms_playback/${roomId}`).set({
+          state: 'PLAY',
+          position: 0,
+          serverTime: database.ServerValue.TIMESTAMP,
+          rate: 1.0,
+          v: 1,
+          isHostDisconnected: false,
+        }),
+      ]);
 
       navigation.replace('Streaming', {
         roomId,
@@ -315,7 +333,13 @@ const WaitingScreen = ({ route, navigation }) => {
       });
     } catch (error) {
       console.error('Error launching stream:', error);
-      Alert.alert('Error', 'Could not start the screening room. Please try again.');
+      showCineAlert({
+        type: 'danger',
+        icon: 'error-outline',
+        title: 'Launch Failed',
+        message: 'Could not start the screening room. Please try again.',
+        confirmText: 'Dismiss',
+      });
     }
   };
 
@@ -338,7 +362,13 @@ const WaitingScreen = ({ route, navigation }) => {
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
     if (!success) {
-      Alert.alert('Room Code', cleanRoomCode);
+      showCineAlert({
+        type: 'info',
+        icon: 'content-copy',
+        title: 'Room Code',
+        message: cleanRoomCode,
+        confirmText: 'OK',
+      });
     }
   };
 
@@ -348,7 +378,13 @@ const WaitingScreen = ({ route, navigation }) => {
     setCopiedPin(true);
     setTimeout(() => setCopiedPin(false), 2000);
     if (!success) {
-      Alert.alert('Access PIN', roomPin);
+      showCineAlert({
+        type: 'info',
+        icon: 'lock',
+        title: 'Access PIN',
+        message: roomPin,
+        confirmText: 'OK',
+      });
     }
   };
 
@@ -356,86 +392,102 @@ const WaitingScreen = ({ route, navigation }) => {
   const handleParticipantPress = (p) => {
     if (!isCreator || p.isHost) return;
 
-    Alert.alert(
-      `Manage @${p.name}`,
-      `Audience Member • ${p.isOnline ? 'Online' : 'Connecting'}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Make Host',
-          onPress: () => handleTransferHost(p),
-        },
-        {
-          text: 'Remove from Lounge',
-          style: 'destructive',
-          onPress: () => handleRemoveParticipant(p),
-        },
-      ]
-    );
+    showCineAlert({
+      type: 'action',
+      icon: 'manage-accounts',
+      title: `Manage @${p.name}`,
+      message: `Audience Member • ${p.isOnline ? 'Online' : 'Connecting'}\nSelect moderation action for this participant:`,
+      cancelText: 'Make Host',
+      confirmText: 'Remove Viewer',
+      onCancel: () => handleTransferHost(p),
+      onConfirm: () => handleRemoveParticipant(p),
+    });
   };
 
   const handleTransferHost = (targetUser) => {
-    Alert.alert(
-      'Transfer Host Role',
-      `Make @${targetUser.name} the new room leader? You will relinquish stream launch control.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Transfer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await database().ref(`rooms/${roomId}/creator`).update({
-                email: targetUser.email,
-                userName: targetUser.name,
-                uid: targetUser.uid,
-              });
-              Alert.alert('Host Transferred', `@${targetUser.name} is now the host.`);
-            } catch (err) {
-              Alert.alert('Error', 'Failed to transfer host privilege.');
-            }
-          },
-        },
-      ]
-    );
+    showCineAlert({
+      type: 'warning',
+      icon: 'stars',
+      title: 'Transfer Host Role',
+      message: `Make @${targetUser.name} the new room leader? You will relinquish stream launch control.`,
+      cancelText: 'Cancel',
+      confirmText: 'Transfer Host',
+      onConfirm: async () => {
+        try {
+          await database().ref(`rooms/${roomId}/creator`).update({
+            email: targetUser.email,
+            userName: targetUser.name,
+            uid: targetUser.uid,
+          });
+          showCineAlert({
+            type: 'success',
+            icon: 'check-circle',
+            title: 'Host Transferred',
+            message: `@${targetUser.name} is now the host.`,
+            confirmText: 'OK',
+          });
+        } catch (err) {
+          showCineAlert({
+            type: 'danger',
+            title: 'Error',
+            message: 'Failed to transfer host privilege.',
+            confirmText: 'OK',
+          });
+        }
+      },
+    });
   };
 
   const handleRemoveParticipant = (targetUser) => {
-    Alert.alert(
-      'Remove Viewer',
-      `Remove @${targetUser.name} from this screening lounge?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updated = (roomData?.participants || []).filter(
-                (e) => e.toLowerCase() !== targetUser.email.toLowerCase()
-              );
-              await database().ref(`rooms/${roomId}/participants`).set(updated);
-            } catch (err) {
-              Alert.alert('Error', 'Failed to remove viewer.');
-            }
-          },
-        },
-      ]
-    );
+    showCineAlert({
+      type: 'danger',
+      icon: 'person-remove',
+      title: 'Remove Viewer',
+      message: `Remove @${targetUser.name} from this screening lounge?`,
+      cancelText: 'Cancel',
+      confirmText: 'Remove',
+      onConfirm: async () => {
+        try {
+          const updated = (roomData?.participants || []).filter(
+            (e) => e.toLowerCase() !== targetUser.email.toLowerCase()
+          );
+          await database().ref(`rooms/${roomId}/participants`).set(updated);
+        } catch (err) {
+          showCineAlert({
+            type: 'danger',
+            title: 'Error',
+            message: 'Failed to remove viewer.',
+            confirmText: 'OK',
+          });
+        }
+      },
+    });
   };
 
-  const handleLeaveLounge = () => {
-    Alert.alert(
-      'Leave Lounge?',
-      isCreator
+  const handleLeaveLounge = useCallback(() => {
+    showCineAlert({
+      presentationStyle: 'bottomSheet',
+      type: 'danger',
+      icon: 'meeting-room',
+      title: 'Leave Lounge?',
+      message: isCreator
         ? 'As the host, leaving will exit the lounge. Other viewers can remain in the lobby until you return.'
         : 'Are you sure you want to leave this screening room?',
-      [
-        { text: 'Stay', style: 'cancel' },
-        { text: 'Leave', style: 'destructive', onPress: () => navigation.goBack() },
-      ]
-    );
-  };
+      cancelText: 'Stay in Lounge',
+      confirmText: 'Leave Lounge',
+      onConfirm: () => navigation.goBack(),
+    });
+  }, [isCreator, navigation]);
+
+  // Guaranteed confirmation on Android hardware back press
+  useEffect(() => {
+    const backAction = () => {
+      handleLeaveLounge();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [handleLeaveLounge]);
 
   const toggleMic = (uid) => {
     setUserMicMuted((prev) => ({ ...prev, [uid]: !prev[uid] }));

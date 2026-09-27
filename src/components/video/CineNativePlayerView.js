@@ -98,11 +98,19 @@ const CineNativePlayerView = forwardRef((props, ref) => {
   const handlePlaybackStateChange = event => {
     flushPendingSeek();
     const data = event.nativeEvent;
+    if (typeof data.duration === 'number' && data.duration > 0) {
+      durationRef.current = data.duration;
+    }
+    if (typeof data.currentTime === 'number') {
+      currentTimeRef.current = data.currentTime;
+    }
     if (onStateChange) {
       onStateChange({
         isPlaying: data.isPlaying,
         isBuffering: data.isBuffering,
         playbackState: data.playbackState,
+        duration: durationRef.current,
+        currentTime: currentTimeRef.current,
       });
     }
   };

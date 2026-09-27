@@ -40,9 +40,12 @@ function parseVideoRenderer(v) {
   if (!thumbnail) {
     thumbnail = `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`;
   }
+  const videoUrl = `https://www.youtube.com/watch?v=${v.videoId}`;
   return {
     id: v.videoId,
-    mediaUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
+    mediaUrl: videoUrl,
+    url: videoUrl,
+    streamUrl: videoUrl,
     title: title.trim(),
     channelName: channelName.trim(),
     duration: duration.trim(),
