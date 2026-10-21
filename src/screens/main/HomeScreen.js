@@ -40,6 +40,7 @@ import PrivateRoomPinModal from '../../components/PrivateRoomPinModal';
 import { searchCinemaMedia } from '../../services/video/CinemaMediaSearchService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const DEFAULT_CINEMA_BACKDROP = 'https://i.ytimg.com/vi/Way9Dexny3w/hqdefault.jpg';
 
 const CATEGORY_CHIPS = [
   { key: 'all', label: 'All', icon: 'auto-awesome' },
@@ -427,25 +428,72 @@ const HomeScreen = () => {
   // ──────────────────────────────────────────────────────────────
   const liveParty = useMemo(() => rooms.find(r => r.isStreaming), [rooms]);
   const heroItem = useMemo(() => {
+    // 1. Live broadcast party (highest priority)
     if (liveParty) return { type: 'room', data: liveParty };
-    if (rooms.length > 0) return { type: 'room', data: rooms[0] };
-    if (trendingMovies.length > 0) return { type: 'media', data: trendingMovies[0] };
-    return null;
-  }, [liveParty, rooms, trendingMovies]);
 
-  // Hero background image
-  const heroThumbUri = useMemo(() => {
-    if (!heroItem) return null;
+    // 2. 4K Cinema trailer from catalog (visual centerpiece)
+    if (trendingMovies.length > 0 && trendingMovies[0]?.thumbnail) {
+      return { type: 'media', data: trendingMovies[0] };
+    }
+
+    // 3. Or a party room that actually has media and a title
+    const roomWithMedia = rooms.find(
+      r => (r.thumbnail || r.streamUrl) && (r.name || r.title)
+    );
+    if (roomWithMedia) return { type: 'room', data: roomWithMedia };
+
+    // 4. Any media item
+    if (trendingMovies.length > 0) return { type: 'media', data: trendingMovies[0] };
+
+    // 5. Fallback to room
+    if (rooms.length > 0) return { type: 'room', data: rooms[0] };
+
+    return null;
+  }, [liveParty, trendingMovies, rooms]);
+
+  // Hero background image with multi-tier fallback support
+  const heroThumbDetails = useMemo(() => {
+    if (!heroItem) {
+      return { primary: DEFAULT_CINEMA_BACKDROP, fallback: DEFAULT_CINEMA_BACKDROP };
+    }
     if (heroItem.type === 'room') {
       const r = heroItem.data;
       if (r.thumbnail && typeof r.thumbnail === 'string' && r.thumbnail.startsWith('http')) {
-        return r.thumbnail;
+        return { primary: r.thumbnail, fallback: r.thumbnail };
       }
-      const details = getYouTubeThumbnailDetails(r.streamUrl);
-      return details?.maxresUrl || details?.fallbackUrl || null;
+      if (r.streamUrl) {
+        const details = getYouTubeThumbnailDetails(r.streamUrl);
+        if (details?.url) {
+          return { primary: details.maxresUrl || details.url, fallback: details.fallbackUrl || details.hqUrl };
+        }
+      }
+      const mediaThumb = trendingMovies[0]?.thumbnail;
+      if (mediaThumb) return { primary: mediaThumb, fallback: mediaThumb };
+      return { primary: DEFAULT_CINEMA_BACKDROP, fallback: DEFAULT_CINEMA_BACKDROP };
     }
-    return heroItem.data.thumbnail || null;
-  }, [heroItem]);
+
+    const mediaThumb = heroItem.data?.thumbnail;
+    const mediaStream = heroItem.data?.mediaUrl || heroItem.data?.streamUrl || heroItem.data?.url;
+    if (mediaThumb && typeof mediaThumb === 'string' && mediaThumb.startsWith('http')) {
+      const details = mediaStream ? getYouTubeThumbnailDetails(mediaStream) : null;
+      return { primary: mediaThumb, fallback: details?.fallbackUrl || mediaThumb };
+    }
+    if (mediaStream) {
+      const details = getYouTubeThumbnailDetails(mediaStream);
+      if (details?.url) {
+        return { primary: details.maxresUrl || details.url, fallback: details.fallbackUrl || details.hqUrl };
+      }
+    }
+    return { primary: DEFAULT_CINEMA_BACKDROP, fallback: DEFAULT_CINEMA_BACKDROP };
+  }, [heroItem, trendingMovies]);
+
+  const [billboardUri, setBillboardUri] = useState(DEFAULT_CINEMA_BACKDROP);
+
+  useEffect(() => {
+    if (heroThumbDetails?.primary) {
+      setBillboardUri(heroThumbDetails.primary);
+    }
+  }, [heroThumbDetails]);
 
   // Filtered public watch parties for Rail 1
   const publicRoomsList = useMemo(() => {
@@ -543,6 +591,13 @@ const HomeScreen = () => {
         const details = getYouTubeThumbnailDetails(item.streamUrl);
         thumb = details?.maxresUrl || details?.fallbackUrl || null;
       }
+      if (!thumb && trendingMovies.length > 0) {
+        const charSum = (item.roomId || item.name || '')
+          .split('')
+          .reduce((acc, c) => acc + c.charCodeAt(0), 0);
+        const index = Math.abs(charSum) % trendingMovies.length;
+        thumb = trendingMovies[index]?.thumbnail || null;
+      }
 
       return (
         <TouchableOpacity
@@ -615,7 +670,7 @@ const HomeScreen = () => {
         </TouchableOpacity>
       );
     },
-    [animatedPulseStyle, onRoomPress]
+    [animatedPulseStyle, onRoomPress, trendingMovies]
   );
 
   // ──────────────────────────────────────────────────────────────
@@ -827,9 +882,16 @@ const HomeScreen = () => {
         {heroItem && (
           <View style={styles.billboardWrap}>
             <ImageBackground
-              source={heroThumbUri ? { uri: heroThumbUri } : undefined}
+              source={{ uri: billboardUri || DEFAULT_CINEMA_BACKDROP }}
               style={styles.billboardBg}
               resizeMode="cover"
+              onError={() => {
+                if (heroThumbDetails?.fallback && billboardUri !== heroThumbDetails.fallback) {
+                  setBillboardUri(heroThumbDetails.fallback);
+                } else if (billboardUri !== DEFAULT_CINEMA_BACKDROP) {
+                  setBillboardUri(DEFAULT_CINEMA_BACKDROP);
+                }
+              }}
             >
               {/* Deep 3-Layer Cinematic Gradient Fade into Background */}
               <LinearGradient
@@ -865,13 +927,15 @@ const HomeScreen = () => {
                 {/* Hero Info */}
                 <View style={styles.billboardInfoBlock}>
                   <Text style={styles.billboardTitle} numberOfLines={2}>
-                    {heroItem.type === 'room' ? heroItem.data.name : heroItem.data.title}
+                    {heroItem.type === 'room'
+                      ? heroItem.data.name || heroItem.data.title || 'Screening Lounge'
+                      : heroItem.data.title || 'Cinema Premiere 4K'}
                   </Text>
 
                   <View style={styles.billboardMetaRow}>
                     <Text style={styles.billboardSubtext} numberOfLines={1}>
                       {heroItem.type === 'room'
-                        ? `Host: ${heroItem.data.creator?.userName || 'Host'} • ${heroItem.data.genre || 'Movies'}`
+                        ? `Host: ${heroItem.data.creator?.userName || (heroItem.data.creator?.email ? heroItem.data.creator.email.split('@')[0] : 'Host')} • ${heroItem.data.genre || 'Movies'}`
                         : `${heroItem.data.channelName || 'Cinema Studio'} • 4K Ultra HD`}
                     </Text>
                   </View>

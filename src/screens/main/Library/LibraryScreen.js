@@ -372,10 +372,8 @@ const LibraryScreen = () => {
       const mergedMap = { ...userRoomsMap, ...recentRoomsMap };
       const roomsArray = Object.values(mergedMap).filter(room => {
         if (!room) return false;
-        const isCreator =
-          room.creator?.email === currentUser.email ||
-          room.creator?.uid === currentUser.uid;
-        const isParticipant = room.participants?.includes(currentUser.email);
+        const isCreator = isRoomCreator(room, currentUser);
+        const isParticipant = isUserParticipant(room, currentUser);
         const isPublic = !room.isPrivate;
         return isCreator || isParticipant || isPublic;
       });
@@ -501,7 +499,7 @@ const LibraryScreen = () => {
     }
 
     if (isCreator) {
-      if (!item?.participants?.length) {
+      if (getRoomParticipantCount(item) === 0) {
         navigation.navigate('Streaming', {
           roomId: item.roomId,
           roomName: item.name,
@@ -702,8 +700,8 @@ const LibraryScreen = () => {
       }
       if (filterType === 'invited') {
         return (
-          room.participants?.includes(currentUser.email) &&
-          room.creator?.email !== currentUser.email
+          isUserParticipant(room, currentUser) &&
+          !isRoomCreator(room, currentUser)
         );
       }
       if (filterType === 'scheduled') {
@@ -906,10 +904,8 @@ const LibraryScreen = () => {
             const featuredRoom = filtered[0];
             const isFeaturedSolo =
               featuredRoom?.isSolo === true ||
-              (!featuredRoom?.participants || featuredRoom?.participants?.length === 0);
-            const participantCount =
-              (featuredRoom?.participants?.length ||
-                (featuredRoom?.participants ? Object.keys(featuredRoom.participants).length : 0)) + 1;
+              getRoomParticipantCount(featuredRoom) === 0;
+            const participantCount = getRoomParticipantCount(featuredRoom) + 1;
             const hostName =
               featuredRoom.creator?.userName ||
               featuredRoom.creator?.name ||
