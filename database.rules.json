@@ -83,6 +83,24 @@
         ".indexOn": [".value"]
       }
     },
+    "friend_requests": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null"
+      }
+    },
+    "user_friend_requests": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null"
+      }
+    },
+    "watchlist": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId"
+      }
+    },
     "notes": {
       ".read": "auth != null",
       ".write": "auth != null",

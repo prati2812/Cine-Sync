@@ -1,32 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
-  FlatList,
   StatusBar,
-  Alert,
-  ActivityIndicator,
   Animated,
   Easing,
   ScrollView,
-  Image,
-  ImageBackground,
-  Dimensions,
   Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
-import { getYouTubeThumbnailDetails } from '../../../functions';
 import { showCineAlert } from '../../../components/CineAlert';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // ──────────────────────────────────────────────────────────────
 //  Pulsing Online Ring
@@ -84,161 +75,6 @@ const PulsingRing = () => {
 };
 
 // ──────────────────────────────────────────────────────────────
-//  Watching Now Card with Transforming Cinematic Fade UI
-// ──────────────────────────────────────────────────────────────
-const WatchingNowCard = ({
-  item,
-  handleJoin,
-  avatarBg,
-  initial,
-  hostName,
-  participantCount,
-}) => {
-  const thumbDetails = getYouTubeThumbnailDetails(item?.streamUrl);
-  const maxresUrl = thumbDetails?.maxresUrl || null;
-  const fallbackUri = thumbDetails?.fallbackUrl || null;
-  const thumbnail = item?.thumbnail;
-  const initialUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
-    ? thumbnail
-    : maxresUrl;
-
-  const [imgUri, setImgUri] = useState(initialUri);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    const nextUri = (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http'))
-      ? thumbnail
-      : maxresUrl;
-    setImgUri(nextUri);
-    setHasError(false);
-  }, [maxresUrl, thumbnail]);
-
-  const hasImage = imgUri && !hasError;
-
-  const cardContent = (
-    <LinearGradient
-      colors={
-        hasImage
-          ? [
-              'rgba(9, 10, 18, 0.05)',
-              'rgba(9, 10, 18, 0.28)',
-              'rgba(15, 15, 26, 0.82)',
-              colors.SURFACE_COLOR,
-            ]
-          : ['#1E1B4B', colors.SURFACE_COLOR]
-      }
-      locations={hasImage ? [0, 0.32, 0.65, 1.0] : undefined}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 0, y: 1 }}
-      style={styles.carouselGradient}
-    >
-      {/* Top Section: Starting with clear, vibrant thumbnail view */}
-      <View style={styles.carouselTopSection}>
-        <View style={styles.carouselTopBadge}>
-          <View
-            style={[
-              styles.pingDot,
-              item?.isStreaming && { backgroundColor: colors.LIVE_RED },
-            ]}
-          />
-          <Text style={styles.carouselTagText}>
-            {item?.isStreaming ? 'LIVE SYNC' : 'READY'}
-          </Text>
-        </View>
-
-        {!hasImage && (
-          <View style={styles.carouselFallbackIconWrap}>
-            <Ionicons name="film" size={24} color={colors.CYAN_ACCENT} />
-          </View>
-        )}
-      </View>
-
-      {/* Bottom Section: Transforming smoothly into deep dark surface */}
-      <View style={styles.carouselCardBody}>
-        <View style={styles.carouselMetaRow}>
-          <View style={styles.carouselMetaLeft}>
-            <View style={[styles.carouselMiniAvatar, { backgroundColor: avatarBg }]}>
-              <Text style={styles.carouselMiniAvatarText}>{initial}</Text>
-            </View>
-            <Text style={styles.carouselHostName} numberOfLines={1}>
-              {hostName}
-            </Text>
-          </View>
-          {item.roomId ? (
-            <Text style={styles.carouselRoomCode}>
-              #{String(item.roomId).substring(0, 8)}
-            </Text>
-          ) : null}
-        </View>
-
-        <View style={styles.carouselMovieRow}>
-          <MaterialIcons
-            name="movie"
-            size={14}
-            color={colors.PRIMARY_COLOR}
-            style={styles.carouselMovieIcon}
-          />
-          <Text style={styles.carouselMovieText} numberOfLines={1}>
-            {item.name}
-          </Text>
-        </View>
-
-        <View style={styles.carouselSyncCountRow}>
-          <MaterialIcons
-            name="groups"
-            size={13}
-            color="#93C5FD"
-            style={styles.carouselMovieIcon}
-          />
-          <Text style={styles.carouselSyncCountText}>
-            {participantCount} {participantCount === 1 ? 'viewer' : 'viewers'}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.quickJoinBtn}
-          onPress={handleJoin}
-        >
-          <LinearGradient
-            colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.quickJoinGradient}
-          >
-            <MaterialIcons name="bolt" size={16} color="#FFF" />
-            <Text style={styles.quickJoinText}>Quick Join</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      </View>
-    </LinearGradient>
-  );
-
-  return (
-    <View style={styles.carouselCard}>
-      {hasImage ? (
-        <ImageBackground
-          source={{ uri: imgUri }}
-          style={styles.carouselCardBg}
-          imageStyle={styles.carouselCardImage}
-          onError={() => {
-            if (fallbackUri && imgUri !== fallbackUri) {
-              setImgUri(fallbackUri);
-            } else {
-              setHasError(true);
-            }
-          }}
-        >
-          {cardContent}
-        </ImageBackground>
-      ) : (
-        <View style={styles.carouselCardBg}>{cardContent}</View>
-      )}
-    </View>
-  );
-};
-
-// ──────────────────────────────────────────────────────────────
 //  Friends Screen
 // ──────────────────────────────────────────────────────────────
 const FriendsScreen = ({ navigation }) => {
@@ -248,7 +84,6 @@ const FriendsScreen = ({ navigation }) => {
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
-  const [activeRooms, setActiveRooms] = useState([]);
 
   // Dynamic safe area top inset for Android & iOS notch protection
   const safeTopPadding = Math.max(
@@ -256,29 +91,77 @@ const FriendsScreen = ({ navigation }) => {
     Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
   ) + 8;
 
+  // ── Realtime Listeners & Focus Refresh ─────────────────────
   useEffect(() => {
-    getFriendRequests();
-    getFriendSentRequests();
-    const unsubscribe = getFriends();
+    let cleanupFns = [];
 
-    // Listen to live rooms from Firebase RTDB
-    const roomsRef = database().ref('rooms');
-    const onRoomsChange = snapshot => {
-      const val = snapshot.val();
-      if (val) {
-        const list = Object.values(val).filter(r => r && r.name);
-        setActiveRooms(list);
-      } else {
-        setActiveRooms([]);
+    const attachAll = (user) => {
+      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
+      cleanupFns = [];
+
+      if (!user) {
+        setFriendsList([]);
+        setFriendRequests([]);
+        setSentRequests([]);
+        return;
       }
+
+      const unsubReq = getFriendRequests(user);
+      const unsubSent = getFriendSentRequests(user);
+      const unsubFriends = getFriends(user);
+
+      if (typeof unsubReq === 'function') cleanupFns.push(unsubReq);
+      if (typeof unsubSent === 'function') cleanupFns.push(unsubSent);
+      if (typeof unsubFriends === 'function') cleanupFns.push(unsubFriends);
     };
-    roomsRef.on('value', onRoomsChange);
+
+    const current = auth().currentUser;
+    if (current) {
+      attachAll(current);
+    }
+
+    const authUnsub = auth().onAuthStateChanged((user) => {
+      attachAll(user);
+    });
 
     return () => {
-      if (unsubscribe) unsubscribe();
-      roomsRef.off('value', onRoomsChange);
+      authUnsub();
+      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
     };
   }, []);
+
+  // Quick refresh whenever screen gains focus
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth().currentUser;
+      if (!user) return;
+      const db = database();
+
+      db.ref(`user_friend_requests/${user.uid}`).once('value').then(async (snap) => {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          const userDetails = await Promise.all(
+            Object.keys(val).map(uid => getUserFriendDetails(uid))
+          );
+          setSentRequests(userDetails.filter(Boolean));
+        } else {
+          setSentRequests([]);
+        }
+      }).catch(e => console.warn('Focus sent requests error:', e));
+
+      db.ref(`friend_requests/${user.uid}`).once('value').then(async (snap) => {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          const userDetails = await Promise.all(
+            Object.keys(val).map(uid => getUserFriendDetails(uid))
+          );
+          setFriendRequests(userDetails.filter(Boolean));
+        } else {
+          setFriendRequests([]);
+        }
+      }).catch(e => console.warn('Focus friend requests error:', e));
+    }, [])
+  );
 
   // ── Avatar color generator ────────────────────────────────
   const generateAvatarColor = (str) => {
@@ -297,83 +180,112 @@ const FriendsScreen = ({ navigation }) => {
   };
 
   // ── Firebase Listeners ────────────────────────────────────
-  const getFriendRequests = async () => {
+  const getFriendRequests = (currentUser) => {
+    const user = currentUser || auth().currentUser;
+    if (!user) return () => {};
     const db = database();
-    const user = auth().currentUser;
-    if (!user) return;
     const friendRequestsRef = db.ref(`friend_requests/${user.uid}`);
-    const callback = friendRequestsRef.on('value', async (snapshot) => {
-      const requestsData = snapshot.val();
-      if (!requestsData) {
-        setFriendRequests([]);
-        return;
+    const callback = friendRequestsRef.on(
+      'value',
+      async (snapshot) => {
+        try {
+          const requestsData = snapshot.val();
+          if (!requestsData || typeof requestsData !== 'object') {
+            setFriendRequests([]);
+            return;
+          }
+          const userIds = Object.keys(requestsData);
+          const userDetails = await Promise.all(
+            userIds.map(uid => getUserFriendDetails(uid))
+          );
+          setFriendRequests(userDetails.filter(Boolean));
+        } catch (err) {
+          console.error('Error in friendRequests listener:', err);
+        }
+      },
+      (error) => {
+        console.warn('friendRequests listener error:', error);
       }
-      let userDetails = [];
-      for (let request in requestsData) {
-        let friendUserDetails = await getUserFriendDetails(request);
-        if (friendUserDetails) userDetails.push(friendUserDetails);
-      }
-      setFriendRequests(userDetails);
-    });
+    );
     return () => friendRequestsRef.off('value', callback);
   };
 
-  const getFriendSentRequests = async () => {
+  const getFriendSentRequests = (currentUser) => {
+    const user = currentUser || auth().currentUser;
+    if (!user) return () => {};
     const db = database();
-    const user = auth().currentUser;
-    if (!user) return;
     const friendSentRequestRef = db.ref(`user_friend_requests/${user.uid}`);
-    const callback = friendSentRequestRef.on('value', async (snapshot) => {
-      const requestsData = snapshot.val();
-      if (!requestsData) {
-        setSentRequests([]);
-        return;
+    const callback = friendSentRequestRef.on(
+      'value',
+      async (snapshot) => {
+        try {
+          const requestsData = snapshot.val();
+          if (!requestsData || typeof requestsData !== 'object') {
+            setSentRequests([]);
+            return;
+          }
+          const userIds = Object.keys(requestsData);
+          const userDetails = await Promise.all(
+            userIds.map(uid => getUserFriendDetails(uid))
+          );
+          setSentRequests(userDetails.filter(Boolean));
+        } catch (err) {
+          console.error('Error in sentRequests listener:', err);
+        }
+      },
+      (error) => {
+        console.warn('sentRequests listener error:', error);
       }
-      let userDetails = [];
-      for (let request in requestsData) {
-        let friendUserDetails = await getUserFriendDetails(request);
-        if (friendUserDetails) userDetails.push(friendUserDetails);
-      }
-      setSentRequests(userDetails);
-    });
+    );
     return () => friendSentRequestRef.off('value', callback);
   };
 
-  const getFriends = () => {
+  const getFriends = (currentUser) => {
+    const user = currentUser || auth().currentUser;
+    if (!user) return () => {};
     const db = database();
-    const user = auth().currentUser;
-    if (!user) return null;
     const friendsRef = db.ref(`friends/${user.uid}`);
-    const callback = friendsRef.on('value', (snapshot) => {
-      const friends = snapshot.val();
-      if (!friends) {
-        setFriendsList([]);
-        return;
-      }
-      Object.keys(friends).forEach(friendId => {
-        const userRef = db.ref(`users/${friendId}`);
-        userRef.on('value', (userSnapshot) => {
-          const val = userSnapshot.val();
-          if (val) {
-            const friendDetails = {
-              ...val,
-              userId: val.userId || val.id || friendId,
-            };
-            setFriendsList(currentList => {
-              const newList = currentList.filter(f => (f.userId || f.id) !== friendId);
-              return [...newList, friendDetails];
-            });
-          }
+    let childUnsubs = [];
+
+    const callback = friendsRef.on(
+      'value',
+      (snapshot) => {
+        const friends = snapshot.val();
+        if (!friends || typeof friends !== 'object') {
+          setFriendsList([]);
+          return;
+        }
+        childUnsubs.forEach(fn => fn());
+        childUnsubs = [];
+
+        const friendIds = Object.keys(friends);
+        friendIds.forEach((friendId) => {
+          const userRef = db.ref(`users/${friendId}`);
+          const userCallback = userRef.on('value', (userSnapshot) => {
+            const val = userSnapshot.val();
+            if (val) {
+              const friendDetails = {
+                ...val,
+                userId: val.userId || val.id || friendId,
+                username: val.username || val.displayName || (val.email ? val.email.split('@')[0] : 'Friend'),
+              };
+              setFriendsList((currentList) => {
+                const newList = currentList.filter(f => (f.userId || f.id) !== friendId);
+                return [...newList, friendDetails];
+              });
+            }
+          });
+          childUnsubs.push(() => userRef.off('value', userCallback));
         });
-      });
-    });
+      },
+      (error) => {
+        console.warn('friends listener error:', error);
+      }
+    );
+
     return () => {
-      if (user) {
-        friendsRef.off('value', callback);
-        friendsList.forEach(friend => {
-          db.ref(`users/${friend.userId}`).off('value');
-        });
-      }
+      friendsRef.off('value', callback);
+      childUnsubs.forEach(fn => fn());
     };
   };
 
@@ -381,7 +293,7 @@ const FriendsScreen = ({ navigation }) => {
     try {
       const db = database();
       const user = auth().currentUser;
-      if (!user) return;
+      if (!user || !userId) return;
       const friendRequestRef = db.ref(`friend_requests/${user.uid}/${userId}`);
       const snapshot = await friendRequestRef.once('value');
       if (snapshot.val()) {
@@ -389,6 +301,7 @@ const FriendsScreen = ({ navigation }) => {
         await db.ref(`friends/${user.uid}/${userId}`).set(true);
         await db.ref(`friends/${userId}/${user.uid}`).set(true);
         await db.ref(`user_friend_requests/${userId}/${user.uid}`).remove();
+        setFriendRequests(prev => prev.filter(r => (r.userId || r.uid) !== userId));
       }
     } catch (error) {
       console.error('Error accepting friend request:', error);
@@ -396,21 +309,49 @@ const FriendsScreen = ({ navigation }) => {
   };
 
   const declineFriendRequest = async (userId) => {
-    const db = database();
-    const user = auth().currentUser;
-    if (!user) return;
-    await db.ref(`friend_requests/${user.uid}/${userId}`).remove();
+    try {
+      const db = database();
+      const user = auth().currentUser;
+      if (!user || !userId) return;
+      await db.ref(`friend_requests/${user.uid}/${userId}`).remove();
+      setFriendRequests(prev => prev.filter(r => (r.userId || r.uid) !== userId));
+    } catch (error) {
+      console.error('Error declining friend request:', error);
+    }
   };
 
   const getUserFriendDetails = async (userId) => {
-    const db = database();
-    const snapshot = await db.ref(`users/${userId}`).once('value');
-    return snapshot.val();
+    try {
+      const db = database();
+      const snapshot = await db.ref(`users/${userId}`).once('value');
+      const val = snapshot.val();
+      if (val) {
+        return {
+          ...val,
+          userId: val.userId || val.uid || val.id || userId,
+          username: val.username || val.displayName || (val.email ? val.email.split('@')[0] : 'Crew Member'),
+          email: val.email || '',
+        };
+      }
+      return {
+        userId,
+        username: 'Crew Member',
+        email: '',
+      };
+    } catch (e) {
+      console.warn('getUserFriendDetails error for', userId, e);
+      return {
+        userId,
+        username: 'Crew Member',
+        email: '',
+      };
+    }
   };
 
   const isFriendIsOrNot = async (userId) => {
     const db = database();
     const user = auth().currentUser;
+    if (!user || !userId) return false;
     const snapshot = await db.ref(`friends/${user.uid}/${userId}`).once('value');
     return snapshot.val();
   };
@@ -418,39 +359,59 @@ const FriendsScreen = ({ navigation }) => {
   const removeFriend = async (userId) => {
     const db = database();
     const user = auth().currentUser;
+    if (!user || !userId) return;
     await db.ref(`friends/${user.uid}/${userId}`).remove();
     await db.ref(`friends/${userId}/${user.uid}`).remove();
   };
 
   const cancelFriendRequest = async (userId) => {
-    const db = database();
-    const user = auth().currentUser;
-    await db.ref(`friend_requests/${user?.uid}/${userId}`).remove();
-    await db.ref(`user_friend_requests/${user?.uid}/${userId}`).remove();
+    try {
+      const db = database();
+      const user = auth().currentUser;
+      if (!user || !userId) return;
+      await db.ref(`friend_requests/${userId}/${user.uid}`).remove();
+      await db.ref(`user_friend_requests/${user.uid}/${userId}`).remove();
+      setSentRequests(prev => prev.filter(r => (r.userId || r.uid) !== userId));
+    } catch (error) {
+      console.error('Error cancelling friend request:', error);
+    }
   };
 
   const checkUserExists = async (emailOrUsername) => {
     try {
       setIsLoading(true);
       const db = database();
-      const cleanTerm = (emailOrUsername || '').trim().replace(/^@/, '');
+      const cleanTerm = (emailOrUsername || '').trim().replace(/^@/, '').trim();
       const queryKey = cleanTerm.includes('@') ? 'email' : 'username';
       const userQuery = db.ref('users').orderByChild(queryKey).equalTo(cleanTerm);
       const snapshot = await userQuery.once('value');
       let newVal = snapshot.val();
-      if (!newVal && !cleanTerm.includes('@')) {
+
+      // Case-insensitive fallback if exact match failed
+      if (!newVal) {
         const allSnap = await db.ref('users').once('value');
         const allUsers = allSnap.val() || {};
-        const matched = Object.values(allUsers).find(
-          u =>
-            u?.username?.toLowerCase() === cleanTerm.toLowerCase() ||
-            u?.email?.toLowerCase() === cleanTerm.toLowerCase()
+        const matchedEntry = Object.entries(allUsers).find(([uid, u]) =>
+          (u?.username || '').trim().toLowerCase() === cleanTerm.toLowerCase() ||
+          (u?.email || '').trim().toLowerCase() === cleanTerm.toLowerCase()
         );
-        if (matched) newVal = { [matched.userId || 'found']: matched };
+        if (matchedEntry) {
+          const [uid, userObj] = matchedEntry;
+          newVal = { [uid]: { ...userObj, userId: userObj?.userId || userObj?.uid || uid } };
+        }
       }
+
       setIsLoading(false);
-      return newVal ? Object.values(newVal)[0] : false;
+      if (newVal) {
+        const [uid, userObj] = Object.entries(newVal)[0];
+        return {
+          ...userObj,
+          userId: userObj?.userId || userObj?.uid || uid,
+        };
+      }
+      return false;
     } catch (error) {
+      console.warn('checkUserExists error:', error);
       setIsLoading(false);
       return false;
     }
@@ -461,8 +422,8 @@ const FriendsScreen = ({ navigation }) => {
       type: 'add_friend',
       icon: 'check-circle-outline',
       title: 'Add Crew Member',
-      message: 'Enter username or scan QR to link instant synchronized watch permissions.',
-      inputPlaceholder: '@david_cho',
+      message: 'Enter username or email to link instant synchronized watch permissions.',
+      inputPlaceholder: '@david_cho or user@email.com',
       confirmText: 'Send Request',
       cancelText: 'Cancel',
       onConfirm: async (inputQuery) => {
@@ -472,58 +433,137 @@ const FriendsScreen = ({ navigation }) => {
   };
 
   const handleAddFriendDirect = async (inputQuery) => {
-    const rawInput = (inputQuery || '').trim();
-    if (!rawInput) {
-      showCineAlert({
-        type: 'warning',
-        title: 'Input Required',
-        message: 'Please enter a valid email or username to search.',
-        confirmText: 'Got It',
-      });
-      return;
-    }
-    const cleanSearch = rawInput.replace(/^@/, '');
-    const tempUser = auth().currentUser;
-    if (
-      tempUser?.email?.toLowerCase() === cleanSearch.toLowerCase() ||
-      tempUser?.displayName?.toLowerCase() === cleanSearch.toLowerCase()
-    ) {
-      showCineAlert({
-        type: 'info',
-        title: 'Oops!',
-        message: "You can't add yourself as a friend.",
-        confirmText: 'OK',
-      });
-      return;
-    }
-    const userExists = await checkUserExists(cleanSearch);
-    if (userExists && userExists.userId) {
-      const isFriend = await isFriendIsOrNot(userExists.userId);
-      if (isFriend) {
+    try {
+      const rawInput = (inputQuery || '').trim();
+      if (!rawInput) {
         showCineAlert({
-          type: 'info',
-          title: 'Already Friends',
-          message: `${userExists.username || cleanSearch} is already in your crew!`,
+          type: 'warning',
+          title: 'Input Required',
+          message: 'Please enter a valid email or username to search.',
+          confirmText: 'Got It',
+        });
+        return;
+      }
+      const cleanSearch = rawInput.replace(/^@/, '').trim();
+      const tempUser = auth().currentUser;
+      if (!tempUser) {
+        showCineAlert({
+          type: 'warning',
+          title: 'Authentication Required',
+          message: 'Please sign in to send friend requests.',
           confirmText: 'OK',
         });
         return;
       }
-      const db = database();
-      await db.ref(`friend_requests/${userExists.userId}/${tempUser.uid}`).set(true);
-      await db.ref(`user_friend_requests/${tempUser.uid}/${userExists.userId}`).set(true);
-      showCineAlert({
-        type: 'success',
-        icon: 'check-circle-outline',
-        title: 'Request Sent',
-        message: `Friend request sent to ${userExists.username || cleanSearch}!`,
-        confirmText: 'Great',
-      });
-    } else {
+
+      if (
+        tempUser?.email?.trim().toLowerCase() === cleanSearch.toLowerCase() ||
+        tempUser?.displayName?.trim().toLowerCase() === cleanSearch.toLowerCase()
+      ) {
+        showCineAlert({
+          type: 'info',
+          title: 'Oops!',
+          message: "You can't add yourself as a friend.",
+          confirmText: 'OK',
+        });
+        return;
+      }
+
+      const userExists = await checkUserExists(cleanSearch);
+      const targetUserId = userExists?.userId || userExists?.uid || userExists?.id;
+
+      if (userExists && targetUserId) {
+        if (targetUserId === tempUser.uid) {
+          showCineAlert({
+            type: 'info',
+            title: 'Oops!',
+            message: "You can't add yourself as a friend.",
+            confirmText: 'OK',
+          });
+          return;
+        }
+
+        const isFriend = await isFriendIsOrNot(targetUserId);
+        if (isFriend) {
+          showCineAlert({
+            type: 'info',
+            title: 'Already Friends',
+            message: `${userExists.username || cleanSearch} is already in your crew!`,
+            confirmText: 'OK',
+          });
+          return;
+        }
+
+        const db = database();
+
+        // Check if user already sent a pending request to this person
+        const sentSnap = await db.ref(`user_friend_requests/${tempUser.uid}/${targetUserId}`).once('value');
+        if (sentSnap.exists() && sentSnap.val()) {
+          showCineAlert({
+            type: 'info',
+            title: 'Request Pending',
+            message: `You have already sent a friend request to ${userExists.username || cleanSearch}. Waiting for their response!`,
+            confirmText: 'Got It',
+          });
+          return;
+        }
+
+        // Check if the other person already sent current user a request (auto-connect!)
+        const incomingSnap = await db.ref(`friend_requests/${tempUser.uid}/${targetUserId}`).once('value');
+        if (incomingSnap.exists() && incomingSnap.val()) {
+          await acceptFriendRequest(targetUserId);
+          showCineAlert({
+            type: 'success',
+            icon: 'check-circle-outline',
+            title: 'Connected!',
+            message: `${userExists.username || cleanSearch} had already invited you! You are now friends.`,
+            confirmText: 'Great',
+          });
+          return;
+        }
+
+        // Send friend request to both incoming & outgoing nodes
+        await db.ref(`friend_requests/${targetUserId}/${tempUser.uid}`).set(true);
+        await db.ref(`user_friend_requests/${tempUser.uid}/${targetUserId}`).set(true);
+
+        // Optimistically update sent requests state immediately
+        setSentRequests((prev) => {
+          const exists = prev.some(r => (r.userId || r.uid) === targetUserId);
+          if (exists) return prev;
+          return [
+            ...prev,
+            {
+              userId: targetUserId,
+              username: userExists.username || cleanSearch,
+              email: userExists.email || '',
+              ...userExists,
+            },
+          ];
+        });
+
+        showCineAlert({
+          type: 'success',
+          icon: 'check-circle-outline',
+          title: 'Request Sent',
+          message: `Friend request sent to ${userExists.username || cleanSearch}!`,
+          confirmText: 'Great',
+        });
+      } else {
+        showCineAlert({
+          type: 'danger',
+          icon: 'person-off',
+          title: 'User Not Found',
+          message: `No user found for "${cleanSearch}". Make sure they have registered an account on Cine-Sync.`,
+          confirmText: 'OK',
+        });
+      }
+    } catch (error) {
+      console.error('Error in handleAddFriendDirect:', error);
       showCineAlert({
         type: 'danger',
-        icon: 'person-off',
-        title: 'User Not Found',
-        message: 'No user found with that email or username. Check spelling and try again.',
+        icon: 'error-outline',
+        title: 'Request Failed',
+        message: error?.message || 'Failed to send friend request. Please check your network and try again.',
         confirmText: 'OK',
       });
     }
@@ -575,72 +615,6 @@ const FriendsScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
       >
 
-        {/* ── SECTION 1: WATCHING NOW CAROUSEL ──────────────────── */}
-        {activeRooms.length > 0 && (
-          <View style={{ marginBottom: 12 }}>
-            <View style={styles.sectionHeaderRow}>
-              <View style={styles.sectionTitleWrap}>
-                <Text style={styles.sectionTitle}>Watching Now</Text>
-                <View style={styles.pulseLiveDot} />
-                <View style={styles.onlineBadge}>
-                  <Text style={styles.onlineBadgeText}>
-                    {friendsList.filter(f => f?.status === 'online' || f?.status?.state === 'online').length} Online
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.carouselContainer}
-            >
-              {activeRooms.map(item => {
-                const hostName =
-                  item.creator?.userName ||
-                  item.creator?.name ||
-                  (item.creator?.email ? item.creator.email.split('@')[0] : 'Host');
-                const participantCount =
-                  (item.participants?.length ||
-                    (item.participants ? Object.keys(item.participants).length : 0)) + 1;
-                const initial = hostName.charAt(0).toUpperCase() || 'H';
-                const avatarBg = generateAvatarColor(hostName);
-
-                const handleJoin = () => {
-                  const currentUser = auth().currentUser;
-                  const isCreator = item.creator?.email === currentUser?.email;
-                  if (item.isStreaming) {
-                    navigation.navigate('Streaming', {
-                      roomId: item.roomId,
-                      roomName: item.name,
-                      streamUrl: item.streamUrl,
-                    });
-                  } else {
-                    navigation.navigate('WaitingScreen', {
-                      roomId: item.roomId,
-                      roomName: item.name,
-                      streamUrl: item.streamUrl,
-                      isHost: isCreator,
-                    });
-                  }
-                };
-
-                return (
-                  <WatchingNowCard
-                    key={item.roomId || item.name}
-                    item={item}
-                    handleJoin={handleJoin}
-                    avatarBg={avatarBg}
-                    initial={initial}
-                    hostName={hostName}
-                    participantCount={participantCount}
-                  />
-                );
-              })}
-            </ScrollView>
-          </View>
-        )}
-
         {/* ── SECTION 3: SEGMENTED TABS CONTROL ─────────────────── */}
         <View style={styles.segmentedTabContainer}>
           <TouchableOpacity
@@ -689,141 +663,197 @@ const FriendsScreen = ({ navigation }) => {
             {activeTab === 'friends'
               ? 'Active & Recent Contacts'
               : activeTab === 'requests'
-              ? 'Pending Requests'
-              : 'Sent Friend Requests'}
+                ? 'Pending Requests'
+                : 'Sent Friend Requests'}
           </Text>
         </View>
 
         {/* TAB 1: FRIENDS LIST */}
         {activeTab === 'friends' && (
-          friendsList.length > 0 ? (
-            friendsList.map(item => {
-              const isOnline = item?.status === 'online' || item?.status?.state === 'online';
-              return (
-                <TouchableOpacity
-                  key={item?.userId || item?.email}
-                  style={styles.friendRowCard}
-                  activeOpacity={0.75}
-                  onPress={() =>
-                    navigation.navigate('Chat', {
-                      username: item?.username || item?.email?.split('@')[0],
-                      userId: item?.userId || item?.id,
-                      avatar: item?.avatar,
-                    })
-                  }
-                >
-                  <View style={styles.friendRowLeft}>
-                    {/* Click profile icon -> navigate to FriendProfileScreen */}
-                    <TouchableOpacity
-                      style={styles.friendAvatarBox}
-                      activeOpacity={0.75}
-                      onPress={() =>
-                        navigation.navigate('FriendProfile', {
-                          username: item?.username || item?.email?.split('@')[0],
-                          userId: item?.userId || item?.id,
-                          avatar: item?.avatar,
-                          status: item?.status,
-                        })
-                      }
-                    >
-                      {isOnline && <PulsingRing />}
-                      <View
-                        style={[
-                          styles.friendAvatar,
-                          { backgroundColor: generateAvatarColor(item?.username || item?.email || '') },
-                        ]}
-                      >
-                        <Text style={styles.avatarInitialText}>
-                          {(item?.username || item?.email || '?')[0]?.toUpperCase()}
-                        </Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.friendOnlineDot,
-                          { backgroundColor: isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
-                        ]}
-                      />
-                    </TouchableOpacity>
+          <>
+            {/* ── PINNED SELF CHAT (Message Yourself / Personal Notes) ── */}
+            <TouchableOpacity
+              style={styles.selfChatCard}
+              activeOpacity={0.78}
+              onPress={() => {
+                const currentUser = auth().currentUser;
+                const myName = currentUser?.displayName || currentUser?.email?.split('@')[0] || 'You';
+                navigation.navigate('Chat', {
+                  username: `${myName} (You)`,
+                  userId: currentUser?.uid,
+                  avatar: currentUser?.photoURL || null,
+                  isSelfChat: true,
+                });
+              }}
+            >
+              <View style={styles.friendRowLeft}>
+                <View style={styles.selfChatAvatarWrap}>
+                  <LinearGradient
+                    colors={[colors.PURPLE_ACCENT, colors.PRIMARY_COLOR]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.selfChatAvatar}
+                  >
+                    <MaterialIcons name="bookmark" size={22} color="#FFF" />
+                  </LinearGradient>
+                  <View style={styles.selfChatBadge}>
+                    <MaterialIcons name="person" size={10} color="#FFF" />
+                  </View>
+                </View>
 
-                    <View style={styles.friendRowText}>
-                      <View style={styles.friendNameRow}>
-                        <Text style={styles.friendNameText} numberOfLines={1}>
-                          {item?.username || item?.email?.split('@')[0]}
-                        </Text>
-                      </View>
-                      <Text style={styles.friendStatusSubtext}>
-                        {isOnline ? '🟢 Online • Ready to watch' : 'Offline'}
-                      </Text>
+                <View style={styles.friendRowText}>
+                  <View style={styles.friendNameRow}>
+                    <Text style={styles.friendNameText} numberOfLines={1}>
+                      {(auth().currentUser?.displayName || auth().currentUser?.email?.split('@')[0] || 'You')} (You)
+                    </Text>
+                    <View style={styles.selfTag}>
+                      <Text style={styles.selfTagText}>Personal</Text>
                     </View>
                   </View>
+                  <Text style={styles.selfChatSubtext} numberOfLines={1}>
+                    Message yourself • Saved notes & media
+                  </Text>
+                </View>
+              </View>
 
-                  {/* Chat Icon */}
-                  <MaterialIcons name="chat" size={18} color={colors.SUB_TITLE_COLOR} />
+              <MaterialIcons name="chat" size={18} color={colors.PURPLE_ACCENT} />
+            </TouchableOpacity>
+
+            {friendsList.length > 0 ? (
+              friendsList.map(item => {
+                const isOnline = item?.status === 'online' || item?.status?.state === 'online';
+                return (
+                  <TouchableOpacity
+                    key={item?.userId || item?.email}
+                    style={styles.friendRowCard}
+                    activeOpacity={0.75}
+                    onPress={() =>
+                      navigation.navigate('Chat', {
+                        username: item?.username || item?.email?.split('@')[0],
+                        userId: item?.userId || item?.id,
+                        avatar: item?.avatar,
+                      })
+                    }
+                  >
+                    <View style={styles.friendRowLeft}>
+                      {/* Click profile icon -> navigate to FriendProfileScreen */}
+                      <TouchableOpacity
+                        style={styles.friendAvatarBox}
+                        activeOpacity={0.75}
+                        onPress={() =>
+                          navigation.navigate('FriendProfile', {
+                            username: item?.username || item?.email?.split('@')[0],
+                            userId: item?.userId || item?.id,
+                            avatar: item?.avatar,
+                            status: item?.status,
+                          })
+                        }
+                      >
+                        {isOnline && <PulsingRing />}
+                        <View
+                          style={[
+                            styles.friendAvatar,
+                            { backgroundColor: generateAvatarColor(item?.username || item?.email || '') },
+                          ]}
+                        >
+                          <Text style={styles.avatarInitialText}>
+                            {(item?.username || item?.email || '?')[0]?.toUpperCase()}
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.friendOnlineDot,
+                            { backgroundColor: isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                          ]}
+                        />
+                      </TouchableOpacity>
+
+                      <View style={styles.friendRowText}>
+                        <View style={styles.friendNameRow}>
+                          <Text style={styles.friendNameText} numberOfLines={1}>
+                            {item?.username || item?.email?.split('@')[0]}
+                          </Text>
+                        </View>
+                        <Text style={styles.friendStatusSubtext}>
+                          {isOnline ? 'Online • Ready to chat' : 'Offline'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Chat Icon */}
+                    <MaterialIcons name="chat" size={18} color={colors.SUB_TITLE_COLOR} />
+                  </TouchableOpacity>
+                );
+              })
+            ) : (
+              <View style={styles.emptyBox}>
+                <Ionicons name="people-outline" size={40} color={colors.FILM_GOLD} />
+                <Text style={styles.emptyTitle}>No Friends Added Yet</Text>
+                <Text style={styles.emptySub}>
+                  Connect with crew members to stream movies in real-time sync!
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyAddBtn}
+                  onPress={openAddCrewMemberSheet}
+                  activeOpacity={0.82}
+                >
+                  <MaterialIcons name="person-add" size={16} color="#FFF" style={{ marginRight: 6 }} />
+                  <Text style={styles.emptyAddBtnText}>Add Crew Member</Text>
                 </TouchableOpacity>
-              );
-            })
-          ) : (
-            <View style={styles.emptyBox}>
-              <Ionicons name="people-outline" size={40} color={colors.FILM_GOLD} />
-              <Text style={styles.emptyTitle}>No Friends Added Yet</Text>
-              <Text style={styles.emptySub}>
-                Connect with crew members to stream movies in real-time sync!
-              </Text>
-              <TouchableOpacity
-                style={styles.emptyAddBtn}
-                onPress={openAddCrewMemberSheet}
-                activeOpacity={0.82}
-              >
-                <MaterialIcons name="person-add" size={16} color="#FFF" style={{ marginRight: 6 }} />
-                <Text style={styles.emptyAddBtnText}>Add Crew Member</Text>
-              </TouchableOpacity>
-            </View>
-          )
+              </View>
+            )}
+          </>
         )}
 
 
         {/* TAB 2: FRIEND REQUESTS */}
         {activeTab === 'requests' && (
           friendRequests.length > 0 ? (
-            friendRequests.map(item => (
-              <View key={item?.userId} style={styles.requestRowCard}>
-                <View style={styles.friendRowLeft}>
-                  <View
-                    style={[
-                      styles.friendAvatar,
-                      { backgroundColor: generateAvatarColor(item?.username || '') },
-                    ]}
-                  >
-                    <Text style={styles.avatarInitialText}>
-                      {(item?.username || '?')[0]?.toUpperCase()}
-                    </Text>
+            friendRequests.map((item, index) => {
+              const displayName = item?.username || (item?.email ? item.email.split('@')[0] : 'Crew Member');
+              const targetUid = item?.userId || item?.uid || item?.id;
+              return (
+                <View key={targetUid || `req_${index}`} style={styles.requestRowCard}>
+                  <View style={styles.friendRowLeft}>
+                    <View
+                      style={[
+                        styles.friendAvatar,
+                        { backgroundColor: generateAvatarColor(displayName) },
+                      ]}
+                    >
+                      <Text style={styles.avatarInitialText}>
+                        {(displayName || '?')[0]?.toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={styles.friendNameText} numberOfLines={1}>{displayName}</Text>
+                      <Text style={styles.friendStatusSubtext} numberOfLines={1}>
+                        {item?.email ? item.email : 'Wants to join your crew'}
+                      </Text>
+                    </View>
                   </View>
-                  <View>
-                    <Text style={styles.friendNameText}>{item?.username}</Text>
-                    <Text style={styles.friendStatusSubtext}>Wants to join your crew</Text>
+
+                  <View style={styles.requestBtnRow}>
+                    <TouchableOpacity
+                      style={styles.acceptRequestBtn}
+                      onPress={() => acceptFriendRequest(targetUid)}
+                      activeOpacity={0.8}
+                    >
+                      <MaterialIcons name="check" size={16} color="#FFF" />
+                      <Text style={styles.acceptRequestText}>Accept</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.declineRequestBtn}
+                      onPress={() => declineFriendRequest(targetUid)}
+                      activeOpacity={0.8}
+                    >
+                      <MaterialIcons name="close" size={16} color={colors.DELETE_RED_COLOR} />
+                    </TouchableOpacity>
                   </View>
                 </View>
-
-                <View style={styles.requestBtnRow}>
-                  <TouchableOpacity
-                    style={styles.acceptRequestBtn}
-                    onPress={() => acceptFriendRequest(item?.userId)}
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons name="check" size={16} color="#FFF" />
-                    <Text style={styles.acceptRequestText}>Accept</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.declineRequestBtn}
-                    onPress={() => declineFriendRequest(item?.userId)}
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons name="close" size={16} color={colors.DELETE_RED_COLOR} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))
+              );
+            })
           ) : (
             <View style={styles.emptyBox}>
               <Ionicons name="mail-open-outline" size={40} color={colors.CYAN_ACCENT} />
@@ -836,34 +866,40 @@ const FriendsScreen = ({ navigation }) => {
         {/* TAB 3: SENT REQUESTS */}
         {activeTab === 'sent' && (
           sentRequests.length > 0 ? (
-            sentRequests.map(item => (
-              <View key={item?.userId} style={styles.requestRowCard}>
-                <View style={styles.friendRowLeft}>
-                  <View
-                    style={[
-                      styles.friendAvatar,
-                      { backgroundColor: generateAvatarColor(item?.username || '') },
-                    ]}
-                  >
-                    <Text style={styles.avatarInitialText}>
-                      {(item?.username || '?')[0]?.toUpperCase()}
-                    </Text>
+            sentRequests.map((item, index) => {
+              const displayName = item?.username || (item?.email ? item.email.split('@')[0] : 'Crew Member');
+              const targetUid = item?.userId || item?.uid || item?.id;
+              return (
+                <View key={targetUid || `sent_${index}`} style={styles.requestRowCard}>
+                  <View style={styles.friendRowLeft}>
+                    <View
+                      style={[
+                        styles.friendAvatar,
+                        { backgroundColor: generateAvatarColor(displayName) },
+                      ]}
+                    >
+                      <Text style={styles.avatarInitialText}>
+                        {(displayName || '?')[0]?.toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={styles.friendNameText} numberOfLines={1}>{displayName}</Text>
+                      <Text style={styles.friendStatusSubtext} numberOfLines={1}>
+                        {item?.email ? `${item.email} • Pending` : 'Request Pending...'}
+                      </Text>
+                    </View>
                   </View>
-                  <View>
-                    <Text style={styles.friendNameText}>{item?.username}</Text>
-                    <Text style={styles.friendStatusSubtext}>Request Pending...</Text>
-                  </View>
-                </View>
 
-                <TouchableOpacity
-                  style={styles.cancelRequestBtn}
-                  onPress={() => cancelFriendRequest(item?.userId)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.cancelRequestText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            ))
+                  <TouchableOpacity
+                    style={styles.cancelRequestBtn}
+                    onPress={() => cancelFriendRequest(targetUid)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.cancelRequestText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })
           ) : (
             <View style={styles.emptyBox}>
               <Ionicons name="send-outline" size={40} color={colors.PURPLE_ACCENT} />
@@ -999,222 +1035,60 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── Section Titles ────────────────
-  sectionHeaderRow: {
+  // ── Self Chat Card ────────────────
+  selfChatCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  sectionTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.TITLE_COLOR,
-  },
-  pulseLiveDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.LIVE_RED,
-  },
-  onlineBadge: {
     backgroundColor: colors.SURFACE_ELEVATED,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-  },
-  onlineBadgeText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  viewAllText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-
-  // ── Carousel ──────────────────────
-  carouselContainer: {
-    paddingLeft: 16,
-    paddingRight: 8,
-    gap: 12,
-  },
-  carouselCard: {
-    width: 240,
-    height: 255,
-    backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.INPUTBOX_BORDER_COLOR,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  carouselCardBg: {
-    width: '100%',
-    height: '100%',
-  },
-  carouselCardImage: {
-    borderRadius: 18,
-  },
-  carouselGradient: {
-    flex: 1,
-    justifyContent: 'space-between',
+    marginHorizontal: 16,
+    marginBottom: 10,
     padding: 12,
-  },
-  carouselTopSection: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-  },
-  carouselTopBadge: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(8, 8, 16, 0.82)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    gap: 4,
+    borderColor: 'rgba(124, 58, 237, 0.28)',
   },
-  pingDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.ACCEPT_GREEN,
-  },
-  carouselTagText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  carouselFallbackIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  carouselAvatarWrap: {
+  selfChatAvatarWrap: {
     position: 'relative',
-    alignSelf: 'flex-start',
-    marginBottom: -14,
   },
-  carouselAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: colors.ACCEPT_GREEN,
+  selfChatAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  avatarOnlineDot: {
+  selfChatBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.ACCEPT_GREEN,
-    borderWidth: 1.5,
-    borderColor: colors.SURFACE_COLOR,
-  },
-  carouselCardBody: {
-    gap: 6,
-    paddingTop: 8,
-  },
-  carouselMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  carouselMetaLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 6,
-  },
-  carouselMiniAvatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    bottom: -2,
+    right: -2,
+    backgroundColor: colors.PURPLE_ACCENT,
+    width: 16,
+    height: 16,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 6,
   },
-  carouselMiniAvatarText: {
-    color: '#FFF',
-    fontSize: 11,
+  selfTag: {
+    backgroundColor: 'rgba(124, 58, 237, 0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  selfTagText: {
+    color: colors.PURPLE_ACCENT,
+    fontSize: 9,
     fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
-  carouselFallbackIcon: {
-    alignSelf: 'center',
-    marginTop: 14,
-    opacity: 0.7,
-  },
-  carouselSyncCountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  carouselSyncCountText: {
-    color: '#93C5FD',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  carouselHostName: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
-    fontWeight: '700',
-    flex: 1,
-  },
-  carouselRoomCode: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  carouselMovieRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  carouselMovieIcon: {
-    marginRight: 4,
-  },
-  carouselMovieText: {
+  selfChatSubtext: {
     color: colors.SUB_TITLE_COLOR,
-    fontSize: 12,
-    flex: 1,
-  },
-  quickJoinBtn: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  quickJoinGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    gap: 4,
-  },
-  quickJoinText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    marginTop: 2,
   },
 
   // ── Invite Callout Card ───────────

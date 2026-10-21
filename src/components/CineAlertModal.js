@@ -67,6 +67,7 @@ const CineAlertModal = () => {
   const inputValueRef = useRef('');
   const selectedRoomRef = useRef(null);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
+  const isClosingRef = useRef(false);
 
   // Animations
   const backdropAnim = useRef(new Animated.Value(0)).current;
@@ -76,6 +77,7 @@ const CineAlertModal = () => {
   useEffect(() => {
     registerAlertListener((config) => {
       if (config) {
+        isClosingRef.current = false;
         inputValueRef.current = config.initialValue || '';
         if (config.roomList && config.roomList.length > 0) {
           const initialRoom = config.roomList[0];
@@ -130,6 +132,9 @@ const CineAlertModal = () => {
   }, [alertConfig]);
 
   const closeAlert = (callback) => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
+
     const isBottomSheet = alertConfig?.presentationStyle !== 'center';
     const submittedValue = (alertConfig?.roomList && alertConfig.roomList.length > 0)
       ? (selectedRoomRef.current || alertConfig.roomList[0])
@@ -156,6 +161,7 @@ const CineAlertModal = () => {
             useNativeDriver: true,
           }),
     ]).start(() => {
+      isClosingRef.current = false;
       setAlertConfig(null);
       inputValueRef.current = '';
       selectedRoomRef.current = null;
@@ -275,13 +281,14 @@ const CineAlertModal = () => {
   const theme = getTheme();
 
   const handleConfirmPress = () => {
-    closeAlert(() => {
-      if (typeof onConfirm === 'function') {
-        if (alertConfig?.roomList && alertConfig.roomList.length > 0) {
-          onConfirm(selectedRoomRef.current || alertConfig.roomList[0]);
-        } else {
-          onConfirm(inputValueRef.current);
-        }
+    const confirmHandler = onConfirm;
+    const finalValue = (alertConfig?.roomList && alertConfig.roomList.length > 0)
+      ? (selectedRoomRef.current || alertConfig.roomList[0])
+      : inputValueRef.current;
+
+    closeAlert((submittedValue) => {
+      if (typeof confirmHandler === 'function') {
+        confirmHandler(submittedValue !== undefined ? submittedValue : finalValue);
       }
     });
   };

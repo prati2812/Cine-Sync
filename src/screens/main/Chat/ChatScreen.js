@@ -614,6 +614,10 @@ const ChatScreen = ({ route, navigation }) => {
   const otherUsername = route.params?.username || 'Chat';
   const otherUserId = route.params?.userId || route.params?.id || route.params?.friendId;
   const otherAvatar = route.params?.avatar || null;
+  const isSelfChat = Boolean(
+    route.params?.isSelfChat ||
+    (otherUserId && otherUserId === auth().currentUser?.uid)
+  );
 
   // Dynamic safe area top inset for Android & iOS notch protection
   const safeTopPadding = Math.max(
@@ -725,7 +729,9 @@ const ChatScreen = ({ route, navigation }) => {
   useEffect(() => {
     initializeChat();
     setupUserPresence();
-    listenOtherUserStatus();
+    if (!isSelfChat) {
+      listenOtherUserStatus();
+    }
     return () => {
       if (chatId) {
         database().ref(`chats/${chatId}/messages`).off('value');
@@ -780,7 +786,7 @@ const ChatScreen = ({ route, navigation }) => {
   }, [showAttachments]);
 
   const listenOtherUserStatus = () => {
-    if (!otherUserId) return;
+    if (!otherUserId || isSelfChat) return;
     const statusRef = database().ref(`users/${otherUserId}/status`);
     statusRef.on('value', (snapshot) => {
       const val = snapshot.val();
@@ -822,20 +828,33 @@ const ChatScreen = ({ route, navigation }) => {
     const newChatRef = db.ref('chats').push();
     const newChatId = newChatRef.key;
 
-    await Promise.all([
-      db.ref(`chats/${newChatId}/participants/${currentUserId}`).set(true),
-      db.ref(`chats/${newChatId}/participants/${otherId}`).set(true),
-      db.ref(`user_chats/${currentUserId}/${newChatId}`).set({
-        otherUserId: otherId,
-        lastMessage: '',
-        lastMessageTimestamp: database.ServerValue.TIMESTAMP,
-      }),
-      db.ref(`user_chats/${otherId}/${newChatId}`).set({
-        otherUserId: currentUserId,
-        lastMessage: '',
-        lastMessageTimestamp: database.ServerValue.TIMESTAMP,
-      }),
-    ]);
+    if (currentUserId === otherId) {
+      await Promise.all([
+        db.ref(`chats/${newChatId}/participants/${currentUserId}`).set(true),
+        db.ref(`chats/${newChatId}/isSelfChat`).set(true),
+        db.ref(`user_chats/${currentUserId}/${newChatId}`).set({
+          otherUserId: currentUserId,
+          isSelfChat: true,
+          lastMessage: '',
+          lastMessageTimestamp: database.ServerValue.TIMESTAMP,
+        }),
+      ]);
+    } else {
+      await Promise.all([
+        db.ref(`chats/${newChatId}/participants/${currentUserId}`).set(true),
+        db.ref(`chats/${newChatId}/participants/${otherId}`).set(true),
+        db.ref(`user_chats/${currentUserId}/${newChatId}`).set({
+          otherUserId: otherId,
+          lastMessage: '',
+          lastMessageTimestamp: database.ServerValue.TIMESTAMP,
+        }),
+        db.ref(`user_chats/${otherId}/${newChatId}`).set({
+          otherUserId: currentUserId,
+          lastMessage: '',
+          lastMessageTimestamp: database.ServerValue.TIMESTAMP,
+        }),
+      ]);
+    }
 
     setChatId(newChatId);
     listenToMessages(newChatId);
@@ -860,7 +879,7 @@ const ChatScreen = ({ route, navigation }) => {
         setMessages(visibleMessages);
 
         // ── 2. Mark incoming unread messages as SEEN in real time ──
-        if (currentUid) {
+        if (currentUid && !isSelfChat) {
           messagesList.forEach((msg) => {
             if (msg.senderId !== currentUid && !msg.seen && !msg.deletedForEveryone) {
               database().ref(`chats/${activeChatId}/messages/${msg.id}`).update({
@@ -894,8 +913,8 @@ const ChatScreen = ({ route, navigation }) => {
       senderId: currentUser.uid,
       timestamp: database.ServerValue.TIMESTAMP,
       type: 'text',
-      seen: false,
-      status: 'sent',
+      seen: isSelfChat ? true : false,
+      status: isSelfChat ? 'seen' : 'sent',
     };
 
     setMessage('');
@@ -1306,8 +1325,8 @@ const ChatScreen = ({ route, navigation }) => {
         opened: false,
         senderId: currentUser.uid,
         timestamp: database.ServerValue.TIMESTAMP,
-        seen: false,
-        status: 'sent',
+        seen: isSelfChat ? true : false,
+        status: isSelfChat ? 'seen' : 'sent',
       };
 
       await newMsgRef.set(messagePayload);
@@ -3014,6 +3033,35 @@ const ChatScreen = ({ route, navigation }) => {
     );
   };
 
+  const renderEmptyChat = () => (
+    <View style={styles.emptyChatWrap}>
+      <View style={[styles.emptyChatIconBox, isSelfChat && { borderColor: 'rgba(124, 58, 237, 0.4)' }]}>
+        <LinearGradient
+          colors={
+            isSelfChat
+              ? [colors.PURPLE_ACCENT, colors.PRIMARY_COLOR]
+              : ['rgba(0, 122, 255, 0.25)', 'rgba(124, 58, 237, 0.25)']
+          }
+          style={styles.emptyChatIconGrad}
+        >
+          <MaterialIcons
+            name={isSelfChat ? 'bookmark' : 'chat-bubble-outline'}
+            size={30}
+            color="#FFF"
+          />
+        </LinearGradient>
+      </View>
+      <Text style={styles.emptyChatTitle}>
+        {isSelfChat ? 'Your Personal Space' : 'No messages yet'}
+      </Text>
+      <Text style={styles.emptyChatSubtext}>
+        {isSelfChat
+          ? 'Draft messages, save notes, or store stream links. Only you can see these messages.'
+          : `Send a message to start conversing with ${otherUsername}.`}
+      </Text>
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -3032,33 +3080,48 @@ const ChatScreen = ({ route, navigation }) => {
             <MaterialIcons name="arrow-back-ios-new" size={18} color={colors.TITLE_COLOR} />
           </TouchableOpacity>
 
-          {/* User Avatar & Name with Status Indicator -> Clickable to FriendProfileScreen */}
+          {/* User Avatar & Name with Status Indicator -> Clickable to FriendProfileScreen / ProfileScreen */}
           <TouchableOpacity
             style={styles.headerProfileBtn}
             activeOpacity={0.75}
-            onPress={() =>
-              navigation.navigate('FriendProfile', {
-                userId: otherUserId,
-                username: otherUsername,
-                avatar: otherAvatar,
-                status: otherUserStatus,
-              })
-            }
+            onPress={() => {
+              if (isSelfChat) {
+                navigation.navigate('Profile');
+              } else {
+                navigation.navigate('FriendProfile', {
+                  userId: otherUserId,
+                  username: otherUsername,
+                  avatar: otherAvatar,
+                  status: otherUserStatus,
+                });
+              }
+            }}
           >
             <View style={styles.userAvatarWrap}>
-              {otherAvatar ? (
+              {isSelfChat ? (
+                <LinearGradient
+                  colors={[colors.PURPLE_ACCENT, colors.PRIMARY_COLOR]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.userAvatarFallback}
+                >
+                  <MaterialIcons name="bookmark" size={18} color="#FFF" />
+                </LinearGradient>
+              ) : otherAvatar ? (
                 <Image source={{ uri: otherAvatar }} style={styles.userAvatarImage} />
               ) : (
                 <View style={styles.userAvatarFallback}>
                   <Text style={styles.avatarInitial}>{otherUsername[0]?.toUpperCase()}</Text>
                 </View>
               )}
-              <View
-                style={[
-                  styles.userOnlineDot,
-                  { backgroundColor: otherUserStatus === 'online' ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
-                ]}
-              />
+              {!isSelfChat && (
+                <View
+                  style={[
+                    styles.userOnlineDot,
+                    { backgroundColor: otherUserStatus === 'online' ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                  ]}
+                />
+              )}
             </View>
 
             <View style={styles.headerTitleWrap}>
@@ -3068,10 +3131,12 @@ const ChatScreen = ({ route, navigation }) => {
               <Text
                 style={[
                   styles.headerSubtext,
-                  otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN },
+                  isSelfChat
+                    ? { color: colors.CYAN_ACCENT }
+                    : (otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN }),
                 ]}
               >
-                {otherUserStatus === 'online' ? 'Online' : 'Offline'}
+                {isSelfChat ? 'Personal Notes & Media' : (otherUserStatus === 'online' ? 'Online' : 'Offline')}
               </Text>
             </View>
           </TouchableOpacity>
@@ -3079,29 +3144,33 @@ const ChatScreen = ({ route, navigation }) => {
 
         {/* Right Action Icons: Audio Call, Video Call, Watch Party Invite */}
         <View style={styles.headerRightActions}>
-          <TouchableOpacity
-            style={styles.headerActionBtn}
-            onPress={() => startCall('audio')}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="call" size={18} color={colors.TITLE_COLOR} />
-          </TouchableOpacity>
+          {!isSelfChat && (
+            <>
+              <TouchableOpacity
+                style={styles.headerActionBtn}
+                onPress={() => startCall('audio')}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="call" size={18} color={colors.TITLE_COLOR} />
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.headerActionBtn}
-            onPress={() => startCall('video')}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="videocam" size={20} color={colors.TITLE_COLOR} />
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerActionBtn}
+                onPress={() => startCall('video')}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="videocam" size={20} color={colors.TITLE_COLOR} />
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.headerInviteTicketBtn}
-            onPress={handleTriggerWatchPartyInvite}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="confirmation-number" size={18} color={colors.PRIMARY_COLOR} />
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerInviteTicketBtn}
+                onPress={handleTriggerWatchPartyInvite}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="confirmation-number" size={18} color={colors.PRIMARY_COLOR} />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
 
@@ -3138,6 +3207,7 @@ const ChatScreen = ({ route, navigation }) => {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesListPadding}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={renderEmptyChat}
       />
 
       {/* Attachment Bottom Sheet Modal */}
@@ -3170,7 +3240,7 @@ const ChatScreen = ({ route, navigation }) => {
           <View style={styles.inputContainer}>
             <TextInput
               style={styles.textInput}
-              placeholder="Type a message..."
+              placeholder={isSelfChat ? 'Message yourself (Notes)...' : 'Type a message...'}
               placeholderTextColor={colors.MUTED_COLOR}
               value={message}
               onChangeText={setMessage}
@@ -3242,7 +3312,7 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -3253,12 +3323,12 @@ const styles = StyleSheet.create({
   userAvatarImage: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 12,
   },
   userAvatarFallback: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 12,
     backgroundColor: colors.PRIMARY_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
@@ -3274,7 +3344,7 @@ const styles = StyleSheet.create({
     right: 0,
     width: 10,
     height: 10,
-    borderRadius: 5,
+    borderRadius: 4,
     borderWidth: 1.5,
     borderColor: colors.BACKGROUND_COLOR,
   },
@@ -3301,7 +3371,7 @@ const styles = StyleSheet.create({
   headerActionBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -3309,7 +3379,7 @@ const styles = StyleSheet.create({
   headerInviteTicketBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 12,
     backgroundColor: colors.SURFACE_ELEVATED,
     justifyContent: 'center',
     alignItems: 'center',
@@ -3322,6 +3392,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
     paddingBottom: 90,
+  },
+  emptyChatWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    paddingTop: 80,
+  },
+  emptyChatIconBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  emptyChatIconGrad: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyChatTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  emptyChatSubtext: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
   },
   dateSeparator: {
     alignSelf: 'center',
@@ -3773,10 +3877,6 @@ const styles = StyleSheet.create({
   timestampInside: {
     color: colors.MUTED_COLOR,
     fontSize: 10,
-  },
-  seenReceiptRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
   },
 
   // ── ATTACHMENT BOTTOM SHEET MODAL ──
