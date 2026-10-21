@@ -28,7 +28,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../theme/Colors';
-import { getYouTubeThumbnailDetails } from '../../functions';
+import {
+  getYouTubeThumbnailDetails,
+  isUserParticipant,
+  getRoomParticipantCount,
+  isRoomCreator,
+} from '../../functions';
 import JoinByCodeModal from '../../components/JoinByCodeModal';
 import CinemaSearchModal from '../../components/CinemaSearchModal';
 import PrivateRoomPinModal from '../../components/PrivateRoomPinModal';
@@ -133,10 +138,8 @@ const HomeScreen = () => {
       const mergedMap = { ...userRoomsMap, ...recentRoomsMap };
       const roomsArray = Object.values(mergedMap).filter(room => {
         if (!room) return false;
-        const isCreator =
-          room.creator?.email === currentUser.email ||
-          room.creator?.uid === currentUser.uid;
-        const isParticipant = room.participants?.includes(currentUser.email);
+        const isCreator = isRoomCreator(room, currentUser);
+        const isParticipant = isUserParticipant(room, currentUser);
         const isPublic = !room.isPrivate;
         return isCreator || isParticipant || isPublic;
       });
@@ -312,9 +315,7 @@ const HomeScreen = () => {
   // ──────────────────────────────────────────────────────────────
   const navigateToRoom = useCallback(
     item => {
-      const isCreator =
-        item.creator?.email === currentUser?.email ||
-        item.creator?.uid === currentUser?.uid;
+      const isCreator = isRoomCreator(item, currentUser);
 
       if (item.isStreaming) {
         navigation.navigate('Streaming', {
@@ -327,7 +328,7 @@ const HomeScreen = () => {
       }
 
       if (isCreator) {
-        if (!item?.participants?.length) {
+        if (getRoomParticipantCount(item) === 0) {
           navigation.navigate('Streaming', {
             roomId: item.roomId,
             roomName: item.name,
@@ -532,7 +533,7 @@ const HomeScreen = () => {
   const renderRoomCard = useCallback(
     item => {
       const isLive = item.isStreaming === true;
-      const participantCount = item.participants?.length || 0;
+      const participantCount = getRoomParticipantCount(item);
       const hostName =
         item.creator?.userName ||
         (item.creator?.email ? item.creator.email.split('@')[0] : 'Host');

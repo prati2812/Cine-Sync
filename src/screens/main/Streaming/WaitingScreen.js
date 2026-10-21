@@ -20,7 +20,11 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
-import { getYouTubeThumbnailDetails } from '../../../functions';
+import {
+  getYouTubeThumbnailDetails,
+  getRoomParticipantEmails,
+  getRoomParticipantCount,
+} from '../../../functions';
 import { showCineAlert } from '../../../components/CineAlert';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -211,9 +215,10 @@ const WaitingScreen = ({ route, navigation }) => {
         return;
       }
 
+      const participantEmails = getRoomParticipantEmails(data.participants);
       const allEmails = [
         data.creator?.email,
-        ...(data.participants || []),
+        ...participantEmails,
       ].filter(Boolean);
       const uniqueEmails = [...new Set(allEmails)];
 
@@ -448,7 +453,8 @@ const WaitingScreen = ({ route, navigation }) => {
       confirmText: 'Remove',
       onConfirm: async () => {
         try {
-          const updated = (roomData?.participants || []).filter(
+          const currentList = getRoomParticipantEmails(roomData?.participants);
+          const updated = currentList.filter(
             (e) => e.toLowerCase() !== targetUser.email.toLowerCase()
           );
           await database().ref(`rooms/${roomId}/participants`).set(updated);

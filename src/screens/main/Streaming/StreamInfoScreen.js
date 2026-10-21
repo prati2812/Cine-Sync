@@ -20,6 +20,10 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import { auth, database } from '../../../config/firebase';
 import colors from '../../../theme/Colors';
+import {
+  getRoomParticipantEmails,
+  getRoomParticipantCount,
+} from '../../../functions';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -97,7 +101,7 @@ const StreamInfoScreen = ({ route, navigation }) => {
       // Build participants
       const emails = [
         data.creator?.email,
-        ...(data.participants || []),
+        ...getRoomParticipantEmails(data.participants),
       ].filter(Boolean);
       const uniqueEmails = [...new Set(emails)];
 
@@ -304,7 +308,8 @@ const StreamInfoScreen = ({ route, navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
-              const updated = (roomData?.participants || []).filter(
+              const currentList = getRoomParticipantEmails(roomData?.participants);
+              const updated = currentList.filter(
                 e => e.toLowerCase() !== targetUser.email.toLowerCase()
               );
               await database().ref(`rooms/${roomId}/participants`).set(updated);
@@ -356,7 +361,8 @@ const StreamInfoScreen = ({ route, navigation }) => {
             try {
               const userEmail = auth().currentUser?.email;
               if (userEmail && roomData?.participants) {
-                const updated = roomData.participants.filter(
+                const currentList = getRoomParticipantEmails(roomData.participants);
+                const updated = currentList.filter(
                   e => e.toLowerCase() !== userEmail.toLowerCase()
                 );
                 await database().ref(`rooms/${roomId}/participants`).set(updated);

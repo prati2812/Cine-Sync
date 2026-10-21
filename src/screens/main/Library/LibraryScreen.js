@@ -36,7 +36,12 @@ import {
   removeFromWatchlist,
   subscribeWatchlist,
 } from '../../../services/video/WatchlistService';
-import { getYouTubeThumbnailDetails } from '../../../functions';
+import {
+  getYouTubeThumbnailDetails,
+  isUserParticipant,
+  getRoomParticipantCount,
+  isRoomCreator,
+} from '../../../functions';
 import JoinByCodeModal from '../../../components/JoinByCodeModal';
 import PrivateRoomPinModal from '../../../components/PrivateRoomPinModal';
 import CinemaSearchModal from '../../../components/CinemaSearchModal';
@@ -200,8 +205,8 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
     </TouchableOpacity>
   );
 
-  const isSolo = item?.isSolo === true || (!item?.participants || item?.participants?.length === 0);
-  const participantCount = item?.participants?.length || 0;
+  const participantCount = getRoomParticipantCount(item);
+  const isSolo = item?.isSolo === true || participantCount === 0;
   const isLive = item?.isStreaming === true;
 
   return (
@@ -213,10 +218,10 @@ const RoomCard = ({ item, isCreator, onPress, onDelete, index }) => {
             isSolo
               ? [colors.CYAN_ACCENT, colors.PURPLE_ACCENT]
               : isLive
-              ? [colors.LIVE_RED, '#DC2626']
-              : isCreator
-              ? [colors.FILM_GOLD, '#D97706']
-              : [colors.GRADIENT_START, colors.GRADIENT_END]
+                ? [colors.LIVE_RED, '#DC2626']
+                : isCreator
+                  ? [colors.FILM_GOLD, '#D97706']
+                  : [colors.GRADIENT_START, colors.GRADIENT_END]
           }
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
@@ -960,8 +965,8 @@ const LibraryScreen = () => {
                     {isFeaturedSolo
                       ? 'PERSONAL SCREENING'
                       : featuredRoom.isStreaming
-                      ? 'FEATURED SCREENING'
-                      : 'ACTIVE WATCH PARTY'}
+                        ? 'FEATURED SCREENING'
+                        : 'ACTIVE WATCH PARTY'}
                   </Text>
                   <Text style={styles.heroTitle} numberOfLines={1}>
                     {featuredRoom.name}
@@ -1021,8 +1026,8 @@ const LibraryScreen = () => {
                         {isFeaturedSolo
                           ? 'Watch Solo Now'
                           : featuredRoom.isStreaming
-                          ? 'Join Party Now'
-                          : 'Enter Room'}
+                            ? 'Join Party Now'
+                            : 'Enter Room'}
                       </Text>
                     </LinearGradient>
                   </TouchableOpacity>
@@ -1229,12 +1234,12 @@ const LibraryScreen = () => {
               {filterType === 'live'
                 ? 'Live Streaming Now'
                 : filterType === 'created'
-                ? 'Created by You'
-                : filterType === 'invited'
-                ? 'Your Invitations'
-                : filterType === 'scheduled'
-                ? 'Scheduled Screenings'
-                : 'All Screening Rooms'}
+                  ? 'Created by You'
+                  : filterType === 'invited'
+                    ? 'Your Invitations'
+                    : filterType === 'scheduled'
+                      ? 'Scheduled Screenings'
+                      : 'All Screening Rooms'}
             </Text>
           </View>
 

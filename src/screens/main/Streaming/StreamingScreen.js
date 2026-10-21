@@ -28,6 +28,10 @@ import { createSyncSession, saveLocalProgress, getLocalProgress } from '../../..
 import { showCineAlert } from '../../../components/CineAlert';
 import { toggleWatchlist, isItemInWatchlist, subscribeWatchlist } from '../../../services/video/WatchlistService';
 import colors from '../../../theme/Colors';
+import {
+  getRoomParticipantEmails,
+  getRoomParticipantCount,
+} from '../../../functions';
 
 const AVATAR_COLORS = [
   colors.PRIMARY_COLOR,
@@ -246,8 +250,7 @@ const StreamingScreen = ({ route, navigation }) => {
     if (roomData?.isSolo !== undefined) return Boolean(roomData.isSolo);
     if (route.params?.isSolo !== undefined) return Boolean(route.params.isSolo);
     if (roomData) {
-      const parts = roomData.participants || [];
-      return parts.length === 0;
+      return getRoomParticipantCount(roomData) === 0;
     }
     return false;
   }, [isLocalSolo, currentRoomId, roomData, route.params]);
@@ -306,7 +309,8 @@ const StreamingScreen = ({ route, navigation }) => {
       }
 
       // Fetch participants
-      const allEmails = [data.creator?.email, ...(data.participants || [])].filter(Boolean);
+      const participantEmails = getRoomParticipantEmails(data.participants);
+      const allEmails = [data.creator?.email, ...participantEmails].filter(Boolean);
       const uniqueEmails = [...new Set(allEmails)];
       const profiles = [];
 
@@ -345,7 +349,7 @@ const StreamingScreen = ({ route, navigation }) => {
       // If group watch party with invited members, default to 'chat'.
       if (!hasAutoSetDefaultModeRef.current) {
         hasAutoSetDefaultModeRef.current = true;
-        const isSelfRoom = data.isSolo === true || !data.participants || data.participants.length === 0;
+        const isSelfRoom = data.isSolo === true || getRoomParticipantCount(data) === 0;
         setActiveMode(isSelfRoom ? 'notes' : 'chat');
       }
     };

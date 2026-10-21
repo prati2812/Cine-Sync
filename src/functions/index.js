@@ -126,3 +126,112 @@ export const fetchMediaMetadata = async url => {
 
   return null;
 };
+
+/**
+ * Safely extract participant emails/identities into an array,
+ * handling both Firebase array format and object/dictionary format.
+ */
+export const getRoomParticipantEmails = (participants) => {
+  if (!participants) return [];
+  if (Array.isArray(participants)) {
+    return participants
+      .map(p => (typeof p === 'string' ? p : p?.email))
+      .filter(Boolean);
+  }
+  if (typeof participants === 'object') {
+    return Object.entries(participants)
+      .map(([key, val]) => {
+        if (typeof val === 'string') return val;
+        if (val && typeof val === 'object' && val.email) return val.email;
+        if (key && key.includes('@')) return key;
+        return null;
+      })
+      .filter(Boolean);
+  }
+  return [];
+};
+
+/**
+ * Safely get the number of participants in a room.
+ */
+export const getRoomParticipantCount = (roomOrParticipants) => {
+  if (!roomOrParticipants) return 0;
+  const participants =
+    roomOrParticipants.participants !== undefined
+      ? roomOrParticipants.participants
+      : roomOrParticipants;
+  if (!participants) return 0;
+  if (Array.isArray(participants)) {
+    return participants.length;
+  }
+  if (typeof participants === 'object') {
+    return Object.keys(participants).length;
+  }
+  return 0;
+};
+
+/**
+ * Safely check if a user is a participant of a room.
+ * Handles array of strings/objects, object dictionaries keyed by UID/email, or object values.
+ */
+export const isUserParticipant = (room, user) => {
+  if (!room || !user) return false;
+  const userEmail = (user.email || '').toLowerCase().trim();
+  const userUid = user.uid || '';
+
+  const { participants } = room;
+  if (!participants) return false;
+
+  // 1. Array format: ['user@example.com', ...] or [{ email, uid }, ...]
+  if (Array.isArray(participants)) {
+    return participants.some(p => {
+      if (typeof p === 'string') {
+        const pTrim = p.toLowerCase().trim();
+        return (userEmail && pTrim === userEmail) || (userUid && p === userUid);
+      }
+      if (p && typeof p === 'object') {
+        const pEmail = (p.email || '').toLowerCase().trim();
+        return (userEmail && pEmail === userEmail) || (userUid && p.uid === userUid);
+      }
+      return false;
+    });
+  }
+
+  // 2. Object format: { [uid]: true }, { [email]: true }, or { "0": "email", ... }
+  if (typeof participants === 'object') {
+    // Direct key lookup
+    if (userUid && participants[userUid]) return true;
+    if (userEmail && participants[userEmail]) return true;
+
+    // Iterate entries
+    return Object.entries(participants).some(([key, val]) => {
+      const keyTrim = key.toLowerCase().trim();
+      if (userUid && key === userUid) return true;
+      if (userEmail && keyTrim === userEmail) return true;
+
+      if (typeof val === 'string') {
+        const valTrim = val.toLowerCase().trim();
+        return (userEmail && valTrim === userEmail) || (userUid && val === userUid);
+      }
+      if (val && typeof val === 'object') {
+        const valEmail = (val.email || '').toLowerCase().trim();
+        return (userEmail && valEmail === userEmail) || (userUid && val.uid === userUid);
+      }
+      return false;
+    });
+  }
+
+  return false;
+};
+
+/**
+ * Safely check if a user is the creator of a room.
+ */
+export const isRoomCreator = (room, user) => {
+  if (!room?.creator || !user) return false;
+  const userEmail = (user.email || '').toLowerCase().trim();
+  const userUid = user.uid || '';
+  const creatorEmail = (room.creator.email || '').toLowerCase().trim();
+  const creatorUid = room.creator.uid || '';
+  return (userEmail && creatorEmail === userEmail) || (userUid && creatorUid === userUid);
+};
