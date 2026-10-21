@@ -176,10 +176,9 @@ const LoginScreen = ({ navigation }) => {
 
               {/* Cine-Sync Title & VIP Badge */}
               <View style={styles.brandTitleRow}>
-                <Text style={styles.brandTitleWhite}>CINE</Text>
-                <Text style={styles.brandTitleBlue}>-SYNC</Text>
+                <Text style={styles.brandTitleWhite}>CINE{' '}</Text>
+                <Text style={styles.brandTitleBlue}>SYNC</Text>
               </View>
-              <Text style={styles.vipTagText}>VIP SCREENING ACCESS</Text>
 
               {/* Welcome Headline */}
               <Text style={styles.welcomeTitle}>Welcome Back</Text>
@@ -332,7 +331,7 @@ const LoginScreen = ({ navigation }) => {
                   activeOpacity={0.8}
                   onPress={() => handleSocialAuth('Google')}
                 >
-                  <MaterialIcons name="g-translate" size={18} color="#EA4335" />
+                  <MaterialIcons name="g-translate" size={18} color="#FFFFFF" />
                   <Text style={styles.socialBtnText}>Google</Text>
                 </TouchableOpacity>
 

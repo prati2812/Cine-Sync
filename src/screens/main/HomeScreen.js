@@ -759,15 +759,6 @@ const HomeScreen = () => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.headerCodeBtn}
-              onPress={() => setIsJoinModalVisible(true)}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="pin" size={15} color={colors.CYAN_ACCENT} />
-              <Text style={styles.headerCodeBtnText}>Enter Code</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
               style={styles.headerIconBtn}
               onPress={() => navigation.navigate('CreateRoom')}
               activeOpacity={0.8}
@@ -1214,22 +1205,6 @@ const HomeScreen = () => {
         </View>
       </ScrollView>
 
-      {/* ── FLOATING ACTION BUTTON (FAB) ── */}
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.fabWrap}
-        onPress={() => navigation.navigate('CreateRoom')}
-      >
-        <LinearGradient
-          colors={['#0066FF', '#6366F1']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.fabGradient}
-        >
-          <MaterialIcons name="add" size={30} color="#FFF" />
-        </LinearGradient>
-      </TouchableOpacity>
-
       {/* ── QUICK ACTION SHEET MODAL (Watch Solo or Host Party) ── */}
       <Modal
         visible={!!selectedMediaForAction}
@@ -1435,22 +1410,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  headerCodeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0E0E18',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    gap: 4,
-  },
-  headerCodeBtnText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 11.5,
-    fontWeight: '700',
   },
 
   // Category Pills
@@ -1914,28 +1873,6 @@ const styles = StyleSheet.create({
     color: colors.SUB_TITLE_COLOR,
     fontSize: 12,
     fontWeight: '600',
-  },
-
-  // ── FAB ──
-  fabWrap: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 54,
-    height: 54,
-    borderRadius: 14,
-    overflow: 'hidden',
-    shadowColor: '#0066FF',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  fabGradient: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 
   // ── Quick Action Sheet Modal ──
