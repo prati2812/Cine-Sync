@@ -335,7 +335,6 @@ const LibraryScreen = () => {
   }, []);
 
   // Modals
-  const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
   const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
   const [isPinModalVisible, setIsPinModalVisible] = useState(false);
   const [selectedPrivateRoom, setSelectedPrivateRoom] = useState(null);
@@ -846,12 +845,12 @@ const LibraryScreen = () => {
           {/* Logo Mark & Title */}
           <View style={styles.headerLeft}>
             <LinearGradient
-              colors={['#0080FF', '#0052FF']}
+              colors={['#0080FF', '#7C3AED']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.logoBadge}
             >
-              <Ionicons name="film" size={20} color="#FFF" />
+              <Ionicons name="film" size={19} color="#FFF" />
             </LinearGradient>
             <View style={styles.logoTextWrap}>
               <Text style={styles.logoCine}>MY</Text>
@@ -868,27 +867,6 @@ const LibraryScreen = () => {
               activeOpacity={0.8}
             >
               <MaterialIcons name="search" size={20} color={colors.TITLE_COLOR} />
-            </TouchableOpacity>
-
-            {/* Enter Code Button */}
-            <TouchableOpacity
-              style={styles.headerCodeBtn}
-              onPress={() => setIsJoinModalVisible(true)}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="pin" size={16} color={colors.CYAN_ACCENT} />
-              <Text style={styles.headerCodeBtnText}>Enter Code</Text>
-            </TouchableOpacity>
-
-            {/* Profile Shortcut */}
-            <TouchableOpacity
-              style={styles.profileAvatarBtn}
-              onPress={() => navigation.navigate('Profile')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.profileAvatarBox}>
-                <Ionicons name="person" size={17} color={colors.TITLE_COLOR} />
-              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -917,38 +895,23 @@ const LibraryScreen = () => {
                 style={styles.heroGradient}
               >
                 {/* Top Badges */}
-                <View style={styles.heroBadgeRow}>
-                  {isFeaturedSolo ? (
-                    <View style={[styles.liveBadge, styles.soloLiveBadge]}>
-                      <MaterialIcons name="person" size={11} color={colors.CYAN_ACCENT} />
-                      <Text style={[styles.liveBadgeText, { color: colors.CYAN_ACCENT }]}>
-                        SOLO CINEMA
-                      </Text>
-                    </View>
-                  ) : featuredRoom.isStreaming ? (
-                    <View style={styles.liveBadge}>
-                      <Animated.View style={[styles.liveDot, animatedPulseStyle]} />
-                      <Text style={styles.liveBadgeText}>LIVE SYNC</Text>
-                    </View>
-                  ) : (
-                    <View
-                      style={[
-                        styles.liveBadge,
-                        {
-                          backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                          borderColor: 'rgba(56, 189, 248, 0.4)',
-                        },
-                      ]}
-                    >
-                      <Ionicons name="time-outline" size={12} color="#38BDF8" />
-                      <Text style={[styles.liveBadgeText, { color: '#38BDF8' }]}>READY</Text>
-                    </View>
-                  )}
-                  <View style={styles.spatialBadge}>
-                    <Ionicons name="headset-outline" size={13} color="#4CD7F6" />
-                    <Text style={styles.spatialBadgeText}>Spatial Audio 3D</Text>
+                {(isFeaturedSolo || featuredRoom.isStreaming) ? (
+                  <View style={styles.heroBadgeRow}>
+                    {isFeaturedSolo ? (
+                      <View style={[styles.liveBadge, styles.soloLiveBadge]}>
+                        <MaterialIcons name="person" size={11} color={colors.CYAN_ACCENT} />
+                        <Text style={[styles.liveBadgeText, { color: colors.CYAN_ACCENT }]}>
+                          SOLO CINEMA
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.liveBadge}>
+                        <Animated.View style={[styles.liveDot, animatedPulseStyle]} />
+                        <Text style={styles.liveBadgeText}>LIVE SYNC</Text>
+                      </View>
+                    )}
                   </View>
-                </View>
+                ) : null}
 
                 {/* Title & Info */}
                 <View style={styles.heroDetails}>
@@ -1046,26 +1009,6 @@ const LibraryScreen = () => {
                 colors={['rgba(30, 27, 75, 0.95)', 'rgba(9, 10, 18, 0.98)']}
                 style={styles.heroGradient}
               >
-                <View style={styles.heroBadgeRow}>
-                  <View
-                    style={[
-                      styles.spatialBadge,
-                      {
-                        backgroundColor: 'rgba(251, 191, 36, 0.15)',
-                        borderColor: 'rgba(251, 191, 36, 0.3)',
-                      },
-                    ]}
-                  >
-                    <Ionicons name="sparkles" size={13} color="#FBBF24" />
-                    <Text style={[styles.spatialBadgeText, { color: '#FBBF24' }]}>
-                      PREMIERE LOUNGE
-                    </Text>
-                  </View>
-                  <View style={styles.spatialBadge}>
-                    <Ionicons name="headset-outline" size={13} color="#4CD7F6" />
-                    <Text style={styles.spatialBadgeText}>Spatial Audio 3D</Text>
-                  </View>
-                </View>
 
                 <View style={styles.heroDetails}>
                   <Text style={styles.heroCategory}>WATCH PARTY SYNC</Text>
@@ -1290,29 +1233,6 @@ const LibraryScreen = () => {
         </View>
       </ScrollView>
 
-      {/* ── FLOATING ACTION BUTTON (FAB) ─────────────────────────── */}
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.fabWrap}
-        onPress={() => navigation.navigate('CreateRoom')}
-      >
-        <LinearGradient
-          colors={['#0066FF', '#6366F1']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.fabGradient}
-        >
-          <MaterialIcons name="add" size={32} color="#FFF" />
-        </LinearGradient>
-      </TouchableOpacity>
-
-      {/* ── 6-DIGIT JOIN BY CODE MODAL ───────────────────────────── */}
-      <JoinByCodeModal
-        visible={isJoinModalVisible}
-        onClose={() => setIsJoinModalVisible(false)}
-        onJoinRoom={onRoomPress}
-      />
-
       {/* ── CINEMA SPOTLIGHT SEARCH MODAL ────────────────────────── */}
       <CinemaSearchModal
         visible={isSearchModalVisible}
@@ -1364,92 +1284,57 @@ const styles = StyleSheet.create({
 
   // ── Header ────────────────────────
   headerContainer: {
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(8, 8, 16, 0.88)',
     borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingBottom: 10,
   },
   headerInner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: 52,
+    height: 48,
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 9,
   },
   logoBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#0080FF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 6,
   },
   logoTextWrap: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   logoCine: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '900',
     color: '#FFFFFF',
-    letterSpacing: 2,
+    letterSpacing: 1.5,
   },
   logoSync: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '900',
-    color: '#1D8CF8',
-    letterSpacing: 2,
-    marginLeft: 4,
+    color: colors.PRIMARY_COLOR,
+    letterSpacing: 1.5,
+    marginLeft: 3,
   },
   headerRightActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  headerCodeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.SURFACE_ELEVATED,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    gap: 5,
-  },
-  headerCodeBtnText: {
-    color: colors.CYAN_ACCENT,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  profileAvatarBtn: {
-    padding: 2,
-  },
-  profileAvatarBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   headerSearchBtn: {
     width: 36,
     height: 36,
-    borderRadius: 12,
-    backgroundColor: colors.SURFACE_ELEVATED,
+    borderRadius: 10,
+    backgroundColor: '#0E0E18',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,

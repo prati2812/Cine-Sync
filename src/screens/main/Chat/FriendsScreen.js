@@ -577,10 +577,12 @@ const FriendsScreen = ({ navigation }) => {
       <View style={[styles.header, { paddingTop: safeTopPadding }]}>
         <View style={styles.headerLeft}>
           <LinearGradient
-            colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+            colors={['#0080FF', '#7C3AED']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={styles.headerLogoIcon}
           >
-            <MaterialIcons name="movie" size={20} color="#FFF" />
+            <Ionicons name="film" size={19} color="#FFF" />
           </LinearGradient>
           <View>
             <Text style={styles.headerTitle}>Friends & Social</Text>
@@ -931,15 +933,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: colors.BACKGROUND_COLOR,
+    paddingBottom: 10,
+    backgroundColor: 'rgba(8, 8, 16, 0.88)',
     borderBottomWidth: 1,
-    borderBottomColor: colors.BORDER_SUBTLE,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 9,
   },
   headerLogoIcon: {
     width: 36,
@@ -950,13 +952,15 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: '900',
     color: colors.TITLE_COLOR,
+    letterSpacing: 1.5,
   },
   headerSubtitle: {
-    fontSize: 11,
+    fontSize: 10,
     color: colors.SUB_TITLE_COLOR,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
 
   headerActions: {
@@ -967,12 +971,12 @@ const styles = StyleSheet.create({
   addFriendBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.SURFACE_ELEVATED,
+    height: 36,
+    backgroundColor: '#0E0E18',
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     gap: 4,
   },
   addFriendBtnText: {
@@ -984,9 +988,11 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: colors.SURFACE_ELEVATED,
+    backgroundColor: '#0E0E18',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   bellBadge: {
     position: 'absolute',

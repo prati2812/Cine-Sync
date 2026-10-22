@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import { auth, database } from '../../../config/firebase';
 import { showCineAlert } from '../../../components/CineAlert';
@@ -339,12 +340,12 @@ const UserProfileScreen = ({ navigation }) => {
         {/* Brand Left */}
         <View style={styles.brandRow}>
           <LinearGradient
-            colors={[colors.PRIMARY_COLOR_DARK, colors.PRIMARY_COLOR, colors.CYAN_ACCENT]}
+            colors={['#0080FF', '#7C3AED']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.logoSquircle}
           >
-            <MaterialIcons name="movie" size={19} color={colors.TITLE_COLOR} />
+            <Ionicons name="film" size={19} color="#FFF" />
           </LinearGradient>
           <View style={styles.brandTextCol}>
             <View style={styles.brandTitleWrap}>
@@ -716,28 +717,27 @@ const styles = StyleSheet.create({
 
   // ── Header Bar ──
   headerBar: {
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: 'rgba(8, 8, 16, 0.88)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.04)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
     zIndex: 10,
   },
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 9,
   },
   logoSquircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.20)',
   },
   brandTextCol: {
     justifyContent: 'center',
@@ -747,19 +747,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   brandTitleCine: {
-    fontSize: 14,
+    fontSize: 18,
     fontWeight: '900',
-    color: colors.TITLE_COLOR,
-    letterSpacing: 1.2,
+    color: '#FFFFFF',
+    letterSpacing: 1.5,
   },
   brandTitleSync: {
-    fontSize: 14,
+    fontSize: 18,
     fontWeight: '900',
-    color: colors.CYAN_ACCENT,
-    letterSpacing: 1.2,
+    color: colors.PRIMARY_COLOR,
+    letterSpacing: 1.5,
   },
   brandSubtitle: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
     color: colors.SUB_TITLE_COLOR,
     letterSpacing: 1.4,
@@ -771,12 +771,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerSquircleBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: colors.SURFACE_ELEVATED,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#0E0E18',
     borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
   },

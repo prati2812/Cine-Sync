@@ -382,19 +382,17 @@ const WatchPartyInviteTile = ({
             <MaterialIcons name="event" size={11} color={colors.FILM_GOLD} />
             <Text style={styles.scheduledBadgeText}>SCHEDULED</Text>
           </View>
-        ) : (
+        ) : item?.isStreaming ? (
           <View style={styles.liveSyncBadge}>
             <View
               style={[
                 styles.livePingDot,
-                item?.isStreaming && { backgroundColor: colors.LIVE_RED },
+                { backgroundColor: colors.LIVE_RED },
               ]}
             />
-            <Text style={styles.liveSyncText}>
-              {item?.isStreaming ? 'LIVE SYNC' : 'READY'}
-            </Text>
+            <Text style={styles.liveSyncText}>LIVE SYNC</Text>
           </View>
-        )}
+        ) : null}
 
         {showImage ? (
           <View style={isFuture ? styles.scheduledHdrTag : styles.hdrTag}>

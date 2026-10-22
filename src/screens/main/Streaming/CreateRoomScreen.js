@@ -905,7 +905,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
                 </View>
                 <Text style={styles.tierTitleVip}>VIP Cinema Suite</Text>
                 <Text style={styles.tierPerkText}>• Up to 50 viewers</Text>
-                <Text style={styles.tierPerkText}>• Spatial Audio 3D & 4K</Text>
+                <Text style={styles.tierPerkText}>• HD Voice & 4K Stream</Text>
                 <Text style={styles.tierPerkText}>• Director Lock Mode</Text>
               </TouchableOpacity>
             </View>
@@ -1068,7 +1068,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
               <View style={styles.toggleTextCol}>
                 <View style={styles.ruleTitleWithIcon}>
                   <MaterialIcons name="headset" size={16} color={colors.PRIMARY_COLOR} />
-                  <Text style={styles.toggleTitle}>Spatial Audio 3D</Text>
+                  <Text style={styles.toggleTitle}>HD Voice Audio</Text>
                 </View>
                 <Text style={styles.toggleSubtitle}>Low-latency cinema acoustic channel with echo cancellation</Text>
               </View>

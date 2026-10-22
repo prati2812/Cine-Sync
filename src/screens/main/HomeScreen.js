@@ -630,11 +630,13 @@ const HomeScreen = () => {
                 pointerEvents="none"
               />
 
-              {/* Top Left Live Sync or Ready Badge */}
-              <View style={[styles.roomTopBadge, isLive ? styles.roomLiveBadge : styles.roomReadyBadge]}>
-                {isLive && <Animated.View style={[styles.liveDotSmall, animatedPulseStyle]} />}
-                <Text style={styles.roomBadgeText}>{isLive ? 'LIVE' : 'READY'}</Text>
-              </View>
+              {/* Top Left Live Sync Badge */}
+              {isLive ? (
+                <View style={[styles.roomTopBadge, styles.roomLiveBadge]}>
+                  <Animated.View style={[styles.liveDotSmall, animatedPulseStyle]} />
+                  <Text style={styles.roomBadgeText}>LIVE</Text>
+                </View>
+              ) : null}
 
               {/* Top Right Viewer Count */}
               <View style={styles.roomViewerBadge}>
@@ -905,24 +907,14 @@ const HomeScreen = () => {
                 style={styles.billboardGradient}
               >
                 {/* Top Badges */}
-                <View style={styles.billboardBadgeRow}>
-                  {heroItem.type === 'room' && heroItem.data.isStreaming ? (
+                {heroItem.type === 'room' && heroItem.data.isStreaming ? (
+                  <View style={styles.billboardBadgeRow}>
                     <View style={styles.billboardLiveBadge}>
                       <Animated.View style={[styles.liveDotSmall, animatedPulseStyle]} />
                       <Text style={styles.billboardLiveText}>LIVE SYNC WATCH PARTY</Text>
                     </View>
-                  ) : (
-                    <View style={styles.billboardPremiereBadge}>
-                      <MaterialIcons name="auto-awesome" size={12} color={colors.CYAN_ACCENT} />
-                      <Text style={styles.billboardPremiereText}>FEATURED CINEMA 4K</Text>
-                    </View>
-                  )}
-
-                  <View style={styles.billboardSpatialBadge}>
-                    <Ionicons name="headset-outline" size={12} color="#4CD7F6" />
-                    <Text style={styles.billboardSpatialText}>Spatial 3D Audio</Text>
                   </View>
-                </View>
+                ) : null}
 
                 {/* Hero Info */}
                 <View style={styles.billboardInfoBlock}>

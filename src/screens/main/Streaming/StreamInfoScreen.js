@@ -733,7 +733,7 @@ const StreamInfoScreen = ({ route, navigation }) => {
 
                       <Text style={styles.viewerSubStatusText}>
                         {participant.isHost
-                          ? '🎙 Spatial Audio Active'
+                          ? 'Host Audio Connected'
                           : `Ping: ${participant.ping}ms`}
                       </Text>
                     </View>

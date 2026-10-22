@@ -1866,9 +1866,9 @@ const StreamingScreen = ({ route, navigation }) => {
                 showsVerticalScrollIndicator={false}
                 ListHeaderComponent={
                   <View style={styles.systemChatEventPill}>
-                    <MaterialIcons name="auto-awesome" size={12} color={colors.FILM_GOLD} style={{ marginRight: 5 }} />
+                    <MaterialIcons name="sync" size={12} color={colors.CYAN_ACCENT} style={{ marginRight: 5 }} />
                     <Text style={styles.systemChatEventText}>
-                      Spatial Audio synchronized for all {participants.length} viewers
+                      Real-time sync active for all {participants.length} viewers
                     </Text>
                   </View>
                 }
