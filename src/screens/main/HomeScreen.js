@@ -13,7 +13,6 @@ import {
   Platform,
   Alert,
   Modal,
-  ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,6 +37,12 @@ import JoinByCodeModal from '../../components/JoinByCodeModal';
 import CinemaSearchModal from '../../components/CinemaSearchModal';
 import PrivateRoomPinModal from '../../components/PrivateRoomPinModal';
 import { searchCinemaMedia } from '../../services/video/CinemaMediaSearchService';
+import {
+  RailRowSkeleton,
+  SkeletonPlaceholder,
+  InfinityCardSkeleton,
+  InfinityGridSkeleton,
+} from '../../components/UI/Skeleton';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DEFAULT_CINEMA_BACKDROP = 'https://i.ytimg.com/vi/Way9Dexny3w/hqdefault.jpg';
@@ -1079,10 +1084,7 @@ const HomeScreen = () => {
             </View>
 
             {isLoadingRails && trendingMovies.length === 0 ? (
-              <View style={styles.railLoadingBox}>
-                <ActivityIndicator size="small" color={colors.PRIMARY_COLOR} />
-                <Text style={styles.railLoadingText}>Discovering 4K Cinema...</Text>
-              </View>
+              <RailRowSkeleton count={3} />
             ) : (
               <FlatList
                 horizontal
@@ -1223,27 +1225,27 @@ const HomeScreen = () => {
 
           {/* 2-Column Faded Black Cards Grid */}
           {isLoadingInfinite && infiniteItems.length === 0 ? (
-            <View style={styles.infinityInitialLoading}>
-              <ActivityIndicator size="large" color={colors.CYAN_ACCENT} />
-              <Text style={styles.infinityInitialLoadingText}>
-                Loading infinite stream catalog...
-              </Text>
-            </View>
+            <InfinityGridSkeleton count={10} />
           ) : (
             <View style={styles.infinityGrid}>
               {infiniteItems.map((item, index) => renderInfinityGridCard(item, index))}
+              {isLoadingMoreInfinite && (
+                <>
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                  <InfinityCardSkeleton />
+                </>
+              )}
             </View>
           )}
 
           {/* Bottom Infinite Loading Indicator & Load More CTA */}
-          {isLoadingMoreInfinite ? (
-            <View style={styles.infinityLoadingMoreRow}>
-              <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
-              <Text style={styles.infinityLoadingMoreText}>
-                Fetching more infinite streams...
-              </Text>
-            </View>
-          ) : (
+          {isLoadingMoreInfinite ? null : (
             <TouchableOpacity
               style={styles.infinityManualLoadBtn}
               onPress={loadMoreInfiniteData}

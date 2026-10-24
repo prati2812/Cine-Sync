@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Image,
   ImageBackground,
-  ActivityIndicator,
   StatusBar,
   Platform,
   Alert,
@@ -45,6 +44,7 @@ import {
 import JoinByCodeModal from '../../../components/JoinByCodeModal';
 import PrivateRoomPinModal from '../../../components/PrivateRoomPinModal';
 import CinemaSearchModal from '../../../components/CinemaSearchModal';
+import { HeroCardSkeleton, RoomCardSkeleton } from '../../../components/UI/Skeleton';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -877,7 +877,9 @@ const LibraryScreen = () => {
         contentContainerStyle={styles.scrollContent}
       >
         {/* ── HERO FEATURED WATCH PARTY (Just like previous Home Screen) ── */}
-        {filtered.length > 0 ? (
+        {isLoading ? (
+          <HeroCardSkeleton />
+        ) : filtered.length > 0 ? (
           (() => {
             const featuredRoom = filtered[0];
             const isFeaturedSolo =
@@ -1166,7 +1168,7 @@ const LibraryScreen = () => {
               <MaterialIcons name="stream" size={20} color="#1D8CF8" />
               <Text style={styles.activeTitle}>Active Rooms</Text>
               <View style={styles.roomCountBadge}>
-                <Text style={styles.roomCountText}>{filtered.length}</Text>
+                <Text style={styles.roomCountText}>{isLoading ? '...' : filtered.length}</Text>
               </View>
             </View>
             <Text style={styles.activeSubtitle}>
@@ -1183,9 +1185,10 @@ const LibraryScreen = () => {
           </View>
 
           {isLoading ? (
-            <View style={styles.loadingBox}>
-              <ActivityIndicator size="small" color={colors.PRIMARY_COLOR} />
-              <Text style={styles.loadingSub}>Loading rooms...</Text>
+            <View style={styles.listContainer}>
+              <RoomCardSkeleton />
+              <RoomCardSkeleton />
+              <RoomCardSkeleton />
             </View>
           ) : filtered.length > 0 ? (
             <View style={styles.listContainer}>
