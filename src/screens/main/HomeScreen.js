@@ -1246,19 +1246,18 @@ const HomeScreen = () => {
 
           {/* Bottom Infinite Loading Indicator & Load More CTA */}
           {isLoadingMoreInfinite ? null : (
-            <TouchableOpacity
-              style={styles.infinityManualLoadBtn}
-              onPress={loadMoreInfiniteData}
-              activeOpacity={0.8}
-            >
-              <LinearGradient
-                colors={['#161628', '#0D0D18']}
-                style={styles.infinityManualLoadGradient}
-              >
-                <MaterialIcons name="all-inclusive" size={17} color={colors.CYAN_ACCENT} />
-                <Text style={styles.infinityManualLoadText}>Load More Streams</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+            <View style={styles.infinityGrid}>
+              <>
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+                <InfinityCardSkeleton />
+              </>
+            </View>
           )}
         </View>
       </ScrollView>

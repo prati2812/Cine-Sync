@@ -234,6 +234,64 @@ export const InfinityGridSkeleton = ({ count = 4 }) => {
   );
 };
 
+/**
+ * Media Search Result Card Skeleton for CinemaSearchModal & CinemaMediaSearchModal
+ */
+export const MediaSearchCardSkeleton = ({ style }) => {
+  return (
+    <View style={[styles.mediaSearchCard, style]}>
+      {/* 16:9 Left Thumbnail */}
+      <SkeletonPlaceholder
+        width={120}
+        height={70}
+        borderRadius={10}
+        style={styles.mediaSearchThumb}
+      />
+
+      {/* Right Details Column */}
+      <View style={styles.mediaSearchInfo}>
+        <SkeletonPlaceholder
+          width="92%"
+          height={14}
+          borderRadius={5}
+          style={styles.mediaSearchTitlePlaceholder}
+        />
+        <SkeletonPlaceholder
+          width="50%"
+          height={11}
+          borderRadius={4}
+          style={styles.mediaSearchChannelPlaceholder}
+        />
+        <View style={styles.mediaSearchFooter}>
+          <SkeletonPlaceholder
+            width={55}
+            height={10}
+            borderRadius={4}
+          />
+          <SkeletonPlaceholder
+            width={75}
+            height={24}
+            borderRadius={8}
+          />
+        </View>
+      </View>
+    </View>
+  );
+};
+
+/**
+ * List of MediaSearchCardSkeletons
+ */
+export const MediaSearchListSkeleton = ({ count = 5, style }) => {
+  return (
+    <View style={[styles.mediaSearchList, style]}>
+      {Array.from({ length: count }).map((_, i) => (
+        <MediaSearchCardSkeleton key={i} />
+      ))}
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
   skeletonBase: {
     backgroundColor: colors.SURFACE_ELEVATED,
@@ -352,6 +410,43 @@ const styles = StyleSheet.create({
   },
   infinityTitlePlaceholder: {
     marginBottom: 6,
+  },
+
+  // ── Media Search Result Card Skeleton ──
+  mediaSearchList: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 20,
+  },
+  mediaSearchCard: {
+    backgroundColor: '#0A0A14',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.BORDER_SUBTLE,
+    overflow: 'hidden',
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    gap: 12,
+  },
+  mediaSearchThumb: {
+    flexShrink: 0,
+  },
+  mediaSearchInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  mediaSearchTitlePlaceholder: {
+    marginBottom: 8,
+  },
+  mediaSearchChannelPlaceholder: {
+    marginBottom: 10,
+  },
+  mediaSearchFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
 });
 

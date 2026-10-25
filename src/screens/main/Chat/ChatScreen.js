@@ -608,6 +608,9 @@ const ChatScreen = ({ route, navigation }) => {
   const [fullscreenImage, setFullscreenImage] = useState(null); // { uri, caption, isViewOnce, messageId }
   const [isSendingPhoto, setIsSendingPhoto] = useState(false);
   const flatListRef = useRef(null);
+  const activeMessagesRef = useRef(null);
+  const activeUserChatsRef = useRef(null);
+  const activeStatusRef = useRef(null);
 
   const otherUsername = route.params?.username || 'Chat';
   const otherUserId = route.params?.userId || route.params?.id || route.params?.friendId;
@@ -731,8 +734,17 @@ const ChatScreen = ({ route, navigation }) => {
       listenOtherUserStatus();
     }
     return () => {
-      if (chatId) {
-        database().ref(`chats/${chatId}/messages`).off('value');
+      if (activeMessagesRef.current) {
+        activeMessagesRef.current.off('value');
+        activeMessagesRef.current = null;
+      }
+      if (activeUserChatsRef.current) {
+        activeUserChatsRef.current.off('value');
+        activeUserChatsRef.current = null;
+      }
+      if (activeStatusRef.current) {
+        activeStatusRef.current.off('value');
+        activeStatusRef.current = null;
       }
     };
   }, []);
@@ -785,7 +797,12 @@ const ChatScreen = ({ route, navigation }) => {
 
   const listenOtherUserStatus = () => {
     if (!otherUserId || isSelfChat) return;
+    if (activeStatusRef.current) {
+      activeStatusRef.current.off('value');
+      activeStatusRef.current = null;
+    }
     const statusRef = database().ref(`users/${otherUserId}/status`);
+    activeStatusRef.current = statusRef;
     statusRef.on('value', (snapshot) => {
       const val = snapshot.val();
       const isOnline = val === 'online' || val?.state === 'online';
@@ -800,10 +817,17 @@ const ChatScreen = ({ route, navigation }) => {
     if (route.params?.chatId) {
       setChatId(route.params.chatId);
       listenToMessages(route.params.chatId);
+      return;
+    }
+
+    if (activeUserChatsRef.current) {
+      activeUserChatsRef.current.off('value');
+      activeUserChatsRef.current = null;
     }
 
     const userChatsRef = database().ref(`user_chats/${currentUser.uid}`);
-    userChatsRef.on('value', (snapshot) => {
+    activeUserChatsRef.current = userChatsRef;
+    userChatsRef.once('value').then((snapshot) => {
       const chats = snapshot.val();
       if (chats) {
         const existingChatId = Object.keys(chats).find(
@@ -812,12 +836,13 @@ const ChatScreen = ({ route, navigation }) => {
         if (existingChatId) {
           setChatId(existingChatId);
           listenToMessages(existingChatId);
-        } else if (!route.params?.chatId) {
-          createNewChat(currentUser.uid, otherUserId);
+          return;
         }
-      } else if (!route.params?.chatId) {
-        createNewChat(currentUser.uid, otherUserId);
       }
+      createNewChat(currentUser.uid, otherUserId);
+    }).catch((err) => {
+      console.warn('Error fetching user_chats:', err);
+      createNewChat(currentUser.uid, otherUserId);
     });
   };
 
@@ -859,7 +884,13 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   const listenToMessages = (activeChatId) => {
+    if (!activeChatId) return;
+    if (activeMessagesRef.current) {
+      activeMessagesRef.current.off('value');
+      activeMessagesRef.current = null;
+    }
     const messagesRef = database().ref(`chats/${activeChatId}/messages`);
+    activeMessagesRef.current = messagesRef;
     messagesRef.on('value', (snapshot) => {
       const data = snapshot.val();
       const currentUid = auth().currentUser?.uid;
@@ -878,6 +909,7 @@ const ChatScreen = ({ route, navigation }) => {
 
         // ── 2. Mark incoming unread messages as SEEN in real time ──
         if (currentUid && !isSelfChat) {
+          database().ref(`user_chats/${currentUid}/${activeChatId}/unreadCount`).set(0);
           messagesList.forEach((msg) => {
             if (msg.senderId !== currentUid && !msg.seen && !msg.deletedForEveryone) {
               database().ref(`chats/${activeChatId}/messages/${msg.id}`).update({
@@ -924,9 +956,13 @@ const ChatScreen = ({ route, navigation }) => {
     const updates = {};
     updates[`user_chats/${currentUser.uid}/${chatId}/lastMessage`] = textToSend;
     updates[`user_chats/${currentUser.uid}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-    if (otherUserId) {
+    updates[`user_chats/${currentUser.uid}/${chatId}/lastSenderId`] = currentUser.uid;
+    updates[`user_chats/${currentUser.uid}/${chatId}/unreadCount`] = 0;
+    if (otherUserId && !isSelfChat) {
       updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = textToSend;
       updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = currentUser.uid;
+      updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(1);
     }
     await db.ref().update(updates);
   };
@@ -976,9 +1012,13 @@ const ChatScreen = ({ route, navigation }) => {
     const updates = {};
     updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessage`] = inviteText;
     updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-    if (otherUserId) {
+    updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+    updates[`user_chats/${currentUser.uid}/${effectiveChatId}/unreadCount`] = 0;
+    if (otherUserId && !isSelfChat) {
       updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessage`] = inviteText;
       updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${otherUserId}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+      updates[`user_chats/${otherUserId}/${effectiveChatId}/unreadCount`] = database.ServerValue.increment(1);
     }
     await db.ref().update(updates);
 
@@ -1337,9 +1377,13 @@ const ChatScreen = ({ route, navigation }) => {
       const updates = {};
       updates[`user_chats/${currentUser.uid}/${chatId}/lastMessage`] = previewText;
       updates[`user_chats/${currentUser.uid}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-      if (otherUserId) {
+      updates[`user_chats/${currentUser.uid}/${chatId}/lastSenderId`] = currentUser.uid;
+      updates[`user_chats/${currentUser.uid}/${chatId}/unreadCount`] = 0;
+      if (otherUserId && !isSelfChat) {
         updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = previewText;
         updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+        updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = currentUser.uid;
+        updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(1);
       }
       await database().ref().update(updates);
     } catch (error) {

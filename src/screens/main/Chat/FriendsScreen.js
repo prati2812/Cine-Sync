@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,44 @@ import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
 import { showCineAlert } from '../../../components/CineAlert';
+
+// ──────────────────────────────────────────────────────────────
+//  Format Chat Time (WhatsApp-style: 10:45 AM, Yesterday, Day, Date)
+// ──────────────────────────────────────────────────────────────
+const formatChatTime = (timestamp) => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const now = new Date();
+
+  const isToday =
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    date.getDate() === yesterday.getDate() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getFullYear() === yesterday.getFullYear();
+
+  if (isYesterday) {
+    return 'Yesterday';
+  }
+
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays < 7 && diffDays > 0) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return days[date.getDay()];
+  }
+
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
 
 // ──────────────────────────────────────────────────────────────
 //  Pulsing Online Ring
@@ -84,12 +122,22 @@ const FriendsScreen = ({ navigation }) => {
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
+  const [chatsData, setChatsData] = useState({});
 
   // Dynamic safe area top inset for Android & iOS notch protection
   const safeTopPadding = Math.max(
     insets.top,
     Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 12
   ) + 8;
+
+  // Auto-switch back to 'friends' tab if the active tab runs out of data
+  useEffect(() => {
+    if (activeTab === 'requests' && friendRequests.length === 0) {
+      setActiveTab('friends');
+    } else if (activeTab === 'sent' && sentRequests.length === 0) {
+      setActiveTab('friends');
+    }
+  }, [activeTab, friendRequests.length, sentRequests.length]);
 
   // ── Realtime Listeners & Focus Refresh ─────────────────────
   useEffect(() => {
@@ -103,16 +151,19 @@ const FriendsScreen = ({ navigation }) => {
         setFriendsList([]);
         setFriendRequests([]);
         setSentRequests([]);
+        setChatsData({});
         return;
       }
 
       const unsubReq = getFriendRequests(user);
       const unsubSent = getFriendSentRequests(user);
       const unsubFriends = getFriends(user);
+      const unsubChats = getUserChats(user);
 
       if (typeof unsubReq === 'function') cleanupFns.push(unsubReq);
       if (typeof unsubSent === 'function') cleanupFns.push(unsubSent);
       if (typeof unsubFriends === 'function') cleanupFns.push(unsubFriends);
+      if (typeof unsubChats === 'function') cleanupFns.push(unsubChats);
     };
 
     const current = auth().currentUser;
@@ -136,6 +187,25 @@ const FriendsScreen = ({ navigation }) => {
       const user = auth().currentUser;
       if (!user) return;
       const db = database();
+
+      // Refresh user_chats previews and unread counts
+      db.ref(`user_chats/${user.uid}`).once('value').then((snap) => {
+        const chatsVal = snap.val();
+        if (chatsVal && typeof chatsVal === 'object') {
+          const map = {};
+          Object.keys(chatsVal).forEach((chatId) => {
+            const chat = chatsVal[chatId];
+            if (chat && chat.otherUserId) {
+              map[chat.otherUserId] = {
+                chatId,
+                ...chat,
+                unreadCount: typeof chat.unreadCount === 'number' ? chat.unreadCount : 0,
+              };
+            }
+          });
+          setChatsData(map);
+        }
+      }).catch(e => console.warn('Focus user_chats error:', e));
 
       db.ref(`user_friend_requests/${user.uid}`).once('value').then(async (snap) => {
         const val = snap.val();
@@ -286,6 +356,71 @@ const FriendsScreen = ({ navigation }) => {
     return () => {
       friendsRef.off('value', callback);
       childUnsubs.forEach(fn => fn());
+    };
+  };
+
+  const getUserChats = (currentUser) => {
+    const user = currentUser || auth().currentUser;
+    if (!user) return () => {};
+    const db = database();
+    const userChatsRef = db.ref(`user_chats/${user.uid}`);
+
+    const callback = userChatsRef.on(
+      'value',
+      (snapshot) => {
+        try {
+          const chatsVal = snapshot.val();
+          if (!chatsVal || typeof chatsVal !== 'object') {
+            setChatsData({});
+            return;
+          }
+
+          const map = {};
+          Object.keys(chatsVal).forEach((chatId) => {
+            const chat = chatsVal[chatId];
+            if (!chat) return;
+            const otherUid = chat.otherUserId;
+            if (otherUid) {
+              const unreadCount = typeof chat.unreadCount === 'number' ? chat.unreadCount : undefined;
+
+              // Backwards-compatibility: If unreadCount is undefined, count unseen messages once
+              if (unreadCount === undefined && chatId) {
+                db.ref(`chats/${chatId}/messages`).once('value').then((msgSnap) => {
+                  const msgs = msgSnap.val();
+                  if (msgs && typeof msgs === 'object') {
+                    let unseen = 0;
+                    Object.keys(msgs).forEach((mId) => {
+                      const m = msgs[mId];
+                      if (m && m.senderId !== user.uid && !m.seen && !m.deletedForEveryone) {
+                        unseen++;
+                      }
+                    });
+                    if (unseen > 0) {
+                      db.ref(`user_chats/${user.uid}/${chatId}/unreadCount`).set(unseen);
+                    }
+                  }
+                }).catch(() => {});
+              }
+
+              map[otherUid] = {
+                chatId,
+                ...chat,
+                unreadCount: typeof unreadCount === 'number' ? unreadCount : 0,
+              };
+            }
+          });
+          setChatsData(map);
+        } catch (e) {
+          console.warn('user_chats listener error:', e);
+        }
+      },
+      (error) => {
+        console.warn('user_chats listener error:', error);
+      }
+    );
+
+    return () => {
+      userChatsRef.off('value', callback);
     };
   };
 
@@ -569,6 +704,37 @@ const FriendsScreen = ({ navigation }) => {
     }
   };
 
+  // ── Sorted Friends (WhatsApp Style: Unread conversations first, then newest message, then alphabetical) ──
+  const sortedFriends = useMemo(() => {
+    if (!friendsList || friendsList.length === 0) return [];
+
+    return [...friendsList].sort((a, b) => {
+      const aId = a.userId || a.id;
+      const bId = b.userId || b.id;
+      const chatA = chatsData[aId];
+      const chatB = chatsData[bId];
+
+      const aUnread = chatA?.unreadCount || 0;
+      const bUnread = chatB?.unreadCount || 0;
+
+      // 1. Unread conversations bubble to the top
+      if (aUnread > 0 && bUnread === 0) return -1;
+      if (bUnread > 0 && aUnread === 0) return 1;
+
+      // 2. Sort by newest message timestamp
+      const aTime = chatA?.lastMessageTimestamp || 0;
+      const bTime = chatB?.lastMessageTimestamp || 0;
+      if (aTime !== bTime) {
+        return bTime - aTime;
+      }
+
+      // 3. Alphabetical fallback
+      const nameA = (a.username || a.email || '').toLowerCase();
+      const nameB = (b.username || b.email || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }, [friendsList, chatsData]);
+
   return (
     <View style={styles.container}>
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" translucent />
@@ -601,7 +767,15 @@ const FriendsScreen = ({ navigation }) => {
             <Text style={styles.addFriendBtnText}>Add</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.iconBellBtn} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.iconBellBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              if (friendRequests.length > 0) {
+                setActiveTab('requests');
+              }
+            }}
+          >
             <MaterialIcons name="notifications" size={20} color={colors.TITLE_COLOR} />
             {friendRequests.length > 0 && (
               <View style={styles.bellBadge}>
@@ -617,47 +791,51 @@ const FriendsScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
       >
 
-        {/* ── SECTION 3: SEGMENTED TABS CONTROL ─────────────────── */}
-        <View style={styles.segmentedTabContainer}>
-          <TouchableOpacity
-            style={[styles.segTab, activeTab === 'friends' && styles.segTabActive]}
-            onPress={() => setActiveTab('friends')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.segTabText, activeTab === 'friends' && styles.segTabTextActive]}>
-              All Friends
-            </Text>
-            <View style={styles.segCountBadge}>
-              <Text style={styles.segCountText}>{friendsList.length}</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.segTab, activeTab === 'requests' && styles.segTabActive]}
-            onPress={() => setActiveTab('requests')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.segTabText, activeTab === 'requests' && styles.segTabTextActive]}>
-              Requests
-            </Text>
-            {friendRequests.length > 0 && (
-              <View style={styles.segCountBadgeRed}>
-                <Text style={styles.segCountTextWhite}>{friendRequests.length}</Text>
+        {/* ── SECTION 3: SEGMENTED TABS CONTROL (Only visible when Requests or Sent has data) ── */}
+        {(friendRequests.length > 0 || sentRequests.length > 0) && (
+          <View style={styles.segmentedTabContainer}>
+            <TouchableOpacity
+              style={[styles.segTab, activeTab === 'friends' && styles.segTabActive]}
+              onPress={() => setActiveTab('friends')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.segTabText, activeTab === 'friends' && styles.segTabTextActive]}>
+                All Friends
+              </Text>
+              <View style={styles.segCountBadge}>
+                <Text style={styles.segCountText}>{friendsList.length}</Text>
               </View>
-            )}
-          </TouchableOpacity>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.segTab, activeTab === 'sent' && styles.segTabActive]}
-            onPress={() => setActiveTab('sent')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.segTabText, activeTab === 'sent' && styles.segTabTextActive]}>
-              Sent
-            </Text>
-            <Text style={styles.segCountTextMuted}>{sentRequests.length}</Text>
-          </TouchableOpacity>
-        </View>
+            {friendRequests.length > 0 && (
+              <TouchableOpacity
+                style={[styles.segTab, activeTab === 'requests' && styles.segTabActive]}
+                onPress={() => setActiveTab('requests')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.segTabText, activeTab === 'requests' && styles.segTabTextActive]}>
+                  Requests
+                </Text>
+                <View style={styles.segCountBadgeRed}>
+                  <Text style={styles.segCountTextWhite}>{friendRequests.length}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {sentRequests.length > 0 && (
+              <TouchableOpacity
+                style={[styles.segTab, activeTab === 'sent' && styles.segTabActive]}
+                onPress={() => setActiveTab('sent')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.segTabText, activeTab === 'sent' && styles.segTabTextActive]}>
+                  Sent
+                </Text>
+                <Text style={styles.segCountTextMuted}>{sentRequests.length}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* ── SECTION 4: FRIENDS & CONTACTS LIST ─────────────────── */}
         <View style={styles.listSectionHeader}>
@@ -721,19 +899,32 @@ const FriendsScreen = ({ navigation }) => {
               <MaterialIcons name="chat" size={18} color={colors.PURPLE_ACCENT} />
             </TouchableOpacity>
 
-            {friendsList.length > 0 ? (
-              friendsList.map(item => {
+            {sortedFriends.length > 0 ? (
+              sortedFriends.map(item => {
+                const friendId = item?.userId || item?.id;
                 const isOnline = item?.status === 'online' || item?.status?.state === 'online';
+                const chat = chatsData[friendId];
+                const unreadCount = (chat && typeof chat.unreadCount === 'number') ? chat.unreadCount : 0;
+                const hasUnread = unreadCount > 0;
+                const lastMessage = chat?.lastMessage;
+                const lastTimestamp = chat?.lastMessageTimestamp;
+                const currentUid = auth().currentUser?.uid;
+                const isSentByMe = Boolean(chat?.lastSenderId && currentUid && chat.lastSenderId === currentUid);
+
                 return (
                   <TouchableOpacity
-                    key={item?.userId || item?.email}
-                    style={styles.friendRowCard}
+                    key={friendId || item?.email}
+                    style={[
+                      styles.friendRowCard,
+                      hasUnread && styles.friendRowCardUnread,
+                    ]}
                     activeOpacity={0.75}
                     onPress={() =>
                       navigation.navigate('Chat', {
                         username: item?.username || item?.email?.split('@')[0],
-                        userId: item?.userId || item?.id,
+                        userId: friendId,
                         avatar: item?.avatar,
+                        chatId: chat?.chatId,
                       })
                     }
                   >
@@ -745,7 +936,7 @@ const FriendsScreen = ({ navigation }) => {
                         onPress={() =>
                           navigation.navigate('FriendProfile', {
                             username: item?.username || item?.email?.split('@')[0],
-                            userId: item?.userId || item?.id,
+                            userId: friendId,
                             avatar: item?.avatar,
                             status: item?.status,
                           })
@@ -771,19 +962,56 @@ const FriendsScreen = ({ navigation }) => {
                       </TouchableOpacity>
 
                       <View style={styles.friendRowText}>
-                        <View style={styles.friendNameRow}>
-                          <Text style={styles.friendNameText} numberOfLines={1}>
+                        {/* Top row: Friend Name + Formatted Timestamp */}
+                        <View style={styles.friendTopRow}>
+                          <Text
+                            style={[
+                              styles.friendNameText,
+                              hasUnread && styles.friendNameTextUnread,
+                            ]}
+                            numberOfLines={1}
+                          >
                             {item?.username || item?.email?.split('@')[0]}
                           </Text>
+                          {Boolean(lastTimestamp) && (
+                            <Text
+                              style={[
+                                styles.friendTimeText,
+                                hasUnread && styles.friendTimeTextUnread,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {formatChatTime(lastTimestamp)}
+                            </Text>
+                          )}
                         </View>
-                        <Text style={styles.friendStatusSubtext}>
-                          {isOnline ? 'Online • Ready to chat' : 'Offline'}
-                        </Text>
+
+                        {/* Bottom row: Clean Message Snippet + WhatsApp Unread Count Badge */}
+                        <View style={styles.friendBottomRow}>
+                          <Text
+                            style={[
+                              styles.friendStatusSubtext,
+                              hasUnread && styles.friendStatusSubtextUnread,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {lastMessage
+                              ? lastMessage
+                              : isOnline
+                                ? 'Online • Ready to chat'
+                                : 'Offline'}
+                          </Text>
+
+                          {hasUnread && (
+                            <View style={styles.unreadCounterBadge}>
+                              <Text style={styles.unreadCounterText}>
+                                {unreadCount > 99 ? '99+' : unreadCount}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
                       </View>
                     </View>
-
-                    {/* Chat Icon */}
-                    <MaterialIcons name="chat" size={18} color={colors.SUB_TITLE_COLOR} />
                   </TouchableOpacity>
                 );
               })
@@ -1344,8 +1572,21 @@ const styles = StyleSheet.create({
     borderColor: colors.SURFACE_COLOR,
   },
 
+  friendRowCardUnread: {
+    borderColor: 'rgba(0, 200, 83, 0.35)',
+    borderLeftWidth: 3.5,
+    borderLeftColor: colors.ACCEPT_GREEN,
+    backgroundColor: 'rgba(0, 200, 83, 0.04)',
+  },
   friendRowText: {
     flex: 1,
+    justifyContent: 'center',
+  },
+  friendTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 3,
   },
   friendNameRow: {
     flexDirection: 'row',
@@ -1354,12 +1595,54 @@ const styles = StyleSheet.create({
   friendNameText: {
     color: colors.TITLE_COLOR,
     fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+    marginRight: 8,
+  },
+  friendNameTextUnread: {
+    fontWeight: '800',
+    color: '#FFF',
+  },
+  friendTimeText: {
+    fontSize: 11,
+    color: colors.MUTED_COLOR,
+    fontWeight: '500',
+  },
+  friendTimeTextUnread: {
+    color: colors.ACCEPT_GREEN,
     fontWeight: '700',
+  },
+  friendBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
   },
   friendStatusSubtext: {
     color: colors.SUB_TITLE_COLOR,
+    fontSize: 11.5,
+    flex: 1,
+  },
+  friendStatusSubtextUnread: {
+    color: colors.TITLE_COLOR,
+    fontWeight: '700',
+  },
+  unreadCounterBadge: {
+    backgroundColor: colors.ACCEPT_GREEN,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  unreadCounterText: {
+    color: '#080810',
     fontSize: 11,
-    marginTop: 2,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 14,
   },
 
   friendRowActions: {

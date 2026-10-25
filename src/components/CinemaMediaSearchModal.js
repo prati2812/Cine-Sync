@@ -14,7 +14,6 @@ import {
   StatusBar,
   Dimensions,
   Image,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -25,6 +24,7 @@ import {
   searchCinemaMedia,
   fetchMediaSuggestions,
 } from '../services/video/CinemaMediaSearchService';
+import { MediaSearchCardSkeleton, MediaSearchListSkeleton } from './UI/Skeleton';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -320,10 +320,7 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
 
           {/* ── CONTENT AREA (LOADING, RESULTS, OR EMPTY) ── */}
           {isLoading ? (
-            <View style={styles.centerLoadingState}>
-              <ActivityIndicator size="large" color={colors.PRIMARY_COLOR} />
-              <Text style={styles.loadingText}>Searching Cinema Media...</Text>
-            </View>
+            <MediaSearchListSkeleton count={5} />
           ) : results.length > 0 ? (
             <FlatList
               data={results}
@@ -417,9 +414,9 @@ const CinemaMediaSearchModal = ({ visible, onClose, onSelectMedia }) => {
               )}
               ListFooterComponent={
                 isLoadingMore ? (
-                  <View style={styles.paginationLoadingWrap}>
-                    <ActivityIndicator size="small" color={colors.PRIMARY_COLOR} />
-                    <Text style={styles.paginationLoadingText}>Loading more cinema media...</Text>
+                  <View style={{ paddingTop: 4 }}>
+                    <MediaSearchCardSkeleton />
+                    <MediaSearchCardSkeleton />
                   </View>
                 ) : continuationToken ? (
                   <TouchableOpacity

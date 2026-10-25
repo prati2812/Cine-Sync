@@ -294,6 +294,8 @@ export function useAudioCall(chatId, otherUserId = null) {
         ? `${icon} ${label} (No answer)`
         : `${icon} ${label} (${durationStr})`;
       updates[`user_chats/${callerId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${callerId}/${chatId}/lastSenderId`] = callerId;
+      updates[`user_chats/${callerId}/${chatId}/unreadCount`] = 0;
 
       // Callee's lastMessage
       if (otherUserId) {
@@ -301,6 +303,8 @@ export function useAudioCall(chatId, otherUserId = null) {
           ? `${icon} Missed ${label.toLowerCase()}`
           : `${icon} ${label} (${durationStr})`;
         updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+        updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = callerId;
+        updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(1);
       }
 
       await db.ref().update(updates);
