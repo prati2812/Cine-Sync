@@ -1266,6 +1266,7 @@ const HomeScreen = () => {
       <Modal
         visible={!!selectedMediaForAction}
         transparent={true}
+        statusBarTranslucent
         animationType="fade"
         onRequestClose={() => setSelectedMediaForAction(null)}
       >
@@ -1279,7 +1280,10 @@ const HomeScreen = () => {
               colors={['#18182C', '#0E0E1A', '#080810']}
               start={{ x: 0, y: 0 }}
               end={{ x: 0, y: 1 }}
-              style={styles.actionSheetGradient}
+              style={[
+                styles.actionSheetGradient,
+                { paddingBottom: Math.max(insets.bottom, 16) + 16 },
+              ]}
             >
               {/* Top Handle */}
               <View style={styles.sheetHandle} />

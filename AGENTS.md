@@ -71,3 +71,26 @@ Whenever generating, modifying, or refactoring code for this React Native codeba
   2. Action Steps (e.g., Play, Seek, Exit Room, Re-enter).
   3. Exact Expected Results & Visual Indicators (e.g., Badge colors, time counters, loader transitions).
   4. Edge Cases to verify.
+
+---
+
+## 📑 8. Always Use Bottom Sheets (NEVER Centered Modals)
+- **MANDATORY**: Never use centered popup dialog modals (`justifyContent: 'center'`). Always use slide-up Bottom Sheets anchored at the bottom with:
+  - Slide-up translation animation from the bottom (`useNativeDriver: true`).
+  - Atmospheric dark frosted backdrop (dismissible on tap with smooth exit animation).
+  - Draggable handle bar / drag indicator pill (`width: 38`, `height: 4`, `borderRadius: 2`, `backgroundColor: 'rgba(255, 255, 255, 0.25)'`).
+  - Ambient top gradient sheen (`colors.PURPLE_ACCENT` to `colors.SURFACE_COLOR`).
+  - Safe area bottom padding with `useSafeAreaInsets()` (`paddingBottom: Math.max(insets.bottom, 16) + 16`).
+  - Squircle header icons and rounded top corners (`borderTopLeftRadius: 28`, `borderTopRightRadius: 28`).
+
+---
+
+## 🚫 9. No Status or Category Chips in List Titles (Clean & Uncluttered Row UI)
+- **MANDATORY**: In all current and future screens, NEVER add status chips, badges, or category pills next to contact names or list item titles (e.g., do NOT add `PERSONAL`, `LOCKED`, or type tags inline with titles).
+- Keep list rows, contact cards, and header titles clean, native, and uncluttered.
+- If status is necessary, communicate it gracefully through:
+  - Subtle subtext descriptions (e.g., "Locked chat • Tap to enter passcode").
+  - Avatar mini-badges (squircle overlay).
+  - Subtle ambient card accents or subtle icon indicators, NEVER squeezed inline chips next to the title text.
+
+

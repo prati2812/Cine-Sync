@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -19,11 +19,13 @@ import {
   Dimensions,
   Alert,
   Linking,
+  ScrollView,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import { auth, database } from '../../../config/firebase';
@@ -34,6 +36,16 @@ import { uploadMediaBlob, resolveMediaUri, deleteMediaBlob } from '../../../func
 import { showCineAlert } from '../../../components/CineAlert';
 import { getYouTubeThumbnailDetails } from '../../../functions';
 import LinkPreviewCard, { extractFirstUrl } from '../../../components/LinkPreviewCard';
+import ChatLockBottomSheet from '../../../components/ChatLockBottomSheet';
+import ChatImageViewerModal from '../../../components/ChatImageViewerModal';
+import {
+  isChatLockedForUser,
+  lockChatForUser,
+  unlockChatForUser,
+  hasChatLockPasscode,
+  isSessionUnlocked,
+  markSessionUnlocked,
+} from '../../../functions/chatLockService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -64,12 +76,196 @@ const getDateLabel = (date) => {
 };
 
 /**
+ * Lightweight, zero-lag animated 3-dot typing indicator using useNativeDriver: true
+ */
+const AnimatedTypingDots = () => {
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const createAnim = (anim, delay) => {
+      return Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, {
+            toValue: -5,
+            duration: 280,
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 0,
+            duration: 280,
+            useNativeDriver: true,
+          }),
+          Animated.delay(Math.max(0, 560 - delay)),
+        ])
+      );
+    };
+
+    const a1 = createAnim(dot1, 0);
+    const a2 = createAnim(dot2, 140);
+    const a3 = createAnim(dot3, 280);
+
+    a1.start();
+    a2.start();
+    a3.start();
+
+    return () => {
+      a1.stop();
+      a2.stop();
+      a3.stop();
+    };
+  }, [dot1, dot2, dot3]);
+
+  return (
+    <View style={styles.typingDotsRow}>
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot1 }] }]} />
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot2 }] }]} />
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot3 }] }]} />
+    </View>
+  );
+};
+
+/**
+ * QuotedMessageReply Component
+ * Displays the quoted message inside a bubble, with squircle image thumbnail
+ * if the quoted message contains an image, and scrolls to that message on tap.
+ */
+const QuotedMessageReply = ({
+  replyTo,
+  isMyMessage,
+  onScrollToMessage,
+  allMessages = [],
+  currentUserId,
+  fallbackUsername,
+}) => {
+  const [thumbUri, setThumbUri] = useState(replyTo?.imageUri || null);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!replyTo) return;
+
+    // 1. Direct image URI
+    if (replyTo.imageUri) {
+      setThumbUri(replyTo.imageUri);
+      return;
+    }
+
+    // 2. Direct mediaId
+    if (replyTo.mediaId) {
+      resolveMediaUri(replyTo.mediaId)
+        .then((resolved) => {
+          if (isMounted && resolved) {
+            setThumbUri(resolved);
+          }
+        })
+        .catch((e) => console.warn('Quoted reply mediaId resolve error:', e));
+      return;
+    }
+
+    // 3. Fallback: find original message from allMessages array in memory
+    const originalMsg = allMessages?.find((m) => m.id === replyTo.id);
+    if (originalMsg) {
+      if (originalMsg.imageUri) {
+        setThumbUri(originalMsg.imageUri);
+      } else if (originalMsg.mediaId) {
+        resolveMediaUri(originalMsg.mediaId)
+          .then((resolved) => {
+            if (isMounted && resolved) {
+              setThumbUri(resolved);
+            }
+          })
+          .catch((e) => console.warn('Quoted reply originalMsg resolve error:', e));
+      }
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [replyTo, allMessages]);
+
+  if (!replyTo) return null;
+
+  const isQuotedImage =
+    replyTo.type === 'image' ||
+    replyTo.type === 'photo' ||
+    Boolean(thumbUri) ||
+    Boolean(replyTo.mediaId) ||
+    (replyTo.text && replyTo.text.includes('📷'));
+
+  const senderLabel =
+    replyTo.senderId === currentUserId
+      ? 'You'
+      : (replyTo.senderName || fallbackUsername || 'Friend');
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.82}
+      onPress={() => onScrollToMessage && onScrollToMessage(replyTo.id)}
+      style={[
+        styles.quotedReplyWrap,
+        isMyMessage ? styles.myQuotedReplyWrap : styles.theirQuotedReplyWrap,
+      ]}
+    >
+      <View
+        style={[
+          styles.quotedReplyBar,
+          isMyMessage ? styles.myQuotedReplyBar : styles.theirQuotedReplyBar,
+        ]}
+      />
+      <View style={styles.quotedReplyContent}>
+        <Text
+          style={[styles.quotedReplyUser, isMyMessage && styles.quotedReplyUserMine]}
+          numberOfLines={1}
+        >
+          {senderLabel}
+        </Text>
+        <Text
+          style={[
+            styles.quotedReplySnippet,
+            isMyMessage && styles.quotedReplySnippetMine,
+          ]}
+          numberOfLines={1}
+        >
+          {replyTo.text || (isQuotedImage ? '📷 Photo' : 'Message')}
+        </Text>
+      </View>
+      {thumbUri ? (
+        <Image
+          source={{ uri: thumbUri }}
+          style={styles.quotedReplyThumbnail}
+          resizeMode="cover"
+        />
+      ) : isQuotedImage ? (
+        <View style={styles.quotedReplyThumbnailPlaceholder}>
+          <MaterialIcons name="image" size={18} color="rgba(255, 255, 255, 0.5)" />
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+};
+
+/**
  * Lightweight, decoupled image bubble that loads cached Base64 from local disk
  * or fetches from RTDB media_blobs on-demand to keep messages under 1KB.
  */
-const ChatImageThumbnail = ({ item, isMyMessage, onOpenFullscreen, onLongPress }) => {
+const ChatImageThumbnail = ({
+  item,
+  isMyMessage,
+  onOpenFullscreen,
+  onLongPress,
+  onScrollToMessage,
+  allMessages,
+  currentUserId,
+  otherUsername,
+  isHighlighted,
+}) => {
   const [resolvedUri, setResolvedUri] = useState(item.imageUri || null);
   const [loading, setLoading] = useState(!item.imageUri && Boolean(item.mediaId));
+  const [aspectRatio, setAspectRatio] = useState(
+    item.width && item.height ? item.width / item.height : 1
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -100,63 +296,178 @@ const ChatImageThumbnail = ({ item, isMyMessage, onOpenFullscreen, onLongPress }
     };
   }, [item.mediaId, item.imageUri]);
 
+  // Dynamically calculate aspect ratio to avoid letterboxing or empty space
+  useEffect(() => {
+    if (resolvedUri && (!item.width || !item.height)) {
+      Image.getSize(
+        resolvedUri,
+        (w, h) => {
+          if (w && h) setAspectRatio(w / h);
+        },
+        () => {}
+      );
+    }
+  }, [resolvedUri, item.width, item.height]);
+
+  const cardWidth = Math.round(SCREEN_WIDTH * 0.70);
+  const clampedRatio = Math.max(0.72, Math.min(aspectRatio || 1, 1.55));
+  const dynamicHeight = Math.round(cardWidth / clampedRatio);
+  const hasCaption = Boolean(item.caption);
+
   return (
     <TouchableOpacity
-      activeOpacity={0.9}
+      activeOpacity={0.92}
       onPress={() => {
         if (resolvedUri) {
-          onOpenFullscreen(resolvedUri, item.caption);
+          onOpenFullscreen(resolvedUri, item.caption, item);
         }
       }}
       onLongPress={() => onLongPress && onLongPress(item)}
       style={[
         styles.imageMessageCard,
         isMyMessage ? styles.myImageMessageCard : styles.theirImageMessageCard,
+        { width: cardWidth },
+        isHighlighted && styles.highlightedMessageBubble,
       ]}
     >
+      {/* Quoted reply inside image card if present */}
+      {item.replyTo && (
+        <View style={styles.imageCardQuotedWrap}>
+          <QuotedMessageReply
+            replyTo={item.replyTo}
+            isMyMessage={isMyMessage}
+            onScrollToMessage={onScrollToMessage}
+            allMessages={allMessages}
+            currentUserId={currentUserId}
+            fallbackUsername={otherUsername}
+          />
+        </View>
+      )}
+
       {loading ? (
-        <View style={styles.imagePlaceholder}>
+        <View style={[styles.imagePlaceholder, { width: cardWidth, height: 180 }]}>
           <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
           <Text style={styles.imagePlaceholderText}>Loading photo...</Text>
         </View>
       ) : resolvedUri ? (
-        <Image
-          source={{ uri: resolvedUri }}
-          style={styles.imageThumbnail}
-          resizeMode="cover"
-        />
+        <View style={{ width: cardWidth, height: dynamicHeight, position: 'relative' }}>
+          <Image
+            source={{ uri: resolvedUri }}
+            style={[
+              styles.imageThumbnail,
+              {
+                width: cardWidth,
+                height: dynamicHeight,
+                borderBottomLeftRadius: hasCaption ? 0 : (!isMyMessage ? 4 : 15),
+                borderBottomRightRadius: hasCaption ? 0 : (isMyMessage ? 4 : 15),
+              },
+            ]}
+            resizeMode="cover"
+          />
+
+          {/* When NO caption, render timestamp & status floating inside image (ZERO bottom space) */}
+          {!hasCaption && (
+            <View style={styles.imageFloatingTimestampPill}>
+              <Text style={styles.imageFloatingTimestampText}>
+                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+              {isMyMessage && (
+                <View style={styles.seenReceiptRow}>
+                  <MaterialIcons
+                    name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+                    size={13}
+                    color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : '#FFFFFF'}
+                    style={{ marginLeft: 3 }}
+                  />
+                </View>
+              )}
+            </View>
+          )}
+        </View>
       ) : (
-        <View style={styles.imagePlaceholder}>
+        <View style={[styles.imagePlaceholder, { width: cardWidth, height: 140 }]}>
           <MaterialIcons name="broken-image" size={32} color="rgba(255, 255, 255, 0.4)" />
           <Text style={styles.imagePlaceholderText}>Photo unavailable</Text>
         </View>
       )}
 
-      {/* Optional Caption */}
-      {Boolean(item.caption) && (
-        <Text style={styles.imageCaptionText}>{item.caption}</Text>
-      )}
-
-      {/* Image Card Footer */}
-      <View style={styles.imageCardFooter}>
-        <Text style={styles.imageTimestamp}>
-          {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </Text>
-        {isMyMessage && (
-          <View style={styles.seenReceiptRow}>
-            <MaterialIcons
-              name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
-              size={14}
-              color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.7)'}
-              style={{ marginLeft: 4 }}
-            />
+      {/* When caption exists, render caption text & timestamp underneath image */}
+      {hasCaption && (
+        <View style={styles.imageCaptionSection}>
+          <Text style={styles.imageCaptionText}>{item.caption}</Text>
+          <View style={styles.imageCardFooter}>
+            <Text style={styles.imageTimestamp}>
+              {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
+            {isMyMessage && (
+              <View style={styles.seenReceiptRow}>
+                <MaterialIcons
+                  name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+                  size={14}
+                  color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.7)'}
+                  style={{ marginLeft: 4 }}
+                />
+              </View>
+            )}
           </View>
-        )}
-      </View>
+        </View>
+      )}
     </TouchableOpacity>
+  );
+};
+
+/**
+ * SwipeableMessageRow Component
+ * Smooth swipe-to-reply gesture for any message bubble.
+ */
+const SwipeableMessageRow = ({ item, isMyMessage, onSwipeReply, children }) => {
+  const swipeableRef = useRef(null);
+
+  const renderLeftActions = (progress, dragX) => {
+    const scale = dragX.interpolate({
+      inputRange: [0, 35, 75],
+      outputRange: [0.3, 0.85, 1.15],
+      extrapolate: 'clamp',
+    });
+    const opacity = dragX.interpolate({
+      inputRange: [0, 15, 40],
+      outputRange: [0, 0.6, 1],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <View style={styles.swipeReplyActionBox}>
+        <Animated.View style={[styles.swipeReplyIconWrap, { opacity, transform: [{ scale }] }]}>
+          <MaterialIcons name="reply" size={20} color={colors.CYAN_ACCENT} />
+        </Animated.View>
+      </View>
+    );
+  };
+
+  return (
+    <Swipeable
+      ref={swipeableRef}
+      friction={2}
+      leftThreshold={35}
+      overshootLeft={false}
+      renderLeftActions={renderLeftActions}
+      onSwipeableWillOpen={() => {
+        if (onSwipeReply) {
+          onSwipeReply(item);
+        }
+        setTimeout(() => {
+          swipeableRef.current?.close();
+        }, 80);
+      }}
+    >
+      {children}
+    </Swipeable>
   );
 };
 
@@ -171,6 +482,7 @@ const WatchPartyInviteTile = ({
   navigation,
   handleMessageLongPress,
   dateSeparator,
+  isHighlighted,
 }) => {
   const cleanThumbUrl = (uri) => {
     if (!uri || typeof uri !== 'string') return uri;
@@ -246,7 +558,7 @@ const WatchPartyInviteTile = ({
             }
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     }
 
     return () => {
@@ -362,12 +674,12 @@ const WatchPartyInviteTile = ({
       colors={
         showImage
           ? [
-              'rgba(8, 8, 16, 0.04)',
-              'rgba(8, 8, 16, 0.35)',
-              'rgba(8, 8, 16, 0.78)',
-              'rgba(15, 15, 26, 0.95)',
-              colors.SURFACE_COLOR,
-            ]
+            'rgba(8, 8, 16, 0.04)',
+            'rgba(8, 8, 16, 0.35)',
+            'rgba(8, 8, 16, 0.78)',
+            'rgba(15, 15, 26, 0.95)',
+            colors.SURFACE_COLOR,
+          ]
           : ['#1E1B4B', colors.SURFACE_COLOR]
       }
       locations={showImage ? [0, 0.22, 0.46, 0.72, 0.96] : undefined}
@@ -517,8 +829,8 @@ const WatchPartyInviteTile = ({
                     inviteStatus === 'accepted'
                       ? 'play-arrow'
                       : isFuture
-                      ? 'event-available'
-                      : 'bolt'
+                        ? 'event-available'
+                        : 'bolt'
                   }
                   size={15}
                   color="#FFF"
@@ -529,8 +841,8 @@ const WatchPartyInviteTile = ({
                       ? 'View Room Lobby'
                       : 'Join Room Now'
                     : isFuture
-                    ? 'Accept & RSVP'
-                    : 'Accept & Join Party'}
+                      ? 'Accept & RSVP'
+                      : 'Accept & Join Party'}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -569,6 +881,7 @@ const WatchPartyInviteTile = ({
         style={[
           styles.inviteCardTile,
           isMyMessage ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' },
+          isHighlighted && styles.highlightedMessageBubble,
         ]}
       >
         {showImage ? (
@@ -600,17 +913,185 @@ const ChatScreen = ({ route, navigation }) => {
   const [otherUserStatus, setOtherUserStatus] = useState('offline');
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [showMessageActionModal, setShowMessageActionModal] = useState(false);
-  // Photo & Ephemeral View-Once states (No cloud storage required)
-  const [selectedPhoto, setSelectedPhoto] = useState(null); // { uri, width, height }
+  // Photo & Ephemeral View-Once states (Supports Multi-Select & Upload)
+  const [selectedPhotos, setSelectedPhotos] = useState([]); // Array of { previewUri, uri, width, height, sourceType }
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0);
   const [photoCaption, setPhotoCaption] = useState('');
   const [isViewOnce, setIsViewOnce] = useState(false);
   const [showPhotoPreviewModal, setShowPhotoPreviewModal] = useState(false);
-  const [fullscreenImage, setFullscreenImage] = useState(null); // { uri, caption, isViewOnce, messageId }
+  const [imageViewerState, setImageViewerState] = useState({
+    visible: false,
+    images: [],
+    initialIndex: 0,
+    isViewOnce: false,
+    viewOnceMessage: null,
+  });
   const [isSendingPhoto, setIsSendingPhoto] = useState(false);
+  const [replyingToMessage, setReplyingToMessage] = useState(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+  const highlightTimeoutRef = useRef(null);
+  const messageInputRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Handler to scroll to quoted message and highlight it
+  const handleScrollToMessage = useCallback(
+    (targetId) => {
+      if (!targetId || !messages || messages.length === 0) return;
+
+      const targetIndex = messages.findIndex(
+        (m) => m.id === targetId || m.key === targetId
+      );
+
+      if (targetIndex >= 0) {
+        try {
+          flatListRef.current?.scrollToIndex({
+            index: targetIndex,
+            animated: true,
+            viewPosition: 0.5,
+          });
+        } catch (e) {
+          flatListRef.current?.scrollToOffset({
+            offset: targetIndex * 80,
+            animated: true,
+          });
+        }
+
+        setHighlightedMessageId(targetId);
+        if (highlightTimeoutRef.current) {
+          clearTimeout(highlightTimeoutRef.current);
+        }
+        highlightTimeoutRef.current = setTimeout(() => {
+          setHighlightedMessageId(null);
+        }, 1800);
+      } else {
+        Alert.alert('Message not found', 'The quoted message is not available in the current chat view.');
+      }
+    },
+    [messages]
+  );
+
+  // Swipe to reply handler
+  const handleInitiateReply = useCallback(
+    (targetMessage) => {
+      if (!targetMessage) return;
+      const isImg = targetMessage.type === 'image' || targetMessage.type === 'photo';
+      let imgUri = targetMessage.imageUri || null;
+
+      setReplyingToMessage({
+        id: targetMessage.id,
+        text: targetMessage.text,
+        type: targetMessage.type,
+        senderId: targetMessage.senderId,
+        senderName: targetMessage.senderId === auth().currentUser?.uid ? 'You' : otherUsername,
+        caption: targetMessage.caption,
+        imageUri: imgUri,
+        mediaId: targetMessage.mediaId || null,
+      });
+
+      if (isImg && !imgUri && targetMessage.mediaId) {
+        resolveMediaUri(targetMessage.mediaId)
+          .then((resolved) => {
+            if (resolved) {
+              setReplyingToMessage((prev) =>
+                prev && prev.id === targetMessage.id ? { ...prev, imageUri: resolved } : prev
+              );
+            }
+          })
+          .catch((err) => console.warn('Error resolving image in reply dock:', err));
+      }
+
+      setTimeout(() => {
+        messageInputRef.current?.focus();
+      }, 50);
+    },
+    [otherUsername]
+  );
+
+  // Collect all regular (non-viewOnce) photos in the current chat messages in chronological order
+  const chatImages = useMemo(() => {
+    return messages
+      .filter(
+        (m) =>
+          (m.type === 'image' || m.type === 'photo') &&
+          !m.viewOnce &&
+          (m.imageUri || m.mediaId)
+      )
+      .map((m) => ({
+        id: m.id || String(m.timestamp),
+        messageId: m.id,
+        mediaId: m.mediaId || null,
+        uri: m.imageUri || null,
+        caption: m.caption || '',
+        timestamp: m.timestamp,
+        senderId: m.senderId,
+        isViewOnce: false,
+      }));
+  }, [messages]);
   const flatListRef = useRef(null);
   const activeMessagesRef = useRef(null);
   const activeUserChatsRef = useRef(null);
   const activeStatusRef = useRef(null);
+  const activeTypingRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const isCurrentlyTypingRef = useRef(false);
+  const markedSeenIdsRef = useRef(new Set());
+  const pendingMessagesRef = useRef(new Map());
+  const prevMessagesCountRef = useRef(0);
+  const chatIdRef = useRef(chatId);
+  const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
+
+  // Chat Lock States (WhatsApp-style private vault lock)
+  const [isChatLocked, setIsChatLocked] = useState(Boolean(route.params?.isLocked));
+  const [isScreenUnlocked, setIsScreenUnlocked] = useState(
+    Boolean(route.params?.isUnlocked || (otherUserId && isSessionUnlocked(otherUserId)))
+  );
+  const [chatLockModalVisible, setChatLockModalVisible] = useState(false);
+  const [chatLockModalMode, setChatLockModalMode] = useState('unlock');
+
+  // Verify chat lock status on mount
+  useEffect(() => {
+    if (isSelfChat || !otherUserId) {
+      setIsScreenUnlocked(true);
+      return;
+    }
+    const currentUid = auth().currentUser?.uid;
+    if (!currentUid) return;
+
+    isChatLockedForUser(currentUid, otherUserId).then((locked) => {
+      setIsChatLocked(locked);
+      if (locked) {
+        const unlocked = Boolean(route.params?.isUnlocked || isSessionUnlocked(otherUserId));
+        setIsScreenUnlocked(unlocked);
+      } else {
+        setIsScreenUnlocked(true);
+      }
+    });
+  }, [otherUserId, isSelfChat, route.params?.isUnlocked]);
+
+  const handleToggleChatLock = async () => {
+    if (isSelfChat || !otherUserId) return;
+    const currentUid = auth().currentUser?.uid;
+    if (!currentUid) return;
+
+    if (isChatLocked) {
+      setChatLockModalMode('remove');
+      setChatLockModalVisible(true);
+    } else {
+      setChatLockModalMode('setup');
+      setChatLockModalVisible(true);
+    }
+  };
+
+  useEffect(() => {
+    chatIdRef.current = chatId;
+  }, [chatId]);
 
   const otherUsername = route.params?.username || 'Chat';
   const otherUserId = route.params?.userId || route.params?.id || route.params?.friendId;
@@ -746,6 +1227,18 @@ const ChatScreen = ({ route, navigation }) => {
         activeStatusRef.current.off('value');
         activeStatusRef.current = null;
       }
+      if (activeTypingRef.current) {
+        activeTypingRef.current.off('value');
+        activeTypingRef.current = null;
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      const curUid = auth().currentUser?.uid;
+      const curChatId = chatIdRef.current || route.params?.chatId;
+      if (!isSelfChat && curChatId && curUid) {
+        database().ref(`chats/${curChatId}/typing/${curUid}`).set(false);
+      }
     };
   }, []);
 
@@ -816,7 +1309,9 @@ const ChatScreen = ({ route, navigation }) => {
 
     if (route.params?.chatId) {
       setChatId(route.params.chatId);
+      chatIdRef.current = route.params.chatId;
       listenToMessages(route.params.chatId);
+      listenToTyping(route.params.chatId);
       return;
     }
 
@@ -835,7 +1330,9 @@ const ChatScreen = ({ route, navigation }) => {
         );
         if (existingChatId) {
           setChatId(existingChatId);
+          chatIdRef.current = existingChatId;
           listenToMessages(existingChatId);
+          listenToTyping(existingChatId);
           return;
         }
       }
@@ -880,7 +1377,55 @@ const ChatScreen = ({ route, navigation }) => {
     }
 
     setChatId(newChatId);
+    chatIdRef.current = newChatId;
     listenToMessages(newChatId);
+    listenToTyping(newChatId);
+  };
+
+  const listenToTyping = (activeChatId) => {
+    if (!activeChatId || isSelfChat || !otherUserId) return;
+    if (activeTypingRef.current) {
+      activeTypingRef.current.off('value');
+      activeTypingRef.current = null;
+    }
+    const typingRef = database().ref(`chats/${activeChatId}/typing/${otherUserId}`);
+    activeTypingRef.current = typingRef;
+    typingRef.on('value', (snapshot) => {
+      const isTyping = Boolean(snapshot.val());
+      setIsOtherUserTyping(isTyping);
+      if (isTyping) {
+        requestAnimationFrame(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        });
+      }
+    });
+  };
+
+  const handleMessageTextChange = (text) => {
+    setMessage(text);
+
+    const effectiveChatId = chatId || chatIdRef.current || route.params?.chatId;
+    if (isSelfChat || !effectiveChatId) return;
+    const currentUid = auth().currentUser?.uid;
+    if (!currentUid) return;
+
+    if (text.trim().length > 0) {
+      if (!isCurrentlyTypingRef.current) {
+        isCurrentlyTypingRef.current = true;
+        database().ref(`chats/${effectiveChatId}/typing/${currentUid}`).set(true);
+      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        isCurrentlyTypingRef.current = false;
+        database().ref(`chats/${effectiveChatId}/typing/${currentUid}`).set(false);
+      }, 2500);
+    } else {
+      if (isCurrentlyTypingRef.current) {
+        isCurrentlyTypingRef.current = false;
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        database().ref(`chats/${effectiveChatId}/typing/${currentUid}`).set(false);
+      }
+    }
   };
 
   const listenToMessages = (activeChatId) => {
@@ -889,6 +1434,7 @@ const ChatScreen = ({ route, navigation }) => {
       activeMessagesRef.current.off('value');
       activeMessagesRef.current = null;
     }
+    markedSeenIdsRef.current.clear();
     const messagesRef = database().ref(`chats/${activeChatId}/messages`);
     activeMessagesRef.current = messagesRef;
     messagesRef.on('value', (snapshot) => {
@@ -901,70 +1447,175 @@ const ChatScreen = ({ route, navigation }) => {
         }));
         messagesList.sort((a, b) => a.timestamp - b.timestamp);
 
-        // ── 1. Filter out messages that current user deleted "For Me" ──
-        const visibleMessages = messagesList.filter(
-          (msg) => !(msg.deletedFor && currentUid && msg.deletedFor[currentUid])
-        );
-        setMessages(visibleMessages);
-
-        // ── 2. Mark incoming unread messages as SEEN in real time ──
-        if (currentUid && !isSelfChat) {
-          database().ref(`user_chats/${currentUid}/${activeChatId}/unreadCount`).set(0);
-          messagesList.forEach((msg) => {
-            if (msg.senderId !== currentUid && !msg.seen && !msg.deletedForEveryone) {
-              database().ref(`chats/${activeChatId}/messages/${msg.id}`).update({
-                seen: true,
-                seenAt: database.ServerValue.TIMESTAMP,
-                status: 'seen',
-              });
+        // Reconcile pending optimistic messages
+        if (pendingMessagesRef.current.size > 0 && currentUid) {
+          pendingMessagesRef.current.forEach((pendingMsg, pId) => {
+            const confirmed = messagesList.some(
+              (m) =>
+                m.senderId === currentUid &&
+                m.text === pendingMsg.text &&
+                Math.abs((m.timestamp || 0) - pendingMsg.timestamp) < 60000
+            );
+            if (confirmed) {
+              pendingMessagesRef.current.delete(pId);
             }
           });
         }
 
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        // ── 1. Filter out messages that current user deleted "For Me" ──
+        const visibleMessages = messagesList.filter(
+          (msg) => !(msg.deletedFor && currentUid && msg.deletedFor[currentUid])
+        );
+
+        // Merge any still-pending optimistic messages
+        const stillPending = Array.from(pendingMessagesRef.current.values());
+        const mergedMessages = [...visibleMessages, ...stillPending];
+        setMessages(mergedMessages);
+
+        // ── 2. Mark incoming unread messages as SEEN in an atomic batch (fixes write loop) ──
+        if (currentUid && !isSelfChat) {
+          const unreadIncoming = messagesList.filter(
+            (msg) =>
+              msg.senderId !== currentUid &&
+              !msg.seen &&
+              !msg.deletedForEveryone &&
+              !markedSeenIdsRef.current.has(msg.id)
+          );
+
+          if (unreadIncoming.length > 0) {
+            const batchUpdates = {};
+            unreadIncoming.forEach((msg) => {
+              markedSeenIdsRef.current.add(msg.id);
+              batchUpdates[`chats/${activeChatId}/messages/${msg.id}/seen`] = true;
+              batchUpdates[`chats/${activeChatId}/messages/${msg.id}/seenAt`] = database.ServerValue.TIMESTAMP;
+              batchUpdates[`chats/${activeChatId}/messages/${msg.id}/status`] = 'seen';
+            });
+            batchUpdates[`user_chats/${currentUid}/${activeChatId}/unreadCount`] = 0;
+            database().ref().update(batchUpdates).catch((err) => {
+              console.warn('[ChatScreen] Error batch updating seen receipts:', err);
+            });
+          }
+        }
+
+        // Only auto-scroll when message count actually increases (prevents jump on seen receipt update)
+        if (mergedMessages.length > prevMessagesCountRef.current) {
+          requestAnimationFrame(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          });
+        }
+        prevMessagesCountRef.current = mergedMessages.length;
       } else {
-        setMessages([]);
+        const stillPending = Array.from(pendingMessagesRef.current.values());
+        setMessages(stillPending);
+        prevMessagesCountRef.current = stillPending.length;
       }
     });
   };
 
   const sendMessage = async () => {
-    if (!message.trim() || !chatId) return;
+    const textToSend = message.trim();
+    const effectiveChatId = chatId || chatIdRef.current || route.params?.chatId;
+    if (!textToSend || !effectiveChatId) return;
 
     const db = database();
     const currentUser = auth().currentUser;
     if (!currentUser) return;
 
-    const textToSend = message.trim();
-    const messageData = {
+    // 1. Immediately clear input field & active reply
+    setMessage('');
+    const activeReply = replyingToMessage;
+    setReplyingToMessage(null);
+
+    // 2. Clear typing status in RTDB immediately
+    if (!isSelfChat) {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      isCurrentlyTypingRef.current = false;
+      db.ref(`chats/${effectiveChatId}/typing/${currentUser.uid}`).set(false);
+    }
+
+    // 3. Create optimistic message & insert immediately into local state
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const optimisticMessage = {
+      id: tempId,
       text: textToSend,
       senderId: currentUser.uid,
-      timestamp: database.ServerValue.TIMESTAMP,
+      timestamp: Date.now(),
       type: 'text',
       seen: isSelfChat ? true : false,
-      status: isSelfChat ? 'seen' : 'sent',
+      status: 'sending',
+      pending: true,
+      ...(activeReply && {
+        replyTo: {
+          id: activeReply.id,
+          senderId: activeReply.senderId,
+          senderName: activeReply.senderId === currentUser.uid ? 'You' : otherUsername,
+          text:
+            activeReply.type === 'image' || activeReply.type === 'photo'
+              ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
+              : (activeReply.text || 'Message'),
+          type: activeReply.type || 'text',
+          mediaId: activeReply.mediaId || '',
+          imageUri: activeReply.imageUri || '',
+        },
+      }),
     };
 
-    setMessage('');
+    pendingMessagesRef.current.set(tempId, optimisticMessage);
+    setMessages((prev) => [...prev, optimisticMessage]);
+    prevMessagesCountRef.current += 1;
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    });
 
-    const newMessageRef = db.ref(`chats/${chatId}/messages`).push();
-    await newMessageRef.set(messageData);
+    // 4. Send to Firebase RTDB asynchronously
+    try {
+      const newMessageRef = db.ref(`chats/${effectiveChatId}/messages`).push();
+      const messageData = {
+        text: textToSend,
+        senderId: currentUser.uid,
+        timestamp: database.ServerValue.TIMESTAMP,
+        type: 'text',
+        seen: isSelfChat ? true : false,
+        status: isSelfChat ? 'seen' : 'sent',
+        ...(activeReply && {
+          replyTo: {
+            id: activeReply.id,
+            senderId: activeReply.senderId,
+            senderName: activeReply.senderId === currentUser.uid ? 'You' : otherUsername,
+            text:
+              activeReply.type === 'image' || activeReply.type === 'photo'
+                ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
+                : (activeReply.text || 'Message'),
+            type: activeReply.type || 'text',
+            mediaId: activeReply.mediaId || '',
+          },
+        }),
+      };
+      await newMessageRef.set(messageData);
 
-    // Update user_chats preview for both users
-    const updates = {};
-    updates[`user_chats/${currentUser.uid}/${chatId}/lastMessage`] = textToSend;
-    updates[`user_chats/${currentUser.uid}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-    updates[`user_chats/${currentUser.uid}/${chatId}/lastSenderId`] = currentUser.uid;
-    updates[`user_chats/${currentUser.uid}/${chatId}/unreadCount`] = 0;
-    if (otherUserId && !isSelfChat) {
-      updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = textToSend;
-      updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-      updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = currentUser.uid;
-      updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(1);
+      // Update user_chats preview for both users
+      const updates = {};
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessage`] = textToSend;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/unreadCount`] = 0;
+      if (otherUserId && !isSelfChat) {
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessage`] = textToSend;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/unreadCount`] = database.ServerValue.increment(1);
+      }
+      await db.ref().update(updates);
+      pendingMessagesRef.current.delete(tempId);
+    } catch (error) {
+      console.error('[ChatScreen] Error sending message:', error);
+      pendingMessagesRef.current.delete(tempId);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempId ? { ...m, status: 'failed', pending: false } : m
+        )
+      );
     }
-    await db.ref().update(updates);
   };
 
   // Send Watch Party Invite inside Chat
@@ -1269,13 +1920,16 @@ const ChatScreen = ({ route, navigation }) => {
         ? `data:${asset.type || 'image/jpeg'};base64,${base64String}`
         : asset.uri;
 
-      setSelectedPhoto({
-        previewUri: asset.uri || dataUri,
-        uri: dataUri,
-        width: asset.width || SCREEN_WIDTH,
-        height: asset.height || SCREEN_HEIGHT,
-        sourceType: 'Camera',
-      });
+      setSelectedPhotos([
+        {
+          previewUri: asset.uri || dataUri,
+          uri: dataUri,
+          width: asset.width || SCREEN_WIDTH,
+          height: asset.height || SCREEN_HEIGHT,
+          sourceType: 'Camera',
+        },
+      ]);
+      setActivePhotoIndex(0);
       setIsViewOnce(false);
       setPhotoCaption('');
       setShowPhotoPreviewModal(true);
@@ -1285,41 +1939,47 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
-  // Launch Gallery with base64 compression for direct RTDB transport
+  // Launch Gallery with multi-select support (selectionLimit: 0)
   const handlePickGallery = async () => {
     setShowAttachments(false);
     try {
       const result = await launchImageLibrary({
         mediaType: 'photo',
-        selectionLimit: 1,
-        quality: 0.6,
-        maxWidth: 720,
-        maxHeight: 720,
+        selectionLimit: 0, // 0 allows selecting multiple images
+        quality: 0.7,
+        maxWidth: 1280,
+        maxHeight: 1280,
         includeBase64: true,
       });
 
       if (result.didCancel || !result.assets || result.assets.length === 0) return;
-      const asset = result.assets[0];
 
-      let base64String = asset.base64;
-      if (!base64String && asset.uri) {
-        try {
-          base64String = await RNFS.readFile(asset.uri, 'base64');
-        } catch (e) {
-          console.warn('[RNFS] Gallery base64 fallback error:', e);
-        }
-      }
-      const dataUri = base64String
-        ? `data:${asset.type || 'image/jpeg'};base64,${base64String}`
-        : asset.uri;
+      const photoItems = await Promise.all(
+        result.assets.map(async (asset) => {
+          let base64String = asset.base64;
+          if (!base64String && asset.uri) {
+            try {
+              base64String = await RNFS.readFile(asset.uri, 'base64');
+            } catch (e) {
+              console.warn('[RNFS] Gallery multi-base64 fallback error:', e);
+            }
+          }
+          const dataUri = base64String
+            ? `data:${asset.type || 'image/jpeg'};base64,${base64String}`
+            : asset.uri;
 
-      setSelectedPhoto({
-        previewUri: asset.uri || dataUri,
-        uri: dataUri,
-        width: asset.width || SCREEN_WIDTH,
-        height: asset.height || SCREEN_HEIGHT,
-        sourceType: 'Gallery',
-      });
+          return {
+            previewUri: asset.uri || dataUri,
+            uri: dataUri,
+            width: asset.width || SCREEN_WIDTH,
+            height: asset.height || SCREEN_HEIGHT,
+            sourceType: 'Gallery',
+          };
+        })
+      );
+
+      setSelectedPhotos(photoItems);
+      setActivePhotoIndex(0);
       setIsViewOnce(false);
       setPhotoCaption('');
       setShowPhotoPreviewModal(true);
@@ -1329,49 +1989,72 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
-  // Send photo to chat (decoupled media_blobs in RTDB + local disk cache)
+  // Send photo(s) to chat (decoupled media_blobs in RTDB + local disk cache)
   const handleSendPhoto = async () => {
-    if (!selectedPhoto || !chatId || isSendingPhoto) return;
+    if (!selectedPhotos || selectedPhotos.length === 0 || !chatId || isSendingPhoto) return;
     const currentUser = auth().currentUser;
     if (!currentUser) return;
 
     setIsSendingPhoto(true);
-    const photoDataUri = selectedPhoto.uri;
+    const photosToSend = [...selectedPhotos];
     const caption = photoCaption.trim();
-    const sendAsViewOnce = isViewOnce;
+    const sendAsViewOnce = isViewOnce && photosToSend.length === 1;
+    const activeReply = replyingToMessage;
 
     // Dismiss preview modal immediately
     setShowPhotoPreviewModal(false);
-    setSelectedPhoto(null);
+    setSelectedPhotos([]);
+    setActivePhotoIndex(0);
     setPhotoCaption('');
     setIsViewOnce(false);
+    setReplyingToMessage(null);
 
     try {
-      // Decouple heavy Base64 image into media_blobs node + local disk cache
-      const mediaId = await uploadMediaBlob(photoDataUri, currentUser.uid);
-
       const messagesRef = database().ref(`chats/${chatId}/messages`);
-      const newMsgRef = messagesRef.push();
 
-      const messagePayload = {
-        id: newMsgRef.key,
-        type: 'image',
-        mediaId: mediaId || '',
-        imageUri: '', // Decoupled from message payload: keeps messages under 1KB
-        caption: caption,
-        viewOnce: sendAsViewOnce,
-        opened: false,
-        senderId: currentUser.uid,
-        timestamp: database.ServerValue.TIMESTAMP,
-        seen: isSelfChat ? true : false,
-        status: isSelfChat ? 'seen' : 'sent',
-      };
+      for (let i = 0; i < photosToSend.length; i++) {
+        const photo = photosToSend[i];
+        const mediaId = await uploadMediaBlob(photo.uri, currentUser.uid);
+        const newMsgRef = messagesRef.push();
 
-      await newMsgRef.set(messagePayload);
+        const messagePayload = {
+          id: newMsgRef.key,
+          type: 'image',
+          mediaId: mediaId || '',
+          imageUri: '', // Decoupled from message payload: keeps messages under 1KB
+          caption: i === 0 ? caption : '', // First photo holds user caption
+          viewOnce: sendAsViewOnce,
+          opened: false,
+          senderId: currentUser.uid,
+          timestamp: database.ServerValue.TIMESTAMP,
+          seen: isSelfChat ? true : false,
+          status: isSelfChat ? 'seen' : 'sent',
+          width: photo.width,
+          height: photo.height,
+          ...(i === 0 &&
+            activeReply && {
+              replyTo: {
+                id: activeReply.id,
+                senderId: activeReply.senderId,
+                senderName: activeReply.senderId === currentUser.uid ? 'You' : otherUsername,
+                text:
+                  activeReply.type === 'image' || activeReply.type === 'photo'
+                    ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
+                    : (activeReply.text || 'Message'),
+                type: activeReply.type || 'text',
+                mediaId: activeReply.mediaId || '',
+              },
+            }),
+        };
+
+        await newMsgRef.set(messagePayload);
+      }
 
       // Update user_chats preview for both users
       const previewText = sendAsViewOnce
         ? '📷 View-once photo'
+        : photosToSend.length > 1
+        ? `📷 ${photosToSend.length} Photos`
         : (caption ? `📷 ${caption}` : '📷 Photo');
 
       const updates = {};
@@ -1383,12 +2066,12 @@ const ChatScreen = ({ route, navigation }) => {
         updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = previewText;
         updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
         updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = currentUser.uid;
-        updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(1);
+        updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(photosToSend.length);
       }
       await database().ref().update(updates);
     } catch (error) {
-      console.error('Error sending photo:', error);
-      Alert.alert('Send Error', 'Failed to send photo. Please try again.');
+      console.error('Error sending photo(s):', error);
+      Alert.alert('Send Error', 'Failed to send photo(s). Please try again.');
     } finally {
       setIsSendingPhoto(false);
     }
@@ -1432,20 +2115,68 @@ const ChatScreen = ({ route, navigation }) => {
     }
 
     // Recipient opens the view-once photo
-    setFullscreenImage({
-      uri: uri,
-      caption: item.caption,
+    setImageViewerState({
+      visible: true,
+      images: [
+        {
+          id: item.id,
+          messageId: item.id,
+          mediaId: item.mediaId || null,
+          uri: uri,
+          caption: item.caption || '',
+          timestamp: item.timestamp,
+          senderId: item.senderId,
+          isViewOnce: true,
+        },
+      ],
+      initialIndex: 0,
       isViewOnce: true,
-      messageId: item.id,
-      mediaId: item.mediaId || null,
+      viewOnceMessage: item,
+    });
+  };
+
+  // Open regular photo in fullscreen multi-image swipe gallery with zoom
+  const handleOpenRegularPhoto = (resolvedUri, caption, item) => {
+    const clickedId = item?.id;
+    let targetIndex = chatImages.findIndex(
+      (img) => img.id === clickedId || img.messageId === clickedId
+    );
+
+    let imagesList = [...chatImages];
+    if (targetIndex >= 0) {
+      imagesList[targetIndex] = {
+        ...imagesList[targetIndex],
+        uri: resolvedUri || imagesList[targetIndex].uri,
+      };
+    } else {
+      const fallbackItem = {
+        id: item?.id || String(Date.now()),
+        messageId: item?.id,
+        mediaId: item?.mediaId || null,
+        uri: resolvedUri || item?.imageUri || null,
+        caption: caption || item?.caption || '',
+        timestamp: item?.timestamp || Date.now(),
+        senderId: item?.senderId,
+        isViewOnce: false,
+      };
+      imagesList = [fallbackItem];
+      targetIndex = 0;
+    }
+
+    setImageViewerState({
+      visible: true,
+      images: imagesList,
+      initialIndex: targetIndex,
+      isViewOnce: false,
+      viewOnceMessage: null,
     });
   };
 
   // Close fullscreen photo viewer (if view-once, marks opened, wipes imageUri, and purges blob)
-  const handleCloseFullscreenImage = () => {
-    if (fullscreenImage && fullscreenImage.isViewOnce && fullscreenImage.messageId && chatId) {
-      const msgId = fullscreenImage.messageId;
-      const mediaId = fullscreenImage.mediaId;
+  const handleCloseImageViewer = () => {
+    if (imageViewerState.isViewOnce && imageViewerState.viewOnceMessage && chatId) {
+      const msgId = imageViewerState.viewOnceMessage.id;
+      const mediaId = imageViewerState.viewOnceMessage.mediaId;
 
       // Mark opened and clear references to enforce single viewing and save RTDB bandwidth
       database().ref(`chats/${chatId}/messages/${msgId}`).update({
@@ -1460,12 +2191,20 @@ const ChatScreen = ({ route, navigation }) => {
         deleteMediaBlob(mediaId).catch((e) => console.warn('Error deleting media blob:', e));
       }
     }
-    setFullscreenImage(null);
+
+    setImageViewerState({
+      visible: false,
+      images: [],
+      initialIndex: 0,
+      isViewOnce: false,
+      viewOnceMessage: null,
+    });
   };
 
   // Render Message Item
   const renderMessage = ({ item, index }) => {
     const isMyMessage = item.senderId === auth().currentUser?.uid;
+    const isHighlighted = highlightedMessageId === item.id;
 
     const dateSeparator = (() => {
       const currentMessageDate = new Date(item.timestamp || Date.now());
@@ -1570,6 +2309,7 @@ const ChatScreen = ({ route, navigation }) => {
             style={[
               styles.callTileCard,
               isMyMessage ? styles.myCallTileCard : styles.theirCallTileCard,
+              isHighlighted && styles.highlightedMessageBubble,
             ]}
           >
             <View style={styles.callTileMainRow}>
@@ -1642,7 +2382,6 @@ const ChatScreen = ({ route, navigation }) => {
     if (item.type === 'watch_party_invite') {
       return (
         <WatchPartyInviteTile
-          key={item.id || item.timestamp}
           item={item}
           chatId={chatId}
           isMyMessage={isMyMessage}
@@ -1650,6 +2389,7 @@ const ChatScreen = ({ route, navigation }) => {
           navigation={navigation}
           handleMessageLongPress={handleMessageLongPress}
           dateSeparator={dateSeparator}
+          isHighlighted={isHighlighted}
         />
       );
     }
@@ -1662,86 +2402,89 @@ const ChatScreen = ({ route, navigation }) => {
         return (
           <View style={styles.messageOuterWrap}>
             {dateSeparator}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => handleViewOncePhotoPress(item)}
-              onLongPress={() => handleMessageLongPress(item)}
-              style={[
-                styles.viewOnceBubble,
-                isMyMessage ? styles.myViewOnceBubble : styles.theirViewOnceBubble,
-                isOpened && styles.viewOnceBubbleOpened,
-              ]}
-            >
-              <View style={styles.viewOnceContentRow}>
-                {/* 1x Badge Circle */}
-                <View
-                  style={[
-                    styles.viewOnceBadgeCircle,
-                    isOpened
-                      ? styles.viewOnceBadgeCircleOpened
-                      : isMyMessage
-                      ? styles.viewOnceBadgeCircleMy
-                      : styles.viewOnceBadgeCircleTheir,
-                  ]}
-                >
-                  <Text
+            <SwipeableMessageRow item={item} isMyMessage={isMyMessage} onSwipeReply={handleInitiateReply}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => handleViewOncePhotoPress(item)}
+                onLongPress={() => handleMessageLongPress(item)}
+                style={[
+                  styles.viewOnceBubble,
+                  isMyMessage ? styles.myViewOnceBubble : styles.theirViewOnceBubble,
+                  isOpened && styles.viewOnceBubbleOpened,
+                  isHighlighted && styles.highlightedMessageBubble,
+                ]}
+              >
+                <View style={styles.viewOnceContentRow}>
+                  {/* 1x Badge Circle */}
+                  <View
                     style={[
-                      styles.viewOnceBadgeText,
-                      isOpened && styles.viewOnceBadgeTextOpened,
+                      styles.viewOnceBadgeCircle,
+                      isOpened
+                        ? styles.viewOnceBadgeCircleOpened
+                        : isMyMessage
+                          ? styles.viewOnceBadgeCircleMy
+                          : styles.viewOnceBadgeCircleTheir,
                     ]}
                   >
-                    1
-                  </Text>
-                </View>
-
-                {/* Text Info */}
-                <View style={styles.viewOnceTextCol}>
-                  <Text
-                    style={[
-                      styles.viewOnceTitle,
-                      isOpened && styles.viewOnceTitleOpened,
-                    ]}
-                  >
-                    {isOpened ? 'Opened' : 'Photo'}
-                  </Text>
-                  <Text style={styles.viewOnceSubtext} numberOfLines={1}>
-                    {isOpened
-                      ? 'Expired view-once photo'
-                      : isMyMessage
-                      ? 'View once'
-                      : 'View once • Tap to open'}
-                  </Text>
-                </View>
-
-                {/* Status / Lock Icon */}
-                <MaterialIcons
-                  name={isOpened ? 'lock-outline' : (isMyMessage ? 'visibility-off' : 'photo-camera')}
-                  size={18}
-                  color={isOpened ? 'rgba(255, 255, 255, 0.35)' : (isMyMessage ? '#FFF' : colors.CYAN_ACCENT)}
-                  style={{ marginLeft: 8 }}
-                />
-              </View>
-
-              {/* Timestamp & Seen Receipt */}
-              <View style={styles.viewOnceFooter}>
-                <Text style={styles.viewOnceTimestamp}>
-                  {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Text>
-                {isMyMessage && (
-                  <View style={styles.seenReceiptRow}>
-                    <MaterialIcons
-                      name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
-                      size={14}
-                      color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.65)'}
-                      style={{ marginLeft: 4 }}
-                    />
+                    <Text
+                      style={[
+                        styles.viewOnceBadgeText,
+                        isOpened && styles.viewOnceBadgeTextOpened,
+                      ]}
+                    >
+                      1
+                    </Text>
                   </View>
-                )}
-              </View>
-            </TouchableOpacity>
+
+                  {/* Text Info */}
+                  <View style={styles.viewOnceTextCol}>
+                    <Text
+                      style={[
+                        styles.viewOnceTitle,
+                        isOpened && styles.viewOnceTitleOpened,
+                      ]}
+                    >
+                      {isOpened ? 'Opened' : 'Photo'}
+                    </Text>
+                    <Text style={styles.viewOnceSubtext} numberOfLines={1}>
+                      {isOpened
+                        ? 'Expired view-once photo'
+                        : isMyMessage
+                          ? 'View once'
+                          : 'View once • Tap to open'}
+                    </Text>
+                  </View>
+
+                  {/* Status / Lock Icon */}
+                  <MaterialIcons
+                    name={isOpened ? 'lock-outline' : (isMyMessage ? 'visibility-off' : 'photo-camera')}
+                    size={18}
+                    color={isOpened ? 'rgba(255, 255, 255, 0.35)' : (isMyMessage ? '#FFF' : colors.CYAN_ACCENT)}
+                    style={{ marginLeft: 8 }}
+                  />
+                </View>
+
+                {/* Timestamp & Seen Receipt */}
+                <View style={styles.viewOnceFooter}>
+                  <Text style={styles.viewOnceTimestamp}>
+                    {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                  {isMyMessage && (
+                    <View style={styles.seenReceiptRow}>
+                      <MaterialIcons
+                        name={item.seen || item.status === 'seen' ? 'done-all' : 'done'}
+                        size={14}
+                        color={item.seen || item.status === 'seen' ? colors.CYAN_ACCENT : 'rgba(255, 255, 255, 0.65)'}
+                        style={{ marginLeft: 4 }}
+                      />
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            </SwipeableMessageRow>
           </View>
         );
       }
@@ -1750,18 +2493,21 @@ const ChatScreen = ({ route, navigation }) => {
       return (
         <View style={styles.messageOuterWrap}>
           {dateSeparator}
-          <ChatImageThumbnail
-            item={item}
-            isMyMessage={isMyMessage}
-            onOpenFullscreen={(uri, caption) =>
-              setFullscreenImage({
-                uri,
-                caption,
-                isViewOnce: false,
-              })
-            }
-            onLongPress={handleMessageLongPress}
-          />
+          <SwipeableMessageRow item={item} isMyMessage={isMyMessage} onSwipeReply={handleInitiateReply}>
+            <ChatImageThumbnail
+              item={item}
+              isMyMessage={isMyMessage}
+              onOpenFullscreen={(uri, caption, photoItem) =>
+                handleOpenRegularPhoto(uri, caption, photoItem || item)
+              }
+              onLongPress={handleMessageLongPress}
+              onScrollToMessage={handleScrollToMessage}
+              allMessages={messages}
+              currentUserId={auth().currentUser?.uid}
+              otherUsername={otherUsername}
+              isHighlighted={isHighlighted}
+            />
+          </SwipeableMessageRow>
         </View>
       );
     }
@@ -1803,62 +2549,95 @@ const ChatScreen = ({ route, navigation }) => {
     return (
       <View style={styles.messageOuterWrap}>
         {dateSeparator}
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onLongPress={() => handleMessageLongPress(item)}
-          style={[
-            styles.messageContainer,
-            isMyMessage ? styles.myMessage : styles.theirMessage,
-            Boolean(extractedUrl) && styles.linkMessageBubble,
-          ]}
-        >
-          {/* 1. Rich Link Preview on TOP (flush edge-to-edge) */}
-          {Boolean(extractedUrl) && (
-            <LinkPreviewCard
-              url={extractedUrl}
-              navigation={navigation}
-              isMyMessage={isMyMessage}
-              onLongPress={() => handleMessageLongPress(item)}
-            />
-          )}
-
-          {/* 2. Message Text & Link at the BOTTOM below the preview */}
-          <View style={Boolean(extractedUrl) ? styles.linkMessageTextWrap : null}>
-            {renderFormattedMessageText(item.text, isMyMessage)}
-          </View>
-
-          {/* 3. Footer with timestamp & read receipts */}
-          <View style={[styles.messageFooter, Boolean(extractedUrl) && styles.linkMessageFooter]}>
-            <Text style={[styles.timestamp, isMyMessage && { color: 'rgba(255, 255, 255, 0.7)' }]}>
-              {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </Text>
-            {/* Read / Seen Receipt Checks */}
-            {isMyMessage && (
-              item.seen || item.status === 'seen' ? (
-                <View style={styles.seenReceiptRow}>
-                  <MaterialIcons
-                    name="done-all"
-                    size={15}
-                    color={colors.CYAN_ACCENT}
-                    style={{ marginLeft: 4 }}
-                  />
-                </View>
-              ) : (
-                <View style={styles.seenReceiptRow}>
-                  <MaterialIcons
-                    name="done"
-                    size={14}
-                    color="rgba(255, 255, 255, 0.65)"
-                    style={{ marginLeft: 4 }}
-                  />
-                </View>
-              )
+        <SwipeableMessageRow item={item} isMyMessage={isMyMessage} onSwipeReply={handleInitiateReply}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onLongPress={() => handleMessageLongPress(item)}
+            style={[
+              styles.messageContainer,
+              isMyMessage ? styles.myMessage : styles.theirMessage,
+              Boolean(extractedUrl) && styles.linkMessageBubble,
+              isHighlighted && styles.highlightedMessageBubble,
+            ]}
+          >
+            {/* Quoted Reply Banner */}
+            {item.replyTo && (
+              <QuotedMessageReply
+                replyTo={item.replyTo}
+                isMyMessage={isMyMessage}
+                onScrollToMessage={handleScrollToMessage}
+                allMessages={messages}
+                currentUserId={auth().currentUser?.uid}
+                fallbackUsername={otherUsername}
+              />
             )}
-          </View>
-        </TouchableOpacity>
+
+            {/* 1. Rich Link Preview on TOP (flush edge-to-edge) */}
+            {Boolean(extractedUrl) && (
+              <LinkPreviewCard
+                url={extractedUrl}
+                navigation={navigation}
+                isMyMessage={isMyMessage}
+                onLongPress={() => handleMessageLongPress(item)}
+              />
+            )}
+
+            {/* 2. Message Text & Link at the BOTTOM below the preview */}
+            <View style={extractedUrl ? styles.linkMessageTextWrap : null}>
+              {renderFormattedMessageText(item.text, isMyMessage)}
+            </View>
+
+            {/* 3. Footer with timestamp & read receipts */}
+            <View style={[styles.messageFooter, Boolean(extractedUrl) && styles.linkMessageFooter]}>
+              <Text style={[styles.timestamp, isMyMessage && { color: 'rgba(255, 255, 255, 0.7)' }]}>
+                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+              {/* Read / Seen Receipt Checks */}
+              {isMyMessage && (
+                item.status === 'sending' || item.pending ? (
+                  <View style={styles.seenReceiptRow}>
+                    <MaterialIcons
+                      name="access-time"
+                      size={12}
+                      color="rgba(255, 255, 255, 0.55)"
+                      style={{ marginLeft: 4 }}
+                    />
+                  </View>
+                ) : item.status === 'failed' ? (
+                  <View style={styles.seenReceiptRow}>
+                    <MaterialIcons
+                      name="error-outline"
+                      size={13}
+                      color={colors.LIVE_RED}
+                      style={{ marginLeft: 4 }}
+                    />
+                  </View>
+                ) : item.seen || item.status === 'seen' ? (
+                  <View style={styles.seenReceiptRow}>
+                    <MaterialIcons
+                      name="done-all"
+                      size={15}
+                      color={colors.CYAN_ACCENT}
+                      style={{ marginLeft: 4 }}
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.seenReceiptRow}>
+                    <MaterialIcons
+                      name="done"
+                      size={14}
+                      color="rgba(255, 255, 255, 0.65)"
+                      style={{ marginLeft: 4 }}
+                    />
+                  </View>
+                )
+              )}
+            </View>
+          </TouchableOpacity>
+        </SwipeableMessageRow>
       </View>
     );
   };
@@ -1875,6 +2654,7 @@ const ChatScreen = ({ route, navigation }) => {
       <Modal
         visible={showMessageActionModal}
         transparent
+        statusBarTranslucent
         animationType="slide"
         onRequestClose={() => {
           setShowMessageActionModal(false);
@@ -1889,9 +2669,42 @@ const ChatScreen = ({ route, navigation }) => {
             setSelectedMessage(null);
           }}
         >
-          <TouchableOpacity activeOpacity={1} style={styles.actionModalSheet}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={[
+              styles.actionModalSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) + 16 },
+            ]}
+          >
+            {/* Ambient Top Glow Linear Gradient */}
+            <View style={styles.sheetTopGlow} pointerEvents="none">
+              <LinearGradient
+                colors={['rgba(124, 58, 237, 0.16)', 'rgba(0, 122, 255, 0.08)', 'transparent']}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </View>
+
             {/* Draggable Handle Indicator */}
             <View style={styles.actionHandleBar} />
+
+            {/* Header Row with Close (X) button */}
+            <View style={styles.actionSheetHeaderRow}>
+              <View style={styles.actionSheetTitleGroup}>
+                <MaterialIcons name="more-horiz" size={20} color={colors.PRIMARY_COLOR} />
+                <Text style={styles.actionSheetHeading}>Message Options</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.actionSheetCloseBtn}
+                onPress={() => {
+                  setShowMessageActionModal(false);
+                  setSelectedMessage(null);
+                }}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <MaterialIcons name="close" size={18} color={colors.SUB_TITLE_COLOR} />
+              </TouchableOpacity>
+            </View>
 
             {/* Message Preview Snippet */}
             <View style={styles.actionPreviewWrap}>
@@ -1965,18 +2778,6 @@ const ChatScreen = ({ route, navigation }) => {
                   </View>
                 </TouchableOpacity>
               )}
-
-              {/* Cancel Button */}
-              <TouchableOpacity
-                style={styles.actionCancelBtn}
-                activeOpacity={0.75}
-                onPress={() => {
-                  setShowMessageActionModal(false);
-                  setSelectedMessage(null);
-                }}
-              >
-                <Text style={styles.actionCancelText}>Cancel</Text>
-              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -2588,8 +3389,8 @@ const ChatScreen = ({ route, navigation }) => {
                 {callState === 'calling'
                   ? 'Ringing...'
                   : callState === 'incoming'
-                  ? 'Incoming Call'
-                  : 'Connected'}
+                    ? 'Incoming Call'
+                    : 'Connected'}
               </Text>
             </View>
           </View>
@@ -2626,8 +3427,8 @@ const ChatScreen = ({ route, navigation }) => {
                           i % 3 === 0
                             ? colors.CYAN_ACCENT
                             : i % 2 === 0
-                            ? colors.PURPLE_ACCENT
-                            : colors.PRIMARY_COLOR,
+                              ? colors.PURPLE_ACCENT
+                              : colors.PRIMARY_COLOR,
                       },
                     ]}
                   />
@@ -2819,11 +3620,13 @@ const ChatScreen = ({ route, navigation }) => {
     );
   };
 
-  // ── PHOTO PREVIEW & SEND MODAL (With View-Once 1x Option) ──
+  // ── PHOTO PREVIEW & SEND MODAL (Supports Multi-Photo & View-Once 1x Option) ──
   const renderPhotoPreviewModal = () => {
-    if (!selectedPhoto) return null;
+    if (!showPhotoPreviewModal || selectedPhotos.length === 0) return null;
 
-    const previewUri = selectedPhoto.previewUri || selectedPhoto.uri;
+    const currentPhoto = selectedPhotos[activePhotoIndex] || selectedPhotos[0];
+    const previewUri = currentPhoto?.previewUri || currentPhoto?.uri;
+    const isSinglePhoto = selectedPhotos.length === 1;
 
     return (
       <Modal
@@ -2834,7 +3637,8 @@ const ChatScreen = ({ route, navigation }) => {
         onRequestClose={() => {
           if (!isSendingPhoto) {
             setShowPhotoPreviewModal(false);
-            setSelectedPhoto(null);
+            setSelectedPhotos([]);
+            setActivePhotoIndex(0);
             setPhotoCaption('');
             setIsViewOnce(false);
           }
@@ -2849,7 +3653,8 @@ const ChatScreen = ({ route, navigation }) => {
               style={styles.photoPreviewHeaderBtn}
               onPress={() => {
                 setShowPhotoPreviewModal(false);
-                setSelectedPhoto(null);
+                setSelectedPhotos([]);
+                setActivePhotoIndex(0);
                 setPhotoCaption('');
                 setIsViewOnce(false);
               }}
@@ -2860,17 +3665,25 @@ const ChatScreen = ({ route, navigation }) => {
 
             <View style={styles.photoPreviewHeaderCenter}>
               <Text style={styles.photoPreviewHeaderTitle}>
-                {selectedPhoto.sourceType === 'Camera' ? 'Camera Capture' : 'Photo Preview'}
+                {isSinglePhoto
+                  ? currentPhoto?.sourceType === 'Camera'
+                    ? 'Camera Capture'
+                    : 'Photo Preview'
+                  : `${selectedPhotos.length} Photos Selected`}
               </Text>
               <View style={styles.photoPreviewTag}>
                 <MaterialIcons
-                  name={selectedPhoto.sourceType === 'Camera' ? 'photo-camera' : 'photo-library'}
+                  name={currentPhoto?.sourceType === 'Camera' ? 'photo-camera' : 'photo-library'}
                   size={12}
                   color={colors.CYAN_ACCENT}
                   style={{ marginRight: 4 }}
                 />
                 <Text style={styles.photoPreviewHeaderSubtitle}>
-                  {selectedPhoto.sourceType === 'Camera' ? 'Direct Capture' : 'From Gallery'}
+                  {isSinglePhoto
+                    ? currentPhoto?.sourceType === 'Camera'
+                      ? 'Direct Capture'
+                      : 'From Gallery'
+                    : `Photo ${activePhotoIndex + 1} of ${selectedPhotos.length}`}
                 </Text>
               </View>
             </View>
@@ -2878,10 +3691,17 @@ const ChatScreen = ({ route, navigation }) => {
             <TouchableOpacity
               style={styles.photoPreviewHeaderBtn}
               onPress={() => {
-                setSelectedPhoto(null);
-                setShowPhotoPreviewModal(false);
-                setPhotoCaption('');
-                setIsViewOnce(false);
+                if (selectedPhotos.length <= 1) {
+                  setSelectedPhotos([]);
+                  setShowPhotoPreviewModal(false);
+                  setActivePhotoIndex(0);
+                  setPhotoCaption('');
+                  setIsViewOnce(false);
+                } else {
+                  const updated = selectedPhotos.filter((_, i) => i !== activePhotoIndex);
+                  setSelectedPhotos(updated);
+                  setActivePhotoIndex(Math.max(0, Math.min(activePhotoIndex, updated.length - 1)));
+                }
               }}
               activeOpacity={0.8}
             >
@@ -2898,7 +3718,7 @@ const ChatScreen = ({ route, navigation }) => {
                 resizeMode="contain"
               />
             ) : null}
-            {isViewOnce && (
+            {isViewOnce && isSinglePhoto && (
               <View style={styles.viewOnceActiveWatermark}>
                 <View style={styles.viewOnceWatermarkCircle}>
                   <Text style={styles.viewOnceWatermarkText}>1</Text>
@@ -2908,66 +3728,112 @@ const ChatScreen = ({ route, navigation }) => {
             )}
           </View>
 
-          {/* Bottom Area with View Once Toggle & Caption Dock */}
+          {/* Bottom Area with Thumbnails, View Once Toggle & Caption Dock */}
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
             style={[styles.photoPreviewBottomArea, { paddingBottom: Math.max(insets.bottom, 16) }]}
           >
-            {/* View Once (1x) Ephemeral Toggle Button */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setIsViewOnce(!isViewOnce)}
-              style={[
-                styles.viewOnceToggleBtn,
-                isViewOnce ? styles.viewOnceToggleBtnActive : styles.viewOnceToggleBtnInactive,
-              ]}
-            >
-              <View
+            {/* Horizontal thumbnail selector for multi-image preview */}
+            {!isSinglePhoto && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.multiPhotoThumbnailScroll}
+                contentContainerStyle={styles.multiPhotoThumbnailContent}
+              >
+                {selectedPhotos.map((photoItem, pIdx) => {
+                  const thumbUri = photoItem.previewUri || photoItem.uri;
+                  const isActive = pIdx === activePhotoIndex;
+                  return (
+                    <TouchableOpacity
+                      key={`preview_thumb_${pIdx}`}
+                      style={[
+                        styles.multiPhotoThumbWrap,
+                        isActive && styles.multiPhotoThumbWrapActive,
+                      ]}
+                      onPress={() => setActivePhotoIndex(pIdx)}
+                      activeOpacity={0.8}
+                    >
+                      <Image source={{ uri: thumbUri }} style={styles.multiPhotoThumbImage} resizeMode="cover" />
+                      <TouchableOpacity
+                        style={styles.multiPhotoRemoveBadge}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        onPress={() => {
+                          const updated = selectedPhotos.filter((_, i) => i !== pIdx);
+                          if (updated.length === 0) {
+                            setShowPhotoPreviewModal(false);
+                            setSelectedPhotos([]);
+                          } else {
+                            setSelectedPhotos(updated);
+                            setActivePhotoIndex(Math.max(0, Math.min(activePhotoIndex, updated.length - 1)));
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="close" size={10} color="#FFF" />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {/* View Once (1x) Ephemeral Toggle Button - Enabled only for single photo */}
+            {isSinglePhoto && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => setIsViewOnce(!isViewOnce)}
                 style={[
-                  styles.viewOnceCircleBadge,
-                  isViewOnce ? styles.viewOnceCircleBadgeActive : styles.viewOnceCircleBadgeInactive,
+                  styles.viewOnceToggleBtn,
+                  isViewOnce ? styles.viewOnceToggleBtnActive : styles.viewOnceToggleBtnInactive,
                 ]}
               >
-                <Text
+                <View
                   style={[
-                    styles.viewOnceCircleText,
-                    isViewOnce ? styles.viewOnceCircleTextActive : styles.viewOnceCircleTextInactive,
+                    styles.viewOnceCircleBadge,
+                    isViewOnce ? styles.viewOnceCircleBadgeActive : styles.viewOnceCircleBadgeInactive,
                   ]}
                 >
-                  1
-                </Text>
-              </View>
+                  <Text
+                    style={[
+                      styles.viewOnceCircleText,
+                      isViewOnce ? styles.viewOnceCircleTextActive : styles.viewOnceCircleTextInactive,
+                    ]}
+                  >
+                    1
+                  </Text>
+                </View>
 
-              <View style={styles.viewOnceToggleTextWrap}>
-                <Text
-                  style={[
-                    styles.viewOnceToggleTitle,
-                    isViewOnce ? styles.viewOnceToggleTitleActive : styles.viewOnceToggleTitleInactive,
-                  ]}
-                >
-                  {isViewOnce ? 'View-Once Enabled' : 'Send as View Once (1x)'}
-                </Text>
-                <Text style={styles.viewOnceToggleSubtitle}>
-                  {isViewOnce
-                    ? 'Photo can only be opened once by recipient'
-                    : 'Tap to make photo expire after one view'}
-                </Text>
-              </View>
+                <View style={styles.viewOnceToggleTextWrap}>
+                  <Text
+                    style={[
+                      styles.viewOnceToggleTitle,
+                      isViewOnce ? styles.viewOnceToggleTitleActive : styles.viewOnceToggleTitleInactive,
+                    ]}
+                  >
+                    {isViewOnce ? 'View-Once Enabled' : 'Send as View Once (1x)'}
+                  </Text>
+                  <Text style={styles.viewOnceToggleSubtitle}>
+                    {isViewOnce
+                      ? 'Photo can only be opened once by recipient'
+                      : 'Tap to make photo expire after one view'}
+                  </Text>
+                </View>
 
-              <MaterialIcons
-                name={isViewOnce ? 'check-circle' : 'radio-button-unchecked'}
-                size={22}
-                color={isViewOnce ? colors.CYAN_ACCENT : colors.SUB_TITLE_COLOR}
-              />
-            </TouchableOpacity>
+                <MaterialIcons
+                  name={isViewOnce ? 'check-circle' : 'radio-button-unchecked'}
+                  size={22}
+                  color={isViewOnce ? colors.CYAN_ACCENT : colors.SUB_TITLE_COLOR}
+                />
+              </TouchableOpacity>
+            )}
 
             {/* Caption Input & Send Action Row */}
             <View style={styles.photoCaptionRow}>
               <View style={styles.photoCaptionInputWrap}>
                 <TextInput
                   style={styles.photoCaptionInput}
-                  placeholder="Add a caption..."
+                  placeholder={isSinglePhoto ? 'Add a caption...' : 'Add a caption for photos...'}
                   placeholderTextColor={colors.MUTED_COLOR}
                   value={photoCaption}
                   onChangeText={setPhotoCaption}
@@ -2992,7 +3858,14 @@ const ChatScreen = ({ route, navigation }) => {
                   {isSendingPhoto ? (
                     <ActivityIndicator size="small" color="#FFF" />
                   ) : (
-                    <MaterialIcons name="send" size={20} color="#FFF" />
+                    <View style={styles.photoSendBtnContent}>
+                      {!isSinglePhoto && (
+                        <View style={styles.sendPhotosCountBadge}>
+                          <Text style={styles.sendPhotosCountText}>{selectedPhotos.length}</Text>
+                        </View>
+                      )}
+                      <MaterialIcons name="send" size={20} color="#FFF" />
+                    </View>
                   )}
                 </LinearGradient>
               </TouchableOpacity>
@@ -3003,75 +3876,20 @@ const ChatScreen = ({ route, navigation }) => {
     );
   };
 
-  // ── FULLSCREEN IMAGE VIEWER MODAL ──
-  const renderFullscreenImageModal = () => {
-    if (!fullscreenImage) return null;
+  // ── FULLSCREEN IMAGE VIEWER MODAL (Pinch-to-zoom & Swipe Gallery) ──
+  const renderImageViewerModal = () => {
+    if (!imageViewerState.visible) return null;
 
     return (
-      <Modal
-        visible={Boolean(fullscreenImage)}
-        transparent={false}
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={handleCloseFullscreenImage}
-      >
-        <View style={styles.fullscreenSafeContainer}>
-          <StatusBar barStyle="light-content" backgroundColor="#000000" translucent />
-
-          {/* Header with notch protection */}
-          <View style={[styles.fullscreenHeader, { paddingTop: safeTopPadding }]}>
-            <TouchableOpacity
-              style={styles.fullscreenCloseBtn}
-              onPress={handleCloseFullscreenImage}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="close" size={26} color="#FFF" />
-            </TouchableOpacity>
-
-            <View style={styles.fullscreenHeaderCenter}>
-              {fullscreenImage.isViewOnce ? (
-                <View style={styles.fullscreenViewOnceBadge}>
-                  <View style={styles.fullscreenViewOnceCircleBadge}>
-                    <Text style={styles.fullscreenViewOnceCircleText}>1</Text>
-                  </View>
-                  <Text style={styles.fullscreenViewOnceBadgeText}>View-Once Photo</Text>
-                </View>
-              ) : (
-                <Text style={styles.fullscreenHeaderTitle}>{otherUsername}</Text>
-              )}
-            </View>
-
-            <View style={{ width: 40 }} />
-          </View>
-
-          {/* Fullscreen Image Container */}
-          <View style={styles.fullscreenImageContainer}>
-            <Image
-              source={{ uri: fullscreenImage.uri }}
-              style={styles.fullscreenFullImage}
-              resizeMode="contain"
-            />
-          </View>
-
-          {/* Footer Notice & Caption */}
-          <View style={[styles.fullscreenFooter, { paddingBottom: Math.max(insets.bottom, 20) }]}>
-            {fullscreenImage.isViewOnce && (
-              <View style={styles.fullscreenViewOnceWarningPill}>
-                <MaterialIcons name="info-outline" size={16} color={colors.FILM_GOLD} />
-                <Text style={styles.fullscreenViewOnceWarningText}>
-                  This photo will expire permanently once closed.
-                </Text>
-              </View>
-            )}
-
-            {Boolean(fullscreenImage.caption) && (
-              <View style={styles.fullscreenCaptionBox}>
-                <Text style={styles.fullscreenCaptionText}>{fullscreenImage.caption}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
+      <ChatImageViewerModal
+        visible={imageViewerState.visible}
+        images={imageViewerState.images}
+        initialIndex={imageViewerState.initialIndex}
+        onClose={handleCloseImageViewer}
+        otherUsername={otherUsername}
+        safeTopPadding={safeTopPadding}
+        safeBottomPadding={Math.max(insets.bottom, 20)}
+      />
     );
   };
 
@@ -3175,19 +3993,38 @@ const ChatScreen = ({ route, navigation }) => {
                   styles.headerSubtext,
                   isSelfChat
                     ? { color: colors.CYAN_ACCENT }
-                    : (otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN }),
+                    : isOtherUserTyping
+                      ? { color: colors.CYAN_ACCENT, fontWeight: '700' }
+                      : (otherUserStatus === 'online' && { color: colors.ACCEPT_GREEN }),
                 ]}
               >
-                {isSelfChat ? 'Personal Notes & Media' : (otherUserStatus === 'online' ? 'Online' : 'Offline')}
+                {isSelfChat
+                  ? 'Personal Notes & Media'
+                  : isOtherUserTyping
+                    ? 'typing...'
+                    : (otherUserStatus === 'online' ? 'Online' : 'Offline')}
               </Text>
             </View>
           </TouchableOpacity>
         </View>
 
-        {/* Right Action Icons: Audio Call, Video Call, Watch Party Invite */}
+        {/* Right Action Icons: Lock Chat, Audio Call, Video Call, Watch Party Invite */}
         <View style={styles.headerRightActions}>
           {!isSelfChat && (
             <>
+              {/* Chat Lock Button */}
+              <TouchableOpacity
+                style={[styles.headerActionBtn, isChatLocked && styles.headerActionBtnLocked]}
+                onPress={handleToggleChatLock}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons
+                  name={isChatLocked ? 'lock' : 'lock-outline'}
+                  size={18}
+                  color={isChatLocked ? colors.FILM_GOLD : colors.TITLE_COLOR}
+                />
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={styles.headerActionBtn}
                 onPress={() => startCall('audio')}
@@ -3241,80 +4078,245 @@ const ChatScreen = ({ route, navigation }) => {
         </TouchableOpacity>
       )}
 
-      {/* ── CHAT MESSAGES STREAM ───────────────────────────────── */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesListPadding}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={renderEmptyChat}
-      />
+      {/* ── CONDITIONAL: LOCKED CHAT SECURITY GUARD OR CHAT MESSAGES ── */}
+      {isChatLocked && !isScreenUnlocked ? (
+        <View style={styles.chatLockGuardOverlay}>
+          <LinearGradient
+            colors={['rgba(124, 58, 237, 0.25)', 'rgba(0, 122, 255, 0.10)', 'transparent']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFillObject}
+            pointerEvents="none"
+          />
 
-      {/* Attachment Bottom Sheet Modal */}
-      {renderAttachmentModal()}
-
-      {/* Message Action Sheet Modal (Delete for me / Delete for everyone) */}
-      {renderMessageActionModal()}
-
-      {/* Photo Preview & Send Modal (with View-Once 1x Option) */}
-      {renderPhotoPreviewModal()}
-
-      {/* Fullscreen Photo Lightbox Modal */}
-      {renderFullscreenImageModal()}
-
-      {/* ── FLOATING BOTTOM CHAT INPUT BAR ───────────────────────── */}
-      <View style={[styles.bottomInputDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        <View style={styles.inputBarInner}>
-          <TouchableOpacity
-            style={[styles.attachBtn, showAttachments && styles.attachBtnActive]}
-            onPress={() => setShowAttachments(!showAttachments)}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons
-              name={showAttachments ? 'close' : 'add'}
-              size={22}
-              color={showAttachments ? colors.PRIMARY_COLOR : colors.TITLE_COLOR}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.textInput}
-              placeholder={isSelfChat ? 'Message yourself (Notes)...' : 'Type a message...'}
-              placeholderTextColor={colors.MUTED_COLOR}
-              value={message}
-              onChangeText={setMessage}
-              multiline
-            />
-            <TouchableOpacity style={styles.emojiBtn} activeOpacity={0.8}>
-              <MaterialIcons name="sentiment-satisfied" size={20} color={colors.SUB_TITLE_COLOR} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.micBtn} activeOpacity={0.8}>
-              <MaterialIcons name="mic" size={20} color={colors.CYAN_ACCENT} />
-            </TouchableOpacity>
+          <View style={styles.lockGuardEmblem}>
+            <LinearGradient
+              colors={[colors.PURPLE_ACCENT, colors.PRIMARY_COLOR]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.lockGuardGradient}
+            >
+              <MaterialIcons name="lock" size={34} color={colors.FILM_GOLD} />
+            </LinearGradient>
           </View>
 
+          <Text style={styles.lockGuardTitle}>Conversation Locked</Text>
+          <Text style={styles.lockGuardSubtitle}>
+            This chat with @{otherUsername} is protected. Enter your alphanumeric passcode to view messages.
+          </Text>
+
           <TouchableOpacity
-            style={styles.sendBtnWrap}
-            onPress={sendMessage}
+            style={styles.lockGuardUnlockBtn}
             activeOpacity={0.85}
+            onPress={() => {
+              setChatLockModalMode('unlock');
+              setChatLockModalVisible(true);
+            }}
           >
             <LinearGradient
               colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.sendBtnGradient}
+              style={styles.lockGuardUnlockGradient}
             >
-              <MaterialIcons name="send" size={18} color="#FFF" />
+              <MaterialIcons name="lock-open" size={18} color="#FFF" style={{ marginRight: 8 }} />
+              <Text style={styles.lockGuardUnlockText}>Unlock Chat</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
-      </View>
+      ) : (
+        <>
+          {/* ── CHAT MESSAGES STREAM ───────────────────────────────── */}
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={(item) => item.id || `temp_${item.timestamp}`}
+            contentContainerStyle={styles.messagesListPadding}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={renderEmptyChat}
+            ListFooterComponent={
+              isOtherUserTyping && !isSelfChat ? (
+                <View style={styles.typingIndicatorRow}>
+                  <View style={styles.typingIndicatorBubble}>
+                    <AnimatedTypingDots />
+                    <Text style={styles.typingIndicatorLabel}>{otherUsername} is typing...</Text>
+                  </View>
+                </View>
+              ) : null
+            }
+            initialNumToRender={20}
+            maxToRenderPerBatch={15}
+            windowSize={11}
+            removeClippedSubviews={Platform.OS === 'android'}
+            keyboardShouldPersistTaps="handled"
+            onScrollToIndexFailed={(info) => {
+              const offset = info.averageItemLength
+                ? info.averageItemLength * info.index
+                : info.index * 80;
+              flatListRef.current?.scrollToOffset({
+                offset,
+                animated: false,
+              });
+              setTimeout(() => {
+                flatListRef.current?.scrollToIndex({
+                  index: info.index,
+                  animated: true,
+                  viewPosition: 0.5,
+                });
+              }, 100);
+            }}
+          />
+
+          {/* Attachment Bottom Sheet Modal */}
+          {renderAttachmentModal()}
+
+          {/* Message Action Sheet Modal (Delete for me / Delete for everyone) */}
+          {renderMessageActionModal()}
+
+          {/* Photo Preview & Send Modal (with View-Once 1x Option) */}
+          {renderPhotoPreviewModal()}
+
+          {/* Fullscreen Photo Lightbox Modal */}
+          {renderImageViewerModal()}
+
+          {/* ── FLOATING BOTTOM CHAT INPUT BAR ───────────────────────── */}
+          <View style={[styles.bottomInputDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            {/* Replying to Message Preview Bar */}
+            {replyingToMessage && (
+              <View style={styles.replyDockBar}>
+                <View style={styles.replyAccentIndicator} />
+                <View style={styles.replyContentColumn}>
+                  <View style={styles.replyHeaderLine}>
+                    <MaterialIcons name="reply" size={14} color={colors.CYAN_ACCENT} style={{ marginRight: 4 }} />
+                    <Text style={styles.replyTargetUserText}>
+                      Replying to {replyingToMessage.senderId === auth().currentUser?.uid ? 'yourself' : otherUsername}
+                    </Text>
+                  </View>
+                  <Text style={styles.replySnippetText} numberOfLines={1}>
+                    {replyingToMessage.type === 'image' || replyingToMessage.type === 'photo'
+                      ? (replyingToMessage.caption ? `📷 ${replyingToMessage.caption}` : '📷 Photo')
+                      : (replyingToMessage.text || 'Message')}
+                  </Text>
+                </View>
+                {Boolean(replyingToMessage.imageUri) && (
+                  <Image
+                    source={{ uri: replyingToMessage.imageUri }}
+                    style={styles.replyDockThumbnail}
+                    resizeMode="cover"
+                  />
+                )}
+                <TouchableOpacity
+                  style={styles.replyDismissButton}
+                  onPress={() => setReplyingToMessage(null)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <MaterialIcons name="close" size={18} color="rgba(255, 255, 255, 0.7)" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.inputBarInner}>
+              <TouchableOpacity
+                style={[styles.attachBtn, showAttachments && styles.attachBtnActive]}
+                onPress={() => setShowAttachments(!showAttachments)}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons
+                  name={showAttachments ? 'close' : 'add'}
+                  size={22}
+                  color={showAttachments ? colors.PRIMARY_COLOR : colors.TITLE_COLOR}
+                />
+              </TouchableOpacity>
+
+              <View style={styles.inputContainer}>
+                <TextInput
+                  ref={messageInputRef}
+                  style={styles.textInput}
+                  placeholder={
+                    replyingToMessage
+                      ? 'Type your reply...'
+                      : isSelfChat
+                      ? 'Message yourself (Notes)...'
+                      : 'Type a message...'
+                  }
+                  placeholderTextColor={colors.MUTED_COLOR}
+                  value={message}
+                  onChangeText={handleMessageTextChange}
+                  multiline
+                />
+                <TouchableOpacity style={styles.emojiBtn} activeOpacity={0.8}>
+                  <MaterialIcons name="sentiment-satisfied" size={20} color={colors.SUB_TITLE_COLOR} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.micBtn} activeOpacity={0.8}>
+                  <MaterialIcons name="mic" size={20} color={colors.CYAN_ACCENT} />
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                style={styles.sendBtnWrap}
+                onPress={sendMessage}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.sendBtnGradient}
+                >
+                  <MaterialIcons name="send" size={18} color="#FFF" />
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </>
+      )}
 
       {/* Call Modal */}
       {renderCallModal()}
+
+      {/* Alphanumeric Chat Lock Bottom Sheet */}
+      <ChatLockBottomSheet
+        visible={chatLockModalVisible}
+        mode={chatLockModalMode}
+        userName={otherUsername}
+        onSuccess={async () => {
+          const currentUid = auth().currentUser?.uid;
+          if (chatLockModalMode === 'setup') {
+            if (currentUid && otherUserId) {
+              const effectiveChatId = chatId || chatIdRef.current || route.params?.chatId;
+              await lockChatForUser(currentUid, otherUserId, effectiveChatId);
+              setIsChatLocked(true);
+              setIsScreenUnlocked(true);
+              markSessionUnlocked(otherUserId);
+              showCineAlert({
+                title: 'Chat Locked',
+                message: `@${otherUsername} is now locked and protected with passcode.`,
+                type: 'success',
+              });
+            }
+          } else if (chatLockModalMode === 'remove') {
+            if (currentUid && otherUserId) {
+              const effectiveChatId = chatId || chatIdRef.current || route.params?.chatId;
+              await unlockChatForUser(currentUid, otherUserId, effectiveChatId);
+              setIsChatLocked(false);
+              setIsScreenUnlocked(true);
+              showCineAlert({
+                title: 'Chat Unlocked',
+                message: `@${otherUsername} is now unlocked and accessible from your main chats.`,
+                type: 'success',
+              });
+            }
+          } else {
+            // Unlock mode
+            setIsScreenUnlocked(true);
+            if (otherUserId) markSessionUnlocked(otherUserId);
+          }
+          setChatLockModalVisible(false);
+        }}
+        onClose={() => setChatLockModalVisible(false)}
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -3428,12 +4430,118 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0, 122, 255, 0.3)',
   },
+  headerActionBtnLocked: {
+    borderColor: 'rgba(255, 180, 0, 0.4)',
+    backgroundColor: 'rgba(255, 180, 0, 0.12)',
+  },
+
+  // ── Chat Lock Guard Overlay ────────
+  chatLockGuardOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: colors.BACKGROUND_COLOR,
+  },
+  lockGuardEmblem: {
+    width: 76,
+    height: 76,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 0, 0.35)',
+    shadowColor: colors.FILM_GOLD,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  lockGuardGradient: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  lockGuardTitle: {
+    color: colors.TITLE_COLOR,
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  lockGuardSubtitle: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginBottom: 28,
+  },
+  lockGuardUnlockBtn: {
+    width: '100%',
+    maxWidth: 240,
+    height: 48,
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: colors.PRIMARY_COLOR,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  lockGuardUnlockGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  lockGuardUnlockText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
 
   // ── Messages Stream ───────────────
   messagesListPadding: {
     paddingHorizontal: 14,
     paddingVertical: 14,
     paddingBottom: 90,
+  },
+  // ── Realtime Typing Indicator & Micro-Animation Dots ──
+  typingDotsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.CYAN_ACCENT,
+    marginHorizontal: 2.5,
+  },
+  typingIndicatorRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    alignItems: 'flex-start',
+  },
+  typingIndicatorBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.22)',
+  },
+  typingIndicatorLabel: {
+    color: colors.SUB_TITLE_COLOR,
+    fontSize: 12,
+    fontWeight: '500',
   },
   emptyChatWrap: {
     alignItems: 'center',
@@ -3593,7 +4701,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.1)',
     paddingHorizontal: 18,
     paddingTop: 12,
-    paddingBottom: 28,
+    overflow: 'hidden',
   },
   actionHandleBar: {
     width: 40,
@@ -3601,7 +4709,31 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: 'rgba(255, 255, 255, 0.25)',
     alignSelf: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
+  },
+  actionSheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  actionSheetTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionSheetHeading: {
+    color: colors.TITLE_COLOR,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  actionSheetCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   actionPreviewWrap: {
     backgroundColor: colors.SURFACE_ELEVATED,
@@ -3658,7 +4790,7 @@ const styles = StyleSheet.create({
   actionIconWrap: {
     width: 38,
     height: 38,
-    borderRadius: 19,
+    borderRadius: 10,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -3676,19 +4808,6 @@ const styles = StyleSheet.create({
     color: colors.SUB_TITLE_COLOR,
     fontSize: 11,
     marginTop: 2,
-  },
-  actionCancelBtn: {
-    marginTop: 6,
-    paddingVertical: 13,
-    borderRadius: 14,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionCancelText: {
-    color: colors.TITLE_COLOR,
-    fontSize: 14,
-    fontWeight: '600',
   },
 
   // Embedded Watch Party Invite Tile (Faded Card UI matching FriendsScreen & HomeScreen)
@@ -4249,13 +5368,13 @@ const styles = StyleSheet.create({
     color: colors.SUB_TITLE_COLOR,
   },
 
-  // ── REGULAR IMAGE MESSAGE CARDS ──
+  // ── REGULAR IMAGE MESSAGE CARDS (SEAMLESS DISPLAY) ──
   imageMessageCard: {
     borderRadius: 16,
     overflow: 'hidden',
     marginVertical: 4,
-    maxWidth: SCREEN_WIDTH * 0.72,
     borderWidth: 1,
+    alignSelf: 'flex-start',
   },
   myImageMessageCard: {
     alignSelf: 'flex-end',
@@ -4270,18 +5389,15 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 4,
   },
   imageThumbnail: {
-    width: SCREEN_WIDTH * 0.68,
-    height: 190,
     backgroundColor: '#05050A',
     borderTopLeftRadius: 15,
     borderTopRightRadius: 15,
   },
   imagePlaceholder: {
-    width: SCREEN_WIDTH * 0.68,
-    height: 140,
     backgroundColor: colors.SURFACE_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 15,
   },
   imagePlaceholderText: {
     color: colors.SUB_TITLE_COLOR,
@@ -4291,22 +5407,244 @@ const styles = StyleSheet.create({
   imageCaptionText: {
     color: '#FFFFFF',
     fontSize: 14,
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  imageCaptionSection: {
     paddingHorizontal: 12,
     paddingTop: 8,
-    paddingBottom: 4,
-    lineHeight: 18,
+    paddingBottom: 6,
   },
   imageCardFooter: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingBottom: 8,
-    paddingTop: 4,
+    paddingTop: 2,
   },
   imageTimestamp: {
     fontSize: 10,
     color: colors.SUB_TITLE_COLOR,
+  },
+  imageFloatingTimestampPill: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(8, 8, 16, 0.65)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  imageFloatingTimestampText: {
+    fontSize: 10,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  imageCardQuotedWrap: {
+    flexDirection: 'row',
+    margin: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+  },
+
+  // ── SWIPE TO REPLY STYLES ──
+  swipeReplyActionBox: {
+    width: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 6,
+  },
+  swipeReplyIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(6, 182, 212, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  replyDockBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.SURFACE_ELEVATED,
+    marginHorizontal: 10,
+    marginBottom: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    paddingVertical: 6,
+    paddingRight: 10,
+    overflow: 'hidden',
+  },
+  replyAccentIndicator: {
+    width: 4,
+    alignSelf: 'stretch',
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  replyContentColumn: {
+    flex: 1,
+    paddingHorizontal: 10,
+  },
+  replyHeaderLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  replyTargetUserText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.CYAN_ACCENT,
+  },
+  replySnippetText: {
+    fontSize: 12,
+    color: colors.TITLE_COLOR,
+    opacity: 0.85,
+  },
+  replyDismissButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quotedReplyWrap: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    marginBottom: 6,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    alignItems: 'center',
+  },
+  myQuotedReplyWrap: {
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+  },
+  theirQuotedReplyWrap: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  quotedReplyBar: {
+    width: 3.5,
+    alignSelf: 'stretch',
+  },
+  myQuotedReplyBar: {
+    backgroundColor: '#FFFFFF',
+  },
+  theirQuotedReplyBar: {
+    backgroundColor: colors.CYAN_ACCENT,
+  },
+  quotedReplyContent: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    justifyContent: 'center',
+  },
+  quotedReplyUser: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.CYAN_ACCENT,
+    marginBottom: 1,
+  },
+  quotedReplyUserMine: {
+    color: '#FFFFFF',
+  },
+  quotedReplySnippet: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  quotedReplySnippetMine: {
+    color: 'rgba(255, 255, 255, 0.85)',
+  },
+  quotedReplyThumbnail: {
+    width: 42,
+    height: 42,
+    borderRadius: 6,
+    marginRight: 4,
+    marginVertical: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  quotedReplyThumbnailPlaceholder: {
+    width: 42,
+    height: 42,
+    borderRadius: 6,
+    marginRight: 4,
+    marginVertical: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  replyDockThumbnail: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    marginRight: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  highlightedMessageBubble: {
+    borderWidth: 1.5,
+    borderColor: colors.CYAN_ACCENT,
+    shadowColor: colors.CYAN_ACCENT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
+  // ── MULTI-PHOTO PREVIEW STYLES ──
+  multiPhotoThumbnailScroll: {
+    maxHeight: 64,
+    marginVertical: 8,
+    paddingHorizontal: 12,
+  },
+  multiPhotoThumbnailContent: {
+    alignItems: 'center',
+  },
+  multiPhotoThumbWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    marginRight: 8,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  multiPhotoThumbWrapActive: {
+    borderColor: colors.CYAN_ACCENT,
+    borderWidth: 2,
+  },
+  multiPhotoThumbImage: {
+    width: '100%',
+    height: '100%',
+  },
+  multiPhotoRemoveBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoSendBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendPhotosCountBadge: {
+    backgroundColor: colors.CYAN_ACCENT,
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    marginRight: 4,
+  },
+  sendPhotosCountText: {
+    color: '#080810',
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   // ── PHOTO PREVIEW MODAL ──

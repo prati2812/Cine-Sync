@@ -38,3 +38,13 @@ Use this skill whenever creating, modifying, or refactoring UI screens or compon
 ### 3. Unified Header Component Pattern
 - Follow the standard `Header` component layout (`src/components/Header.js`) for screens with header bars.
 - Header elements must include back/logo button, safe top inset, title styling, and action shortcuts.
+
+### 4. Bottom Sheets Exclusively (No Centered Modals)
+- Never use centered popup dialog modals (`justifyContent: 'center'`).
+- Always present sheets sliding up from the bottom (`borderTopLeftRadius: 28`, `borderTopRightRadius: 28`) with safe-area bottom inset, draggable indicator pill handle, atmospheric gradient sheen, and smooth slide-up animation (`useNativeDriver: true`).
+
+### 5. No Status or Category Chips in List Titles (Clean Uncluttered Row UI)
+- Never add inline badges, category pills, or status chips next to user names or list card titles (e.g. no `PERSONAL`, `LOCKED`, or category chips).
+- Title rows must remain clean and uncluttered. Use avatar badges or subtext to indicate state.
+
+

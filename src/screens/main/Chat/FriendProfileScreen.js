@@ -20,6 +20,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
 import { showCineAlert } from '../../../components/CineAlert';
+import ChatLockBottomSheet from '../../../components/ChatLockBottomSheet';
+import chatLockService from '../../../functions/chatLockService';
 
 // ─────────────────────────────────────────────────────────────
 //  Pulsing Online Glow Ring (centered around 84x84 avatar)
@@ -81,6 +83,9 @@ const FriendProfileScreen = ({ navigation, route }) => {
   const [profileData, setProfileData] = useState(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [recentRooms, setRecentRooms] = useState([]);
+  const [isChatLocked, setIsChatLocked] = useState(false);
+  const [chatLockModalVisible, setChatLockModalVisible] = useState(false);
+  const [chatLockModalMode, setChatLockModalMode] = useState('setup');
 
   useEffect(() => {
     let userRef = null;
@@ -341,6 +346,59 @@ const FriendProfileScreen = ({ navigation, route }) => {
     });
   };
 
+  // ── Chat Lock Status & Handlers ───────────────────────────
+  useEffect(() => {
+    let isMounted = true;
+    const checkLockStatus = async () => {
+      if (!targetUserId) return;
+      try {
+        const locked = await chatLockService.isChatLockedForUser(targetUserId);
+        if (isMounted) setIsChatLocked(locked);
+      } catch (err) {
+        console.warn('[FriendProfile] Error checking chat lock status:', err);
+      }
+    };
+    checkLockStatus();
+    return () => {
+      isMounted = false;
+    };
+  }, [targetUserId]);
+
+  const handleToggleLock = async () => {
+    if (!targetUserId) return;
+
+    if (isChatLocked) {
+      setChatLockModalMode('remove');
+      setChatLockModalVisible(true);
+    } else {
+      setChatLockModalMode('setup');
+      setChatLockModalVisible(true);
+    }
+  };
+
+  const handleLockModalSuccess = async () => {
+    if (!targetUserId) return;
+    if (chatLockModalMode === 'setup') {
+      await chatLockService.lockChatForUser(targetUserId);
+      setIsChatLocked(true);
+      showCineAlert({
+        type: 'success',
+        icon: 'lock',
+        title: 'Chat Locked',
+        message: `Passcode configured! Chat with @${displayUsername} is now locked and protected with passcode.`,
+      });
+    } else if (chatLockModalMode === 'remove') {
+      await chatLockService.unlockChatForUser(targetUserId);
+      setIsChatLocked(false);
+      showCineAlert({
+        type: 'info',
+        icon: 'lock-open',
+        title: 'Chat Unlocked',
+        message: `Chat with @${displayUsername} is now unlocked and accessible from your main chats.`,
+      });
+    }
+  };
+
   return (
     <View style={styles.root}>
       <StatusBar
@@ -552,6 +610,62 @@ const FriendProfileScreen = ({ navigation, route }) => {
             )}
           </View>
 
+          {/* ── Chat Privacy & Security ── */}
+          <View style={styles.privacySection}>
+            <View style={styles.privacyHeader}>
+              <View style={styles.activityTitleRow}>
+                <MaterialIcons
+                  name="shield"
+                  size={17}
+                  color={isChatLocked ? colors.FILM_GOLD : colors.PRIMARY_COLOR}
+                  style={{ marginRight: 5 }}
+                />
+                <Text style={styles.activityTitle}>PRIVACY & SECURITY</Text>
+              </View>
+              <View style={[styles.lockStatusBadge, isChatLocked && styles.lockStatusBadgeActive]}>
+                <MaterialIcons
+                  name={isChatLocked ? 'lock' : 'lock-open'}
+                  size={12}
+                  color={isChatLocked ? colors.FILM_GOLD : colors.MUTED_COLOR}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[styles.lockStatusBadgeText, isChatLocked && styles.lockStatusBadgeTextActive]}>
+                  {isChatLocked ? 'LOCKED' : 'UNLOCKED'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.lockCard}>
+              <View style={styles.lockCardLeft}>
+                <View style={[styles.lockCardIconWrap, isChatLocked && styles.lockCardIconWrapActive]}>
+                  <MaterialIcons
+                    name={isChatLocked ? 'lock' : 'lock-outline'}
+                    size={22}
+                    color={isChatLocked ? colors.FILM_GOLD : colors.SUB_TITLE_COLOR}
+                  />
+                </View>
+                <View style={styles.lockCardTextWrap}>
+                  <Text style={styles.lockCardTitle}>Chat Lock</Text>
+                  <Text style={styles.lockCardSub}>
+                    {isChatLocked
+                      ? 'Protected and locked with passcode blur'
+                      : 'Lock and protect this chat with a secure passcode'}
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.lockToggleBtn, isChatLocked && styles.lockToggleBtnActive]}
+                onPress={handleToggleLock}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.lockToggleBtnText, isChatLocked && styles.lockToggleBtnTextActive]}>
+                  {isChatLocked ? 'Unlock' : 'Lock'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
           {/* ── Danger Zone ── */}
           <View style={styles.dangerZone}>
             <TouchableOpacity
@@ -565,6 +679,15 @@ const FriendProfileScreen = ({ navigation, route }) => {
           </View>
         </View>
       </ScrollView>
+
+      {/* ── Alphanumeric Chat Lock Passcode Bottom Sheet ── */}
+      <ChatLockBottomSheet
+        visible={chatLockModalVisible}
+        mode={chatLockModalMode}
+        userName={displayUsername}
+        onSuccess={handleLockModalSuccess}
+        onClose={() => setChatLockModalVisible(false)}
+      />
     </View>
   );
 };
@@ -1021,6 +1144,105 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.DELETE_RED_COLOR,
     fontWeight: '600',
+  },
+
+  // ── Privacy & Security ────────────────────────────────────
+  privacySection: {
+    marginTop: 22,
+  },
+  privacyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  lockStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  lockStatusBadgeActive: {
+    backgroundColor: 'rgba(255, 180, 0, 0.14)',
+    borderColor: 'rgba(255, 180, 0, 0.35)',
+  },
+  lockStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.MUTED_COLOR,
+    letterSpacing: 0.5,
+  },
+  lockStatusBadgeTextActive: {
+    color: colors.FILM_GOLD,
+  },
+  lockCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.SURFACE_COLOR,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  lockCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 12,
+  },
+  lockCardIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    marginRight: 12,
+  },
+  lockCardIconWrapActive: {
+    backgroundColor: 'rgba(255, 180, 0, 0.12)',
+    borderColor: 'rgba(255, 180, 0, 0.3)',
+  },
+  lockCardTextWrap: {
+    flex: 1,
+  },
+  lockCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.TITLE_COLOR,
+    marginBottom: 2,
+  },
+  lockCardSub: {
+    fontSize: 11,
+    color: colors.SUB_TITLE_COLOR,
+    lineHeight: 15,
+  },
+  lockToggleBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.35)',
+  },
+  lockToggleBtnActive: {
+    backgroundColor: 'rgba(255, 180, 0, 0.15)',
+    borderColor: 'rgba(255, 180, 0, 0.4)',
+  },
+  lockToggleBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.PRIMARY_COLOR,
+  },
+  lockToggleBtnTextActive: {
+    color: colors.FILM_GOLD,
   },
 });
 

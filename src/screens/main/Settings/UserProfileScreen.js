@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,10 @@ import {
   Share,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
   Dimensions,
+  Keyboard,
+  Animated,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -59,10 +61,45 @@ const UserProfileScreen = ({ navigation }) => {
   const [continueWatchingItems, setContinueWatchingItems] = useState([]);
   const [recentContinueItem, setRecentContinueItem] = useState(null);
 
-  // Edit Profile Modal
+  // Edit Profile Modal / Bottom Sheet
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editUsername, setEditUsername] = useState('');
   const [isUpdatingUsername, setIsUpdatingUsername] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const keyboardAnim = useRef(new Animated.Value(0)).current;
+
+  // Track Keyboard on Android & iOS for smooth bottom sheet lifting
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      const h = e?.endCoordinates?.height || 0;
+      setIsKeyboardVisible(true);
+      const androidNavOffset = Platform.OS === 'android' ? Math.max(insets.bottom, 28) : 0;
+      const targetHeight = h + androidNavOffset + 14;
+
+      Animated.timing(keyboardAnim, {
+        toValue: targetHeight,
+        duration: Platform.OS === 'ios' ? (e?.duration || 250) : 180,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, (e) => {
+      setIsKeyboardVisible(false);
+      Animated.timing(keyboardAnim, {
+        toValue: 0,
+        duration: Platform.OS === 'ios' ? (e?.duration || 220) : 150,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [insets.bottom]);
 
   // ──────────────────────────────────────────────────────────────
   // 1. Fetch User Data & Rooms Metrics
@@ -626,69 +663,120 @@ const UserProfileScreen = ({ navigation }) => {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* ── 7. EDIT USERNAME SQUIRCLE MODAL ── */}
+      {/* ── 7. EDIT USERNAME BOTTOM SHEET ── */}
       <Modal
         visible={isEditModalVisible}
         transparent
-        animationType="fade"
-        onRequestClose={() => setIsEditModalVisible(false)}
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => {
+          Keyboard.dismiss();
+          setIsEditModalVisible(false);
+        }}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.modalOverlay}
-        >
-          <View style={styles.editCard}>
-            <View style={styles.editHeaderRow}>
-              <View style={styles.editHeaderLeft}>
-                <MaterialIcons name="edit" size={18} color={colors.CYAN_ACCENT} />
-                <Text style={styles.editCardTitle}>Edit Cinema Profile</Text>
+        <View style={styles.sheetOverlay} pointerEvents="box-none">
+          <TouchableWithoutFeedback
+            onPress={() => {
+              Keyboard.dismiss();
+              setIsEditModalVisible(false);
+            }}
+          >
+            <View style={styles.sheetBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <Animated.View
+            style={[
+              styles.keyboardContainer,
+              { marginBottom: keyboardAnim },
+            ]}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.editSheetCard,
+                {
+                  paddingBottom: isKeyboardVisible
+                    ? 20
+                    : Math.max(insets.bottom, 16) + 16,
+                },
+              ]}
+            >
+              {/* Top Atmospheric Gradient Sheen */}
+              <LinearGradient
+                colors={['rgba(6, 182, 212, 0.16)', 'rgba(15, 15, 26, 0.95)', colors.SURFACE_COLOR]}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 0.55 }}
+                style={StyleSheet.absoluteFillObject}
+                pointerEvents="none"
+              />
+
+              {/* Drag Handle Bar Pill */}
+              <View style={styles.sheetDragIndicatorWrap}>
+                <View style={styles.sheetDragIndicator} />
               </View>
-              <TouchableOpacity
-                onPress={() => setIsEditModalVisible(false)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <MaterialIcons name="close" size={20} color={colors.SUB_TITLE_COLOR} />
-              </TouchableOpacity>
+
+              <View style={styles.editHeaderRow}>
+                <View style={styles.editHeaderLeft}>
+                  <View style={styles.editIconBadge}>
+                    <MaterialIcons name="edit" size={18} color={colors.CYAN_ACCENT} />
+                  </View>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={styles.editCardTitle}>Edit Cinema Profile</Text>
+                    <Text style={styles.editCardSub} numberOfLines={1}>
+                      Your public handle in watch parties.
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.sheetCloseBtn}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setIsEditModalVisible(false);
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <MaterialIcons name="close" size={20} color={colors.SUB_TITLE_COLOR} />
+                </TouchableOpacity>
+              </View>
+
+              <TextInput
+                style={styles.editTextInput}
+                value={editUsername}
+                onChangeText={setEditUsername}
+                placeholder="Enter new username..."
+                placeholderTextColor="rgba(255, 255, 255, 0.35)"
+                autoCapitalize="none"
+                maxLength={24}
+              />
+
+              {/* Action Button: Single Full-Width Button */}
+              <View style={styles.editActionsRow}>
+                <TouchableOpacity
+                  style={styles.editSaveBtn}
+                  onPress={handleSaveUsername}
+                  disabled={isUpdatingUsername}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={[colors.PRIMARY_COLOR, colors.PURPLE_ACCENT]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.editSaveGradient}
+                  >
+                    {isUpdatingUsername ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <>
+                        <MaterialIcons name="check" size={18} color="#FFF" style={{ marginRight: 6 }} />
+                        <Text style={styles.editSaveText}>Save Changes</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
-
-            <Text style={styles.editCardSub}>
-              Choose a public username that friends will see in screening lounges.
-            </Text>
-
-            <TextInput
-              style={styles.editTextInput}
-              value={editUsername}
-              onChangeText={setEditUsername}
-              placeholder="Enter new username..."
-              placeholderTextColor="rgba(255, 255, 255, 0.35)"
-              autoCapitalize="none"
-              maxLength={24}
-            />
-
-            <View style={styles.editActionsRow}>
-              <TouchableOpacity
-                style={styles.editCancelBtn}
-                onPress={() => setIsEditModalVisible(false)}
-                activeOpacity={0.75}
-              >
-                <Text style={styles.editCancelText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.editSaveBtn}
-                onPress={handleSaveUsername}
-                disabled={isUpdatingUsername}
-                activeOpacity={0.85}
-              >
-                {isUpdatingUsername ? (
-                  <ActivityIndicator size="small" color={colors.TITLE_COLOR} />
-                ) : (
-                  <Text style={styles.editSaveText}>Save Changes</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
+          </Animated.View>
+        </View>
       </Modal>
     </View>
   );
@@ -1107,23 +1195,48 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ── 7. Edit Profile Modal ──
-  modalOverlay: {
+  // ── Edit Profile Bottom Sheet ───────────────────────────
+  sheetOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    justifyContent: 'flex-end',
   },
-  editCard: {
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+  },
+  keyboardContainer: {
     width: '100%',
-    maxWidth: 380,
+  },
+  editSheetCard: {
     backgroundColor: colors.SURFACE_COLOR,
-    borderRadius: 20,
-    borderWidth: 1,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.12)',
-    padding: 20,
-    gap: 14,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    position: 'relative',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 24,
+    elevation: 25,
+    gap: 12,
+  },
+  sheetDragIndicatorWrap: {
+    alignItems: 'center',
+    paddingVertical: 4,
+    marginBottom: 4,
+    width: '100%',
+  },
+  sheetDragIndicator: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
   },
   editHeaderRow: {
     flexDirection: 'row',
@@ -1133,7 +1246,26 @@ const styles = StyleSheet.create({
   editHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    flex: 1,
+  },
+  editIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sheetCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   editCardTitle: {
     fontSize: 16,
@@ -1141,9 +1273,9 @@ const styles = StyleSheet.create({
     color: colors.TITLE_COLOR,
   },
   editCardSub: {
-    fontSize: 12.5,
+    fontSize: 12,
     color: colors.SUB_TITLE_COLOR,
-    lineHeight: 18,
+    marginTop: 2,
   },
   editTextInput: {
     height: 48,
@@ -1157,37 +1289,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   editActionsRow: {
-    flexDirection: 'row',
-    gap: 10,
+    width: '100%',
     marginTop: 6,
-  },
-  editCancelBtn: {
-    flex: 1,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: colors.SURFACE_ELEVATED,
-    borderWidth: 1,
-    borderColor: colors.BORDER_SUBTLE,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  editCancelText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.SUB_TITLE_COLOR,
+    marginBottom: 4,
   },
   editSaveBtn: {
-    flex: 1,
-    height: 44,
+    width: '100%',
+    height: 48,
     borderRadius: 14,
-    backgroundColor: colors.PRIMARY_COLOR,
-    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  editSaveGradient: {
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    paddingHorizontal: 16,
   },
   editSaveText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.TITLE_COLOR,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFF',
+    letterSpacing: 0.3,
   },
 });
 

@@ -16,6 +16,7 @@ import {
   ActivityIndicator,
   Image,
   Modal,
+  Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CineVideoPlayer from '../../../components/video/CineVideoPlayer';
@@ -129,6 +130,45 @@ const StreamingScreen = ({ route, navigation }) => {
 
   // On-demand Notes Sheet state (Completely hidden from main screen by default)
   const [isNotesSheetVisible, setIsNotesSheetVisible] = useState(false);
+  const notesKeyboardAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!isNotesSheetVisible) {
+      notesKeyboardAnim.setValue(0);
+      return;
+    }
+
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      e => {
+        const h = e.endCoordinates.height;
+        const androidNavOffset = Platform.OS === 'android' ? Math.max(insets.bottom, 28) : 0;
+        Animated.spring(notesKeyboardAnim, {
+          toValue: h + androidNavOffset + 14,
+          tension: 80,
+          friction: 9,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        Animated.spring(notesKeyboardAnim, {
+          toValue: 0,
+          tension: 80,
+          friction: 9,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [isNotesSheetVisible, insets.bottom, notesKeyboardAnim]);
 
   // Up Next & Recommended Cinema for Solo mode
   const [recommendedMedia, setRecommendedMedia] = useState([]);
@@ -1986,14 +2026,31 @@ const StreamingScreen = ({ route, navigation }) => {
             onPress={() => setIsNotesSheetVisible(false)}
           />
 
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.sheetContentContainer}
+          <Animated.View
+            style={[
+              styles.sheetKeyboardContainer,
+              { marginBottom: notesKeyboardAnim },
+            ]}
+            pointerEvents="box-none"
           >
-            {/* Ambient Top Handle Bar */}
-            <View style={styles.sheetHandleBarWrap}>
-              <View style={styles.sheetHandleBar} />
-            </View>
+            <View
+              style={[
+                styles.sheetContentContainer,
+                { paddingBottom: Math.max(insets.bottom, 16) + 8 },
+              ]}
+            >
+              {/* Ambient Top Glow Linear Gradient */}
+              <View style={styles.sheetTopGlow} pointerEvents="none">
+                <LinearGradient
+                  colors={['rgba(6, 182, 212, 0.15)', 'rgba(124, 58, 237, 0.08)', 'transparent']}
+                  style={StyleSheet.absoluteFillObject}
+                />
+              </View>
+
+              {/* Ambient Top Handle Bar */}
+              <View style={styles.sheetHandleBarWrap}>
+                <View style={styles.sheetHandleBar} />
+              </View>
 
             {/* Sheet Header Row */}
             <View style={styles.sheetHeaderRow}>
@@ -2115,9 +2172,10 @@ const StreamingScreen = ({ route, navigation }) => {
                 </LinearGradient>
               </TouchableOpacity>
             </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
     </View>
   );
 };
@@ -3460,6 +3518,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.72)',
     justifyContent: 'flex-end',
   },
+  sheetKeyboardContainer: {
+    width: '100%',
+  },
+  sheetTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    overflow: 'hidden',
+  },
   sheetContentContainer: {
     backgroundColor: colors.SURFACE_COLOR,
     borderTopLeftRadius: 22,
@@ -3467,7 +3538,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(255, 255, 255, 0.1)',
     maxHeight: '75%',
-    paddingBottom: Platform.OS === 'ios' ? 24 : 10,
+    overflow: 'hidden',
   },
   sheetHandleBarWrap: {
     alignItems: 'center',

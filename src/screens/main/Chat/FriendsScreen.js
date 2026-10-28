@@ -18,6 +18,14 @@ import LinearGradient from 'react-native-linear-gradient';
 import colors from '../../../theme/Colors';
 import { auth, database } from '../../../config/firebase';
 import { showCineAlert } from '../../../components/CineAlert';
+import ChatLockBottomSheet from '../../../components/ChatLockBottomSheet';
+import {
+  getLockedUserIds,
+  lockChatForUser,
+  unlockChatForUser,
+  hasChatLockPasscode,
+  markSessionUnlocked,
+} from '../../../functions/chatLockService';
 
 // ──────────────────────────────────────────────────────────────
 //  Format Chat Time (WhatsApp-style: 10:45 AM, Yesterday, Day, Date)
@@ -123,6 +131,15 @@ const FriendsScreen = ({ navigation }) => {
   const [friendsList, setFriendsList] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
   const [chatsData, setChatsData] = useState({});
+  const [lockedUserIds, setLockedUserIds] = useState([]);
+  const [lockModalConfig, setLockModalConfig] = useState({
+    visible: false,
+    mode: 'unlock',
+    title: '',
+    subtitle: '',
+    targetUserName: '',
+    onSuccess: null,
+  });
 
   // Dynamic safe area top inset for Android & iOS notch protection
   const safeTopPadding = Math.max(
@@ -186,6 +203,12 @@ const FriendsScreen = ({ navigation }) => {
     useCallback(() => {
       const user = auth().currentUser;
       if (!user) return;
+
+      // Refresh locked chats
+      getLockedUserIds(user.uid).then((ids) => {
+        setLockedUserIds(ids);
+      });
+
       const db = database();
 
       // Refresh user_chats previews and unread counts
@@ -735,6 +758,250 @@ const FriendsScreen = ({ navigation }) => {
     });
   }, [friendsList, chatsData]);
 
+  const handleLockedChatPress = async (item) => {
+    const currentUid = auth().currentUser?.uid;
+    const friendId = item?.userId || item?.id;
+    const friendName = item?.username || item?.email?.split('@')[0] || 'User';
+    if (!currentUid || !friendId) return;
+
+    const hasPin = await hasChatLockPasscode(currentUid);
+    setLockModalConfig({
+      visible: true,
+      mode: hasPin ? 'unlock' : 'setup',
+      title: hasPin ? `Unlock @${friendName}` : 'Create Chat Passcode',
+      subtitle: hasPin
+        ? `Enter your passcode to unlock and open chat with @${friendName}`
+        : 'Set an alphanumeric passcode to protect your chats',
+      targetUserName: friendName,
+      onSuccess: () => {
+        markSessionUnlocked(friendId);
+        setLockModalConfig((prev) => ({ ...prev, visible: false }));
+        navigation.navigate('Chat', {
+          username: friendName,
+          userId: friendId,
+          avatar: item?.avatar,
+          chatId: chatsData[friendId]?.chatId,
+          isLocked: true,
+          isUnlocked: true,
+        });
+      },
+    });
+  };
+
+  const handleLongPressFriend = (item, isCurrentlyLocked) => {
+    const friendId = item?.userId || item?.id;
+    const friendName = item?.username || item?.email?.split('@')[0] || 'User';
+    const currentUid = auth().currentUser?.uid;
+    if (!currentUid || !friendId) return;
+
+    if (isCurrentlyLocked) {
+      setLockModalConfig({
+        visible: true,
+        mode: 'remove',
+        title: `Unlock @${friendName}`,
+        subtitle: `Enter your passcode to remove protection from @${friendName}.`,
+        targetUserName: friendName,
+        onSuccess: async () => {
+          const updated = await unlockChatForUser(currentUid, friendId, chatsData[friendId]?.chatId);
+          setLockedUserIds(updated);
+          setLockModalConfig((prev) => ({ ...prev, visible: false }));
+          showCineAlert({
+            title: 'Chat Unlocked',
+            message: `@${friendName} is now unblurred and in your main chats.`,
+            type: 'success',
+          });
+        },
+      });
+    } else {
+      setLockModalConfig({
+        visible: true,
+        mode: 'setup',
+        title: `Lock @${friendName}`,
+        subtitle: 'Set an alphanumeric passcode to safeguard your locked conversations.',
+        targetUserName: friendName,
+        onSuccess: async () => {
+          const updated = await lockChatForUser(currentUid, friendId, chatsData[friendId]?.chatId);
+          setLockedUserIds(updated);
+          setLockModalConfig((prev) => ({ ...prev, visible: false }));
+          showCineAlert({
+            title: 'Chat Locked',
+            message: `@${friendName} is now secured and covered with blur.`,
+            type: 'success',
+          });
+        },
+      });
+    }
+  };
+
+  const renderFriendItem = (item, isCurrentlyLocked = false) => {
+    const friendId = item?.userId || item?.id;
+    const isOnline = item?.status === 'online' || item?.status?.state === 'online';
+    const chat = chatsData[friendId];
+    const unreadCount = (chat && typeof chat.unreadCount === 'number') ? chat.unreadCount : 0;
+    const hasUnread = unreadCount > 0;
+    const lastMessage = chat?.lastMessage;
+    const lastTimestamp = chat?.lastMessageTimestamp;
+    const displayName = item?.username || item?.email?.split('@')[0] || 'User';
+
+    return (
+      <TouchableOpacity
+        key={friendId || item?.email}
+        style={[
+          styles.friendRowCard,
+          hasUnread && styles.friendRowCardUnread,
+          isCurrentlyLocked && styles.friendRowCardLocked,
+        ]}
+        activeOpacity={0.82}
+        onPress={() => {
+          if (isCurrentlyLocked) {
+            handleLockedChatPress(item);
+          } else {
+            navigation.navigate('Chat', {
+              username: displayName,
+              userId: friendId,
+              avatar: item?.avatar,
+              chatId: chat?.chatId,
+            });
+          }
+        }}
+        onLongPress={() => handleLongPressFriend(item, isCurrentlyLocked)}
+      >
+        <View style={styles.friendRowLeft}>
+          {/* Avatar */}
+          <TouchableOpacity
+            style={styles.friendAvatarBox}
+            activeOpacity={0.75}
+            onPress={() => {
+              if (isCurrentlyLocked) {
+                handleLockedChatPress(item);
+              } else {
+                navigation.navigate('FriendProfile', {
+                  username: displayName,
+                  userId: friendId,
+                  avatar: item?.avatar,
+                  status: item?.status,
+                });
+              }
+            }}
+          >
+            {isOnline && !isCurrentlyLocked && <PulsingRing />}
+            <View
+              style={[
+                styles.friendAvatar,
+                { backgroundColor: generateAvatarColor(displayName) },
+                isCurrentlyLocked && styles.friendAvatarLocked,
+              ]}
+            >
+              <Text style={[styles.avatarInitialText, isCurrentlyLocked && styles.avatarInitialTextLocked]}>
+                {(displayName || '?')[0]?.toUpperCase()}
+              </Text>
+            </View>
+            {isCurrentlyLocked ? (
+              <View style={styles.avatarLockBadge}>
+                <MaterialIcons name="lock" size={10} color={colors.FILM_GOLD} />
+              </View>
+            ) : (
+              <View
+                style={[
+                  styles.friendOnlineDot,
+                  { backgroundColor: isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
+                ]}
+              />
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.friendRowText}>
+            {/* Top row: Friend Name + Formatted Timestamp */}
+            <View style={styles.friendTopRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                <Text
+                  style={[
+                    styles.friendNameText,
+                    hasUnread && styles.friendNameTextUnread,
+                    isCurrentlyLocked && styles.friendNameTextLocked,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {displayName}
+                </Text>
+              </View>
+
+              {Boolean(lastTimestamp) && (
+                <Text
+                  style={[
+                    styles.friendTimeText,
+                    hasUnread && styles.friendTimeTextUnread,
+                    isCurrentlyLocked && styles.friendTimeTextLocked,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {formatChatTime(lastTimestamp)}
+                </Text>
+              )}
+            </View>
+
+            {/* Bottom row: Clean Message Snippet + Unread Count Badge */}
+            <View style={styles.friendBottomRow}>
+              <Text
+                style={[
+                  styles.friendStatusSubtext,
+                  hasUnread && styles.friendStatusSubtextUnread,
+                  isCurrentlyLocked && styles.friendStatusSubtextLocked,
+                ]}
+                numberOfLines={1}
+              >
+                {isCurrentlyLocked
+                  ? 'Locked chat • Tap to enter passcode'
+                  : lastMessage
+                  ? lastMessage
+                  : isOnline
+                  ? 'Online • Ready to chat'
+                  : 'Offline'}
+              </Text>
+
+              {isCurrentlyLocked ? (
+                <View style={styles.lockedRowActionWrap}>
+                  <MaterialIcons name="chevron-right" size={18} color={colors.FILM_GOLD} />
+                </View>
+              ) : (
+                hasUnread && (
+                  <View style={styles.unreadCounterBadge}>
+                    <Text style={styles.unreadCounterText}>
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </Text>
+                  </View>
+                )
+              )}
+            </View>
+          </View>
+        </View>
+
+        {/* ── Frosted Glass Blur Privacy Overlay ── */}
+        {isCurrentlyLocked && (
+          <View style={styles.lockedBlurGlassOverlay} pointerEvents="none">
+            <LinearGradient
+              colors={[
+                'rgba(22, 22, 37, 0.40)',
+                'rgba(15, 15, 26, 0.60)',
+                'rgba(8, 8, 16, 0.72)',
+              ]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.lockedBlurGradientFill}
+            >
+              <LinearGradient
+                colors={['rgba(255, 180, 0, 0.08)', 'rgba(124, 58, 237, 0.04)', 'transparent']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0.8, y: 1 }}
+                style={styles.lockedGlassSheen}
+              />
+            </LinearGradient>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" translucent />
@@ -886,9 +1153,6 @@ const FriendsScreen = ({ navigation }) => {
                     <Text style={styles.friendNameText} numberOfLines={1}>
                       {(auth().currentUser?.displayName || auth().currentUser?.email?.split('@')[0] || 'You')} (You)
                     </Text>
-                    <View style={styles.selfTag}>
-                      <Text style={styles.selfTagText}>Personal</Text>
-                    </View>
                   </View>
                   <Text style={styles.selfChatSubtext} numberOfLines={1}>
                     Message yourself • Saved notes & media
@@ -900,120 +1164,10 @@ const FriendsScreen = ({ navigation }) => {
             </TouchableOpacity>
 
             {sortedFriends.length > 0 ? (
-              sortedFriends.map(item => {
+              sortedFriends.map((item) => {
                 const friendId = item?.userId || item?.id;
-                const isOnline = item?.status === 'online' || item?.status?.state === 'online';
-                const chat = chatsData[friendId];
-                const unreadCount = (chat && typeof chat.unreadCount === 'number') ? chat.unreadCount : 0;
-                const hasUnread = unreadCount > 0;
-                const lastMessage = chat?.lastMessage;
-                const lastTimestamp = chat?.lastMessageTimestamp;
-                const currentUid = auth().currentUser?.uid;
-                const isSentByMe = Boolean(chat?.lastSenderId && currentUid && chat.lastSenderId === currentUid);
-
-                return (
-                  <TouchableOpacity
-                    key={friendId || item?.email}
-                    style={[
-                      styles.friendRowCard,
-                      hasUnread && styles.friendRowCardUnread,
-                    ]}
-                    activeOpacity={0.75}
-                    onPress={() =>
-                      navigation.navigate('Chat', {
-                        username: item?.username || item?.email?.split('@')[0],
-                        userId: friendId,
-                        avatar: item?.avatar,
-                        chatId: chat?.chatId,
-                      })
-                    }
-                  >
-                    <View style={styles.friendRowLeft}>
-                      {/* Click profile icon -> navigate to FriendProfileScreen */}
-                      <TouchableOpacity
-                        style={styles.friendAvatarBox}
-                        activeOpacity={0.75}
-                        onPress={() =>
-                          navigation.navigate('FriendProfile', {
-                            username: item?.username || item?.email?.split('@')[0],
-                            userId: friendId,
-                            avatar: item?.avatar,
-                            status: item?.status,
-                          })
-                        }
-                      >
-                        {isOnline && <PulsingRing />}
-                        <View
-                          style={[
-                            styles.friendAvatar,
-                            { backgroundColor: generateAvatarColor(item?.username || item?.email || '') },
-                          ]}
-                        >
-                          <Text style={styles.avatarInitialText}>
-                            {(item?.username || item?.email || '?')[0]?.toUpperCase()}
-                          </Text>
-                        </View>
-                        <View
-                          style={[
-                            styles.friendOnlineDot,
-                            { backgroundColor: isOnline ? colors.ACCEPT_GREEN : colors.MUTED_COLOR },
-                          ]}
-                        />
-                      </TouchableOpacity>
-
-                      <View style={styles.friendRowText}>
-                        {/* Top row: Friend Name + Formatted Timestamp */}
-                        <View style={styles.friendTopRow}>
-                          <Text
-                            style={[
-                              styles.friendNameText,
-                              hasUnread && styles.friendNameTextUnread,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {item?.username || item?.email?.split('@')[0]}
-                          </Text>
-                          {Boolean(lastTimestamp) && (
-                            <Text
-                              style={[
-                                styles.friendTimeText,
-                                hasUnread && styles.friendTimeTextUnread,
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {formatChatTime(lastTimestamp)}
-                            </Text>
-                          )}
-                        </View>
-
-                        {/* Bottom row: Clean Message Snippet + WhatsApp Unread Count Badge */}
-                        <View style={styles.friendBottomRow}>
-                          <Text
-                            style={[
-                              styles.friendStatusSubtext,
-                              hasUnread && styles.friendStatusSubtextUnread,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {lastMessage
-                              ? lastMessage
-                              : isOnline
-                                ? 'Online • Ready to chat'
-                                : 'Offline'}
-                          </Text>
-
-                          {hasUnread && (
-                            <View style={styles.unreadCounterBadge}>
-                              <Text style={styles.unreadCounterText}>
-                                {unreadCount > 99 ? '99+' : unreadCount}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                );
+                const isLocked = lockedUserIds.includes(friendId);
+                return renderFriendItem(item, isLocked);
               })
             ) : (
               <View style={styles.emptyBox}>
@@ -1139,6 +1293,23 @@ const FriendsScreen = ({ navigation }) => {
           )
         )}
       </ScrollView>
+
+      {/* Alphanumeric Chat Lock Bottom Sheet */}
+      <ChatLockBottomSheet
+        visible={lockModalConfig.visible}
+        mode={lockModalConfig.mode}
+        title={lockModalConfig.title}
+        subtitle={lockModalConfig.subtitle}
+        targetUserName={lockModalConfig.targetUserName}
+        onSuccess={() => {
+          if (lockModalConfig.onSuccess) {
+            lockModalConfig.onSuccess();
+          } else {
+            setLockModalConfig((prev) => ({ ...prev, visible: false }));
+          }
+        }}
+        onClose={() => setLockModalConfig((prev) => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 };
@@ -1147,6 +1318,77 @@ const FriendsScreen = ({ navigation }) => {
 //  Styles
 // ──────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
+  // ── Locked Chats Frosted Blur Styles ──────
+  friendRowCardLocked: {
+    borderColor: 'rgba(255, 180, 0, 0.32)',
+    borderLeftWidth: 3.5,
+    borderLeftColor: colors.FILM_GOLD,
+    backgroundColor: 'rgba(22, 22, 37, 0.75)',
+  },
+  friendAvatarLocked: {
+    opacity: 0.65,
+  },
+  avatarInitialTextLocked: {
+    opacity: 0.75,
+  },
+  avatarLockBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 6,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    borderWidth: 1.5,
+    borderColor: colors.FILM_GOLD,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  friendNameTextLocked: {
+    color: 'rgba(255, 255, 255, 0.75)',
+  },
+  lockedBadgeMini: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginLeft: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255, 180, 0, 0.16)',
+    borderWidth: 0.8,
+    borderColor: 'rgba(255, 180, 0, 0.35)',
+  },
+  lockedBadgeMiniText: {
+    color: colors.FILM_GOLD,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  friendTimeTextLocked: {
+    color: 'rgba(255, 180, 0, 0.75)',
+    fontWeight: '600',
+  },
+  friendStatusSubtextLocked: {
+    color: colors.FILM_GOLD,
+    fontSize: 11.5,
+    fontWeight: '500',
+  },
+  lockedRowActionWrap: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  lockedBlurGlassOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  lockedBlurGradientFill: {
+    flex: 1,
+  },
+  lockedGlassSheen: {
+    ...StyleSheet.absoluteFillObject,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.BACKGROUND_COLOR,
@@ -1532,6 +1774,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.INPUTBOX_BORDER_COLOR,
+    overflow: 'hidden',
+    position: 'relative',
   },
   friendRowLeft: {
     flexDirection: 'row',

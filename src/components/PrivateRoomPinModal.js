@@ -10,8 +10,8 @@ import {
   Easing,
   Platform,
   TouchableWithoutFeedback,
-  KeyboardAvoidingView,
   Image,
+  Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -28,6 +28,41 @@ const PrivateRoomPinModal = ({ visible, room, onClose, onSuccess }) => {
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const sheetSlideAnim = useRef(new Animated.Value(200)).current;
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const keyboardAnim = useRef(new Animated.Value(0)).current;
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  // Dynamic Keyboard tracking for smooth sheet lift on Android & iOS
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      const h = e?.endCoordinates?.height || 0;
+      setIsKeyboardVisible(true);
+      const androidNavOffset = Platform.OS === 'android' ? Math.max(insets.bottom, 28) : 0;
+      const targetHeight = h + androidNavOffset + 14;
+
+      Animated.timing(keyboardAnim, {
+        toValue: targetHeight,
+        duration: Platform.OS === 'ios' ? (e?.duration || 250) : 180,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, (e) => {
+      setIsKeyboardVisible(false);
+      Animated.timing(keyboardAnim, {
+        toValue: 0,
+        duration: Platform.OS === 'ios' ? (e?.duration || 220) : 150,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [insets.bottom]);
 
   useEffect(() => {
     if (visible) {
@@ -128,22 +163,29 @@ const PrivateRoomPinModal = ({ visible, room, onClose, onSuccess }) => {
       visible={visible}
       onRequestClose={onClose}
     >
-      <TouchableWithoutFeedback onPress={onClose}>
-        <Animated.View style={[styles.backdrop, { opacity: backdropAnim }]}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.keyboardAvoid}
+      <View style={styles.sheetOverlay} pointerEvents="box-none">
+        <TouchableWithoutFeedback onPress={onClose}>
+          <Animated.View style={[styles.backdrop, { opacity: backdropAnim }]} />
+        </TouchableWithoutFeedback>
+
+        <Animated.View
+          style={[
+            styles.keyboardContainer,
+            { marginBottom: keyboardAnim },
+          ]}
+          pointerEvents="box-none"
+        >
+          <Animated.View
+            style={[
+              styles.sheetContainer,
+              {
+                transform: [{ translateY: sheetSlideAnim }, { translateX: shakeAnim }],
+                paddingBottom: isKeyboardVisible
+                  ? 20
+                  : Math.max(insets.bottom, 16) + 16,
+              },
+            ]}
           >
-            <TouchableWithoutFeedback>
-              <Animated.View
-                style={[
-                  styles.sheetContainer,
-                  {
-                    transform: [{ translateY: sheetSlideAnim }, { translateX: shakeAnim }],
-                    paddingBottom: Math.max(insets.bottom, 16) + 12,
-                  },
-                ]}
-              >
                 {/* Ambient Top Glow Linear Gradient */}
                 <View style={styles.sheetTopGlow} pointerEvents="none">
                   <LinearGradient
@@ -281,22 +323,23 @@ const PrivateRoomPinModal = ({ visible, room, onClose, onSuccess }) => {
                     />
                   </LinearGradient>
                 </TouchableOpacity>
-              </Animated.View>
-            </TouchableWithoutFeedback>
-          </KeyboardAvoidingView>
-        </Animated.View>
-      </TouchableWithoutFeedback>
-    </Modal>
+            </Animated.View>
+          </Animated.View>
+        </View>
+      </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  backdrop: {
+  sheetOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(4, 4, 10, 0.85)',
     justifyContent: 'flex-end',
   },
-  keyboardAvoid: {
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4, 4, 10, 0.85)',
+  },
+  keyboardContainer: {
     width: '100%',
   },
   sheetContainer: {

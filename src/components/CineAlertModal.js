@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -73,6 +74,41 @@ const CineAlertModal = () => {
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(350)).current;
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
+  const keyboardAnim = useRef(new Animated.Value(0)).current;
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  // Dynamic Keyboard tracking for smooth sheet lift on Android & iOS
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      const h = e?.endCoordinates?.height || 0;
+      setIsKeyboardVisible(true);
+      const androidNavOffset = Platform.OS === 'android' ? Math.max(insets.bottom, 28) : 0;
+      const targetHeight = h + androidNavOffset + 14;
+
+      Animated.timing(keyboardAnim, {
+        toValue: targetHeight,
+        duration: Platform.OS === 'ios' ? (e?.duration || 250) : 180,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, (e) => {
+      setIsKeyboardVisible(false);
+      Animated.timing(keyboardAnim, {
+        toValue: 0,
+        duration: Platform.OS === 'ios' ? (e?.duration || 220) : 150,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [insets.bottom]);
 
   useEffect(() => {
     registerAlertListener((config) => {
@@ -100,12 +136,13 @@ const CineAlertModal = () => {
 
   useEffect(() => {
     if (alertConfig) {
-      const isBottomSheet = alertConfig.presentationStyle !== 'center';
+      // Cine-Sync Rule 8: Always enforce bottom sheet presentation (never centered modals)
+      const isBottomSheet = true;
 
       // Reset values
       backdropAnim.setValue(0);
-      slideAnim.setValue(isBottomSheet ? 350 : 0);
-      scaleAnim.setValue(isBottomSheet ? 1 : 0.88);
+      slideAnim.setValue(350);
+      keyboardAnim.setValue(0);
 
       Animated.parallel([
         Animated.timing(backdropAnim, {
@@ -135,7 +172,7 @@ const CineAlertModal = () => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
 
-    const isBottomSheet = alertConfig?.presentationStyle !== 'center';
+    const isBottomSheet = true;
     const submittedValue = (alertConfig?.roomList && alertConfig.roomList.length > 0)
       ? (selectedRoomRef.current || alertConfig.roomList[0])
       : inputValueRef.current;
@@ -190,7 +227,8 @@ const CineAlertModal = () => {
     inputPlaceholder = 'Enter @username or email...',
   } = alertConfig;
 
-  const isBottomSheet = presentationStyle !== 'center';
+  // Cine-Sync Rule 8: Always Bottom Sheet
+  const isBottomSheet = true;
 
   // Variant theme mapping
   const getTheme = () => {
@@ -232,14 +270,14 @@ const CineAlertModal = () => {
         };
       case 'action':
         return {
-          iconName: icon || 'movie',
+          iconName: icon || 'info-outline',
           iconColor: colors.CYAN_ACCENT,
           iconBg: colors.SURFACE_ELEVATED,
           iconBorder: 'rgba(6, 182, 212, 0.35)',
           glowShadow: 'rgba(6, 182, 212, 0.3)',
           btnGradient: [colors.PRIMARY_COLOR, colors.CYAN_ACCENT],
           btnTextColor: '#FFFFFF',
-          btnIcon: 'sparkles',
+          btnIcon: alertConfig.btnIcon !== undefined ? alertConfig.btnIcon : 'arrow-forward',
         };
       case 'success':
         return {
@@ -305,10 +343,7 @@ const CineAlertModal = () => {
       statusBarTranslucent
       onRequestClose={handleCancelPress}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.modalOverlay}
-      >
+      <View style={styles.sheetOverlay} pointerEvents="box-none">
         {/* Animated Dark Frosted Backdrop */}
         <TouchableWithoutFeedback onPress={handleCancelPress}>
           <Animated.View
@@ -324,25 +359,24 @@ const CineAlertModal = () => {
           />
         </TouchableWithoutFeedback>
 
-        {/* Content Container (Bottom Sheet or Centered Card) */}
-        <View
+        {/* Dynamic Keyboard-Lifting Container */}
+        <Animated.View
           style={[
-            styles.containerPlacement,
-            isBottomSheet ? styles.bottomSheetPlacement : styles.centerPlacement,
+            styles.keyboardContainer,
+            { marginBottom: keyboardAnim },
           ]}
           pointerEvents="box-none"
         >
           <Animated.View
             style={[
               styles.cardBase,
-              isBottomSheet ? styles.bottomSheetCard : styles.centerCard,
-              isBottomSheet
-                ? { transform: [{ translateY: slideAnim }] }
-                : {
-                    transform: [{ scale: scaleAnim }],
-                    opacity: backdropAnim,
-                  },
-              { paddingBottom: isBottomSheet ? Math.max(insets.bottom, 16) + 16 : 24 },
+              styles.bottomSheetCard,
+              { transform: [{ translateY: slideAnim }] },
+              {
+                paddingBottom: isKeyboardVisible
+                  ? 20
+                  : Math.max(insets.bottom, 16) + 16,
+              },
             ]}
           >
             {/* Top Atmospheric Purple/Midnight Gradient Sheen */}
@@ -556,16 +590,23 @@ const CineAlertModal = () => {
               </TouchableOpacity>
             </View>
           </Animated.View>
-        </View>
-      </KeyboardAvoidingView>
+        </Animated.View>
+      </View>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  keyboardContainer: {
+    width: '100%',
+  },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
