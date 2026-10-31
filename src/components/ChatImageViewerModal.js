@@ -239,6 +239,14 @@ const ZoomableSlide = memo(({
     <View style={[styles.slideContainer, { width: screenWidth, height: screenHeight }]}>
       {loading ? (
         <View style={styles.loaderWrap}>
+          {item.microThumb ? (
+            <Image
+              source={{ uri: item.microThumb }}
+              style={[StyleSheet.absoluteFillObject, { opacity: 0.55 }]}
+              blurRadius={Platform.OS === 'ios' ? 12 : 2}
+              resizeMode="contain"
+            />
+          ) : null}
           <ActivityIndicator size="large" color={colors.CYAN_ACCENT} />
           <Text style={styles.loaderText}>Loading photo...</Text>
         </View>

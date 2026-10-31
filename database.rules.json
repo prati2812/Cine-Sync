@@ -20,6 +20,12 @@
         ".write": "auth != null"
       }
     },
+    "user_chat_locks": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId"
+      }
+    },
     "chats": {
       "$chatId": {
         ".read": "auth != null",
@@ -70,6 +76,13 @@
       }
     },
     "media_blobs": {
+      ".read": "auth != null",
+      ".indexOn": ["senderId", "createdAt"],
+      "$mediaId": {
+        ".write": "auth != null"
+      }
+    },
+    "media_relay": {
       ".read": "auth != null",
       ".indexOn": ["senderId", "createdAt"],
       "$mediaId": {

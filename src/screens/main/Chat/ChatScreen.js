@@ -15,6 +15,7 @@ import {
   PermissionsAndroid,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Keyboard,
   Modal,
   Dimensions,
   Alert,
@@ -38,6 +39,7 @@ import { getYouTubeThumbnailDetails } from '../../../functions';
 import LinkPreviewCard, { extractFirstUrl } from '../../../components/LinkPreviewCard';
 import ChatLockBottomSheet from '../../../components/ChatLockBottomSheet';
 import ChatImageViewerModal from '../../../components/ChatImageViewerModal';
+import { captureRef } from 'react-native-view-shot';
 import {
   isChatLockedForUser,
   lockChatForUser,
@@ -277,7 +279,7 @@ const ChatImageThumbnail = ({
 
     if (item.mediaId) {
       setLoading(true);
-      resolveMediaUri(item.mediaId, item.imageUri)
+      resolveMediaUri(item.mediaId, item.imageUri, !isMyMessage)
         .then((uri) => {
           if (isMounted) {
             setResolvedUri(uri);
@@ -294,7 +296,7 @@ const ChatImageThumbnail = ({
     return () => {
       isMounted = false;
     };
-  }, [item.mediaId, item.imageUri]);
+  }, [item.mediaId, item.imageUri, isMyMessage]);
 
   // Dynamically calculate aspect ratio to avoid letterboxing or empty space
   useEffect(() => {
@@ -304,7 +306,7 @@ const ChatImageThumbnail = ({
         (w, h) => {
           if (w && h) setAspectRatio(w / h);
         },
-        () => {}
+        () => { }
       );
     }
   }, [resolvedUri, item.width, item.height]);
@@ -345,9 +347,57 @@ const ChatImageThumbnail = ({
       )}
 
       {loading ? (
-        <View style={[styles.imagePlaceholder, { width: cardWidth, height: 180 }]}>
-          <ActivityIndicator size="small" color={colors.CYAN_ACCENT} />
-          <Text style={styles.imagePlaceholderText}>Loading photo...</Text>
+        <View style={{ width: cardWidth, height: dynamicHeight, position: 'relative', overflow: 'hidden' }}>
+          {item.microThumb ? (
+            <Image
+              source={{ uri: item.microThumb }}
+              style={[
+                styles.imageThumbnail,
+                {
+                  width: cardWidth,
+                  height: dynamicHeight,
+                  borderBottomLeftRadius: hasCaption ? 0 : (!isMyMessage ? 4 : 15),
+                  borderBottomRightRadius: hasCaption ? 0 : (isMyMessage ? 4 : 15),
+                },
+              ]}
+              blurRadius={Platform.OS === 'ios' ? 12 : 2}
+              resizeMode="cover"
+            />
+          ) : (
+            <LinearGradient
+              colors={['rgba(124, 58, 237, 0.22)', 'rgba(0, 122, 255, 0.15)', colors.SURFACE_ELEVATED]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[
+                styles.imageThumbnail,
+                {
+                  width: cardWidth,
+                  height: dynamicHeight,
+                  borderBottomLeftRadius: hasCaption ? 0 : (!isMyMessage ? 4 : 15),
+                  borderBottomRightRadius: hasCaption ? 0 : (isMyMessage ? 4 : 15),
+                },
+              ]}
+            />
+          )}
+
+          {/* WhatsApp-Style Centered Frosted Progress Circle */}
+          <View style={styles.whatsappProgressOverlay}>
+            <View style={styles.whatsappProgressCircle}>
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            </View>
+          </View>
+
+          {/* Floating Timestamp */}
+          {!hasCaption && (
+            <View style={styles.imageFloatingTimestampPill}>
+              <Text style={styles.imageFloatingTimestampText}>
+                {new Date(item.timestamp || Date.now()).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+            </View>
+          )}
         </View>
       ) : resolvedUri ? (
         <View style={{ width: cardWidth, height: dynamicHeight, position: 'relative' }}>
@@ -931,6 +981,72 @@ const ChatScreen = ({ route, navigation }) => {
   const [highlightedMessageId, setHighlightedMessageId] = useState(null);
   const highlightTimeoutRef = useRef(null);
   const messageInputRef = useRef(null);
+  const photoPreviewImageRef = useRef(null);
+
+  // ── Keyboard Visibility & Height Handling (Android & iOS) ──
+  const keyboardHeightAnim = useRef(new Animated.Value(0)).current;
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setIsKeyboardVisible(true);
+      if (Platform.OS === 'android') {
+        const h = e?.endCoordinates?.height || 0;
+        // On Android with translucent status bar, system gesture/navigation bar inset
+        // is not included in the reported IME keyboard height. We include insets.bottom
+        // (min 28px) plus an aesthetic cushion to guarantee the input bar is completely clear.
+        const androidNavOffset = Math.max(insets.bottom, 28);
+        const targetHeight = h + androidNavOffset + 10;
+        Animated.timing(keyboardHeightAnim, {
+          toValue: targetHeight,
+          duration: 150,
+          useNativeDriver: false,
+        }).start(() => {
+          requestAnimationFrame(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          });
+        });
+      }
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 180);
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setIsKeyboardVisible(false);
+      if (Platform.OS === 'android') {
+        Animated.timing(keyboardHeightAnim, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: false,
+        }).start(() => {
+          requestAnimationFrame(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          });
+        });
+      }
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 180);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 240);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [keyboardHeightAnim, insets.bottom]);
 
   useEffect(() => {
     return () => {
@@ -1447,13 +1563,16 @@ const ChatScreen = ({ route, navigation }) => {
         }));
         messagesList.sort((a, b) => a.timestamp - b.timestamp);
 
-        // Reconcile pending optimistic messages
+        // Reconcile pending optimistic messages (text, photos & images)
         if (pendingMessagesRef.current.size > 0 && currentUid) {
           pendingMessagesRef.current.forEach((pendingMsg, pId) => {
             const confirmed = messagesList.some(
               (m) =>
                 m.senderId === currentUid &&
-                m.text === pendingMsg.text &&
+                (
+                  (m.type === 'image' && pendingMsg.type === 'image') ||
+                  (m.text && m.text === pendingMsg.text)
+                ) &&
                 Math.abs((m.timestamp || 0) - pendingMsg.timestamp) < 60000
             );
             if (confirmed) {
@@ -1780,6 +1899,7 @@ const ChatScreen = ({ route, navigation }) => {
 
   // ── Long Press Message Action Handlers ──
   const handleMessageLongPress = (msg) => {
+    Keyboard.dismiss();
     setSelectedMessage(msg);
     setShowMessageActionModal(true);
   };
@@ -1898,15 +2018,24 @@ const ChatScreen = ({ route, navigation }) => {
       const result = await launchCamera({
         mediaType: 'photo',
         cameraType: 'back',
-        quality: 0.6,
-        maxWidth: 720,
-        maxHeight: 720,
+        quality: 1.0,
         includeBase64: true,
         saveToPhotos: false,
       });
 
       if (result.didCancel || !result.assets || result.assets.length === 0) return;
       const asset = result.assets[0];
+
+      // Safety check for RTDB 10MB node size ceiling (~6.8MB raw file)
+      const MAX_RAW_BYTES = 6.8 * 1024 * 1024;
+      if (asset.fileSize && asset.fileSize > MAX_RAW_BYTES) {
+        showCineAlert({
+          title: 'Photo Too Large',
+          message: 'Captured photo exceeds the 6.8MB uncompressed relay limit. Please take another shot.',
+          type: 'warning',
+        });
+        return;
+      }
 
       let base64String = asset.base64;
       if (!base64String && asset.uri) {
@@ -1939,23 +2068,37 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
-  // Launch Gallery with multi-select support (selectionLimit: 0)
+  // Launch Gallery with multi-select support (selectionLimit: 0) and 100% uncompressed quality
   const handlePickGallery = async () => {
     setShowAttachments(false);
     try {
       const result = await launchImageLibrary({
         mediaType: 'photo',
         selectionLimit: 0, // 0 allows selecting multiple images
-        quality: 0.7,
-        maxWidth: 1280,
-        maxHeight: 1280,
+        quality: 1.0, // 100% Uncompressed original quality
         includeBase64: true,
       });
 
       if (result.didCancel || !result.assets || result.assets.length === 0) return;
 
+      // Filter out files exceeding RTDB relay threshold (6.8MB raw = ~9.2MB base64)
+      const MAX_RAW_BYTES = 6.8 * 1024 * 1024;
+      const validAssets = result.assets.filter((asset) => {
+        if (asset.fileSize && asset.fileSize > MAX_RAW_BYTES) {
+          showCineAlert({
+            title: 'Photo Too Large',
+            message: `"${asset.fileName || 'Photo'}" exceeds the 6.8MB uncompressed relay limit.`,
+            type: 'warning',
+          });
+          return false;
+        }
+        return true;
+      });
+
+      if (validAssets.length === 0) return;
+
       const photoItems = await Promise.all(
-        result.assets.map(async (asset) => {
+        validAssets.map(async (asset) => {
           let base64String = asset.base64;
           if (!base64String && asset.uri) {
             try {
@@ -1991,7 +2134,8 @@ const ChatScreen = ({ route, navigation }) => {
 
   // Send photo(s) to chat (decoupled media_blobs in RTDB + local disk cache)
   const handleSendPhoto = async () => {
-    if (!selectedPhotos || selectedPhotos.length === 0 || !chatId || isSendingPhoto) return;
+    const effectiveChatId = chatId || chatIdRef.current || route.params?.chatId;
+    if (!selectedPhotos || selectedPhotos.length === 0 || !effectiveChatId || isSendingPhoto) return;
     const currentUser = auth().currentUser;
     if (!currentUser) return;
 
@@ -2001,6 +2145,25 @@ const ChatScreen = ({ route, navigation }) => {
     const sendAsViewOnce = isViewOnce && photosToSend.length === 1;
     const activeReply = replyingToMessage;
 
+    // Capture tiny microThumb from active preview before closing modal (~200 bytes for instant blurry preview)
+    let activeMicroThumb = '';
+    try {
+      if (photoPreviewImageRef.current) {
+        activeMicroThumb = await Promise.race([
+          captureRef(photoPreviewImageRef.current, {
+            format: 'jpg',
+            quality: 0.15,
+            width: 28,
+            height: 28,
+            result: 'data-uri',
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('captureRef timeout')), 1000)),
+        ]);
+      }
+    } catch (captureErr) {
+      console.warn('[ChatScreen] microThumb capture warning:', captureErr);
+    }
+
     // Dismiss preview modal immediately
     setShowPhotoPreviewModal(false);
     setSelectedPhotos([]);
@@ -2009,8 +2172,52 @@ const ChatScreen = ({ route, navigation }) => {
     setIsViewOnce(false);
     setReplyingToMessage(null);
 
+    // Optimistically insert image message bubbles immediately for zero UI lag (instant feedback)
+    const optimisticMessages = photosToSend.map((photo, i) => {
+      const tempId = `temp_photo_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
+      const optimisticMsg = {
+        id: tempId,
+        type: 'image',
+        mediaId: '',
+        imageUri: photo.previewUri || photo.uri, // Instant local preview on sender device
+        caption: i === 0 ? caption : '',
+        viewOnce: sendAsViewOnce,
+        opened: false,
+        senderId: currentUser.uid,
+        timestamp: Date.now() + i,
+        seen: isSelfChat ? true : false,
+        status: isSelfChat ? 'seen' : 'sending',
+        pending: true,
+        width: Number(photo.width) || 800,
+        height: Number(photo.height) || 800,
+        microThumb: activeMicroThumb || photo.microThumb || '',
+        ...(i === 0 &&
+          activeReply && {
+          replyTo: {
+            id: activeReply.id || '',
+            senderId: activeReply.senderId || '',
+            senderName: activeReply.senderId === currentUser.uid ? 'You' : (otherUsername || 'User'),
+            text:
+              activeReply.type === 'image' || activeReply.type === 'photo'
+                ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
+                : (activeReply.text || 'Message'),
+            type: activeReply.type || 'text',
+            mediaId: activeReply.mediaId || '',
+          },
+        }),
+      };
+      pendingMessagesRef.current.set(tempId, optimisticMsg);
+      return optimisticMsg;
+    });
+
+    setMessages((prev) => [...prev, ...optimisticMessages]);
+    prevMessagesCountRef.current += optimisticMessages.length;
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    });
+
     try {
-      const messagesRef = database().ref(`chats/${chatId}/messages`);
+      const messagesRef = database().ref(`chats/${effectiveChatId}/messages`);
 
       for (let i = 0; i < photosToSend.length; i++) {
         const photo = photosToSend[i];
@@ -2022,29 +2229,30 @@ const ChatScreen = ({ route, navigation }) => {
           type: 'image',
           mediaId: mediaId || '',
           imageUri: '', // Decoupled from message payload: keeps messages under 1KB
-          caption: i === 0 ? caption : '', // First photo holds user caption
-          viewOnce: sendAsViewOnce,
+          caption: (i === 0 ? caption : '') || '', // First photo holds user caption
+          viewOnce: Boolean(sendAsViewOnce),
           opened: false,
           senderId: currentUser.uid,
           timestamp: database.ServerValue.TIMESTAMP,
           seen: isSelfChat ? true : false,
           status: isSelfChat ? 'seen' : 'sent',
-          width: photo.width,
-          height: photo.height,
+          width: Number(photo.width) || 800,
+          height: Number(photo.height) || 800,
+          microThumb: activeMicroThumb || photo.microThumb || '',
           ...(i === 0 &&
             activeReply && {
-              replyTo: {
-                id: activeReply.id,
-                senderId: activeReply.senderId,
-                senderName: activeReply.senderId === currentUser.uid ? 'You' : otherUsername,
-                text:
-                  activeReply.type === 'image' || activeReply.type === 'photo'
-                    ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
-                    : (activeReply.text || 'Message'),
-                type: activeReply.type || 'text',
-                mediaId: activeReply.mediaId || '',
-              },
-            }),
+            replyTo: {
+              id: activeReply.id || '',
+              senderId: activeReply.senderId || '',
+              senderName: activeReply.senderId === currentUser.uid ? 'You' : (otherUsername || 'User'),
+              text:
+                activeReply.type === 'image' || activeReply.type === 'photo'
+                  ? (activeReply.caption ? `📷 ${activeReply.caption}` : '📷 Photo')
+                  : (activeReply.text || 'Message'),
+              type: activeReply.type || 'text',
+              mediaId: activeReply.mediaId || '',
+            },
+          }),
         };
 
         await newMsgRef.set(messagePayload);
@@ -2054,19 +2262,19 @@ const ChatScreen = ({ route, navigation }) => {
       const previewText = sendAsViewOnce
         ? '📷 View-once photo'
         : photosToSend.length > 1
-        ? `📷 ${photosToSend.length} Photos`
-        : (caption ? `📷 ${caption}` : '📷 Photo');
+          ? `📷 ${photosToSend.length} Photos`
+          : (caption ? `📷 ${caption}` : '📷 Photo');
 
       const updates = {};
-      updates[`user_chats/${currentUser.uid}/${chatId}/lastMessage`] = previewText;
-      updates[`user_chats/${currentUser.uid}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-      updates[`user_chats/${currentUser.uid}/${chatId}/lastSenderId`] = currentUser.uid;
-      updates[`user_chats/${currentUser.uid}/${chatId}/unreadCount`] = 0;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessage`] = previewText;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+      updates[`user_chats/${currentUser.uid}/${effectiveChatId}/unreadCount`] = 0;
       if (otherUserId && !isSelfChat) {
-        updates[`user_chats/${otherUserId}/${chatId}/lastMessage`] = previewText;
-        updates[`user_chats/${otherUserId}/${chatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
-        updates[`user_chats/${otherUserId}/${chatId}/lastSenderId`] = currentUser.uid;
-        updates[`user_chats/${otherUserId}/${chatId}/unreadCount`] = database.ServerValue.increment(photosToSend.length);
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessage`] = previewText;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastMessageTimestamp`] = database.ServerValue.TIMESTAMP;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/lastSenderId`] = currentUser.uid;
+        updates[`user_chats/${otherUserId}/${effectiveChatId}/unreadCount`] = database.ServerValue.increment(photosToSend.length);
       }
       await database().ref().update(updates);
     } catch (error) {
@@ -2106,7 +2314,7 @@ const ChatScreen = ({ route, navigation }) => {
     // Resolve media URI on-demand (checks local disk cache first, else fetches once from media_blobs)
     let uri = item.imageUri;
     if (item.mediaId) {
-      uri = await resolveMediaUri(item.mediaId, item.imageUri);
+      uri = await resolveMediaUri(item.mediaId, item.imageUri, !isMyMessage);
     }
 
     if (!uri) {
@@ -3713,6 +3921,7 @@ const ChatScreen = ({ route, navigation }) => {
           <View style={styles.photoPreviewImageWrap}>
             {previewUri ? (
               <Image
+                ref={photoPreviewImageRef}
                 source={{ uri: previewUri }}
                 style={styles.photoPreviewImage}
                 resizeMode="contain"
@@ -3926,6 +4135,7 @@ const ChatScreen = ({ route, navigation }) => {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
     >
       <StatusBar backgroundColor={colors.BACKGROUND_COLOR} barStyle="light-content" translucent />
 
@@ -4132,8 +4342,10 @@ const ChatScreen = ({ route, navigation }) => {
             data={messages}
             renderItem={renderMessage}
             keyExtractor={(item) => item.id || `temp_${item.timestamp}`}
+            style={styles.messagesList}
             contentContainerStyle={styles.messagesListPadding}
             showsVerticalScrollIndicator={false}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             ListEmptyComponent={renderEmptyChat}
             ListFooterComponent={
               isOtherUserTyping && !isSelfChat ? (
@@ -4181,7 +4393,16 @@ const ChatScreen = ({ route, navigation }) => {
           {renderImageViewerModal()}
 
           {/* ── FLOATING BOTTOM CHAT INPUT BAR ───────────────────────── */}
-          <View style={[styles.bottomInputDock, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View
+            style={[
+              styles.bottomInputDock,
+              {
+                paddingBottom: isKeyboardVisible
+                  ? 8
+                  : Math.max(insets.bottom, 12),
+              },
+            ]}
+          >
             {/* Replying to Message Preview Bar */}
             {replyingToMessage && (
               <View style={styles.replyDockBar}>
@@ -4220,7 +4441,10 @@ const ChatScreen = ({ route, navigation }) => {
             <View style={styles.inputBarInner}>
               <TouchableOpacity
                 style={[styles.attachBtn, showAttachments && styles.attachBtnActive]}
-                onPress={() => setShowAttachments(!showAttachments)}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setShowAttachments(!showAttachments);
+                }}
                 activeOpacity={0.8}
               >
                 <MaterialIcons
@@ -4238,20 +4462,20 @@ const ChatScreen = ({ route, navigation }) => {
                     replyingToMessage
                       ? 'Type your reply...'
                       : isSelfChat
-                      ? 'Message yourself (Notes)...'
-                      : 'Type a message...'
+                        ? 'Message yourself (Notes)...'
+                        : 'Type a message...'
                   }
                   placeholderTextColor={colors.MUTED_COLOR}
                   value={message}
                   onChangeText={handleMessageTextChange}
                   multiline
                 />
-                <TouchableOpacity style={styles.emojiBtn} activeOpacity={0.8}>
+                {/* <TouchableOpacity style={styles.emojiBtn} activeOpacity={0.8}>
                   <MaterialIcons name="sentiment-satisfied" size={20} color={colors.SUB_TITLE_COLOR} />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.micBtn} activeOpacity={0.8}>
                   <MaterialIcons name="mic" size={20} color={colors.CYAN_ACCENT} />
-                </TouchableOpacity>
+                </TouchableOpacity> */}
               </View>
 
               <TouchableOpacity
@@ -4270,6 +4494,11 @@ const ChatScreen = ({ route, navigation }) => {
               </TouchableOpacity>
             </View>
           </View>
+
+          {/* Android Keyboard Dynamic Spacer */}
+          {Platform.OS === 'android' && (
+            <Animated.View style={{ height: keyboardHeightAnim }} />
+          )}
         </>
       )}
 
@@ -4504,10 +4733,13 @@ const styles = StyleSheet.create({
   },
 
   // ── Messages Stream ───────────────
+  messagesList: {
+    flex: 1,
+  },
   messagesListPadding: {
     paddingHorizontal: 14,
     paddingVertical: 14,
-    paddingBottom: 90,
+    paddingBottom: 12,
   },
   // ── Realtime Typing Indicator & Micro-Animation Dots ──
   typingDotsRow: {
@@ -5144,16 +5376,11 @@ const styles = StyleSheet.create({
 
   // ── Bottom Input Dock ─────────────
   bottomInputDock: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     backgroundColor: colors.BACKGROUND_COLOR,
     paddingHorizontal: 12,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: colors.BORDER_SUBTLE,
-    zIndex: 100,
   },
   inputBarInner: {
     flexDirection: 'row',
@@ -5403,6 +5630,26 @@ const styles = StyleSheet.create({
     color: colors.SUB_TITLE_COLOR,
     fontSize: 12,
     marginTop: 6,
+  },
+  whatsappProgressOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  whatsappProgressCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(15, 15, 26, 0.70)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.20)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
   },
   imageCaptionText: {
     color: '#FFFFFF',
