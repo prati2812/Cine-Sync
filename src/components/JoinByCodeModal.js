@@ -72,7 +72,7 @@ const JoinByCodeModal = ({ visible, onClose, onJoinRoom }) => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [insets.bottom]);
+  }, [insets.bottom, keyboardAnim]);
 
   // Trigger shake animation on error
   const triggerShake = useCallback(() => {

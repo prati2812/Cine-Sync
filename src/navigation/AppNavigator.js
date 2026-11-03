@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, ActivityIndicator, AppState } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -40,7 +40,7 @@ const AppNavigator = () => {
   const [isEmailVerified, setIsEmailVerified] = useState(false);
   const dispatch = useDispatch();
 
-  const updateUserStatus = async (status) => {
+  const updateUserStatus = useCallback(async (status) => {
     if (!user) return;
 
     await database()
@@ -49,7 +49,7 @@ const AppNavigator = () => {
         state: status,
         last_changed: database.ServerValue.TIMESTAMP,
       });
-  };
+  }, [user]);
 
   useEffect(() => {
     const checkPIN = async () => {
@@ -59,7 +59,7 @@ const AppNavigator = () => {
     checkPIN();
   }, []);
 
-  const handleAuthStateChanged = async authUser => {
+  const handleAuthStateChanged = useCallback(async authUser => {
     setLocalUser(authUser);
     if (initializing) setInitializing(false);
 
@@ -88,11 +88,9 @@ const AppNavigator = () => {
               });
           });
 
-
         const snapshot = await database()
           .ref(`users/${authUser.uid}`)
           .once('value');
-
 
         if (snapshot.exists()) {
           const userData = snapshot.val();
@@ -104,12 +102,12 @@ const AppNavigator = () => {
         console.log('Error checking email verification:', error);
       }
     }
-  };
+  }, [initializing, dispatch]);
 
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(handleAuthStateChanged);
     return unsubscribe;
-  }, []);
+  }, [handleAuthStateChanged]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
@@ -117,7 +115,7 @@ const AppNavigator = () => {
       else updateUserStatus('offline');
     });
     return () => sub.remove();
-  }, [user]);
+  }, [updateUserStatus]);
 
   if (initializing)
     return (

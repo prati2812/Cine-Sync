@@ -122,7 +122,7 @@ const HomeScreen = () => {
       -1,
       true
     );
-  }, []);
+  }, [pulseOpacity]);
 
   const animatedPulseStyle = useAnimatedStyle(() => ({
     opacity: pulseOpacity.value,

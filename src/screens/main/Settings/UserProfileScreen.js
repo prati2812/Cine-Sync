@@ -99,7 +99,7 @@ const UserProfileScreen = ({ navigation }) => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [insets.bottom]);
+  }, [insets.bottom, keyboardAnim]);
 
   // ──────────────────────────────────────────────────────────────
   // 1. Fetch User Data & Rooms Metrics

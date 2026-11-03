@@ -63,7 +63,7 @@ const ForgetPasswordScreen = ({ navigation }) => {
       -1,
       true
     );
-  }, []);
+  }, [pulseRingOpacity, pulseRingScale]);
 
   const animatedRingStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pulseRingScale.value }],

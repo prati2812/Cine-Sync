@@ -62,7 +62,7 @@ const PrivateRoomPinModal = ({ visible, room, onClose, onSuccess }) => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [insets.bottom]);
+  }, [insets.bottom, keyboardAnim]);
 
   useEffect(() => {
     if (visible) {
@@ -97,7 +97,7 @@ const PrivateRoomPinModal = ({ visible, room, onClose, onSuccess }) => {
         }),
       ]).start();
     }
-  }, [visible]);
+  }, [visible, backdropAnim, sheetSlideAnim]);
 
   const triggerShake = () => {
     Animated.sequence([

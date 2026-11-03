@@ -105,7 +105,7 @@ const PulsingRing = () => {
     );
     pulse.start();
     return () => pulse.stop();
-  }, []);
+  }, [opacityAnim, pulseAnim]);
 
   return (
     <Animated.View
@@ -156,124 +156,36 @@ const FriendsScreen = ({ navigation }) => {
     }
   }, [activeTab, friendRequests.length, sentRequests.length]);
 
-  // ── Realtime Listeners & Focus Refresh ─────────────────────
-  useEffect(() => {
-    let cleanupFns = [];
-
-    const attachAll = (user) => {
-      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
-      cleanupFns = [];
-
-      if (!user) {
-        setFriendsList([]);
-        setFriendRequests([]);
-        setSentRequests([]);
-        setChatsData({});
-        return;
+  // ── Helpers & Listeners ───────────────────────────────────
+  const getUserFriendDetails = useCallback(async (userId) => {
+    try {
+      const db = database();
+      const snapshot = await db.ref(`users/${userId}`).once('value');
+      const val = snapshot.val();
+      if (val) {
+        return {
+          ...val,
+          userId: val.userId || val.uid || val.id || userId,
+          username: val.username || val.displayName || (val.email ? val.email.split('@')[0] : 'Crew Member'),
+          email: val.email || '',
+        };
       }
-
-      const unsubReq = getFriendRequests(user);
-      const unsubSent = getFriendSentRequests(user);
-      const unsubFriends = getFriends(user);
-      const unsubChats = getUserChats(user);
-
-      if (typeof unsubReq === 'function') cleanupFns.push(unsubReq);
-      if (typeof unsubSent === 'function') cleanupFns.push(unsubSent);
-      if (typeof unsubFriends === 'function') cleanupFns.push(unsubFriends);
-      if (typeof unsubChats === 'function') cleanupFns.push(unsubChats);
-    };
-
-    const current = auth().currentUser;
-    if (current) {
-      attachAll(current);
+      return {
+        userId,
+        username: 'Crew Member',
+        email: '',
+      };
+    } catch (e) {
+      console.warn('getUserFriendDetails error for', userId, e);
+      return {
+        userId,
+        username: 'Crew Member',
+        email: '',
+      };
     }
-
-    const authUnsub = auth().onAuthStateChanged((user) => {
-      attachAll(user);
-    });
-
-    return () => {
-      authUnsub();
-      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
-    };
   }, []);
 
-  // Quick refresh whenever screen gains focus
-  useFocusEffect(
-    useCallback(() => {
-      const user = auth().currentUser;
-      if (!user) return;
-
-      // Refresh locked chats
-      getLockedUserIds(user.uid).then((ids) => {
-        setLockedUserIds(ids);
-      });
-
-      const db = database();
-
-      // Refresh user_chats previews and unread counts
-      db.ref(`user_chats/${user.uid}`).once('value').then((snap) => {
-        const chatsVal = snap.val();
-        if (chatsVal && typeof chatsVal === 'object') {
-          const map = {};
-          Object.keys(chatsVal).forEach((chatId) => {
-            const chat = chatsVal[chatId];
-            if (chat && chat.otherUserId) {
-              map[chat.otherUserId] = {
-                chatId,
-                ...chat,
-                unreadCount: typeof chat.unreadCount === 'number' ? chat.unreadCount : 0,
-              };
-            }
-          });
-          setChatsData(map);
-        }
-      }).catch(e => console.warn('Focus user_chats error:', e));
-
-      db.ref(`user_friend_requests/${user.uid}`).once('value').then(async (snap) => {
-        const val = snap.val();
-        if (val && typeof val === 'object') {
-          const userDetails = await Promise.all(
-            Object.keys(val).map(uid => getUserFriendDetails(uid))
-          );
-          setSentRequests(userDetails.filter(Boolean));
-        } else {
-          setSentRequests([]);
-        }
-      }).catch(e => console.warn('Focus sent requests error:', e));
-
-      db.ref(`friend_requests/${user.uid}`).once('value').then(async (snap) => {
-        const val = snap.val();
-        if (val && typeof val === 'object') {
-          const userDetails = await Promise.all(
-            Object.keys(val).map(uid => getUserFriendDetails(uid))
-          );
-          setFriendRequests(userDetails.filter(Boolean));
-        } else {
-          setFriendRequests([]);
-        }
-      }).catch(e => console.warn('Focus friend requests error:', e));
-    }, [])
-  );
-
-  // ── Avatar color generator ────────────────────────────────
-  const generateAvatarColor = (str) => {
-    const palette = [
-      colors.PRIMARY_COLOR,
-      colors.PURPLE_ACCENT,
-      colors.CYAN_ACCENT,
-      colors.ACCEPT_GREEN,
-      colors.FILM_GOLD,
-    ];
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return palette[Math.abs(hash) % palette.length];
-  };
-
-  // ── Firebase Listeners ────────────────────────────────────
-  const getFriendRequests = (currentUser) => {
+  const getFriendRequests = useCallback((currentUser) => {
     const user = currentUser || auth().currentUser;
     if (!user) return () => {};
     const db = database();
@@ -301,9 +213,9 @@ const FriendsScreen = ({ navigation }) => {
       }
     );
     return () => friendRequestsRef.off('value', callback);
-  };
+  }, [getUserFriendDetails]);
 
-  const getFriendSentRequests = (currentUser) => {
+  const getFriendSentRequests = useCallback((currentUser) => {
     const user = currentUser || auth().currentUser;
     if (!user) return () => {};
     const db = database();
@@ -331,9 +243,9 @@ const FriendsScreen = ({ navigation }) => {
       }
     );
     return () => friendSentRequestRef.off('value', callback);
-  };
+  }, [getUserFriendDetails]);
 
-  const getFriends = (currentUser) => {
+  const getFriends = useCallback((currentUser) => {
     const user = currentUser || auth().currentUser;
     if (!user) return () => {};
     const db = database();
@@ -343,36 +255,53 @@ const FriendsScreen = ({ navigation }) => {
     const callback = friendsRef.on(
       'value',
       (snapshot) => {
-        const friends = snapshot.val();
-        if (!friends || typeof friends !== 'object') {
-          setFriendsList([]);
-          return;
-        }
-        childUnsubs.forEach(fn => fn());
-        childUnsubs = [];
+        try {
+          const friendsData = snapshot.val();
+          if (!friendsData || typeof friendsData !== 'object') {
+            setFriendsList([]);
+            return;
+          }
 
-        const friendIds = Object.keys(friends);
-        friendIds.forEach((friendId) => {
-          const userRef = db.ref(`users/${friendId}`);
-          const userCallback = userRef.on('value', (userSnapshot) => {
-            const val = userSnapshot.val();
-            if (val) {
-              const friendDetails = {
-                ...val,
-                userId: val.userId || val.id || friendId,
-                username: val.username || val.displayName || (val.email ? val.email.split('@')[0] : 'Friend'),
-              };
-              setFriendsList((currentList) => {
-                const newList = currentList.filter(f => (f.userId || f.id) !== friendId);
-                return [...newList, friendDetails];
-              });
-            }
+          const userIds = Object.keys(friendsData);
+          childUnsubs.forEach(fn => fn());
+          childUnsubs = [];
+
+          const friendsMap = new Map();
+
+          userIds.forEach((userId) => {
+            const userRef = db.ref(`users/${userId}`);
+            const userCallback = userRef.on(
+              'value',
+              (userSnapshot) => {
+                const userData = userSnapshot.val();
+                if (userData) {
+                  friendsMap.set(userId, {
+                    ...userData,
+                    userId: userData.userId || userData.uid || userData.id || userId,
+                    username: userData.username || userData.displayName || (userData.email ? userData.email.split('@')[0] : 'Crew Member'),
+                    status: userData.status?.state || userData.status || 'offline',
+                    email: userData.email || '',
+                  });
+                } else {
+                  friendsMap.set(userId, {
+                    userId,
+                    username: 'Crew Member',
+                    status: 'offline',
+                    email: '',
+                  });
+                }
+                setFriendsList(Array.from(friendsMap.values()));
+              },
+              (err) => console.warn('user listener error:', err)
+            );
+            childUnsubs.push(() => userRef.off('value', userCallback));
           });
-          childUnsubs.push(() => userRef.off('value', userCallback));
-        });
+        } catch (e) {
+          console.warn('friends listener error:', e);
+        }
       },
       (error) => {
-        console.warn('friends listener error:', error);
+        console.warn('friends list error:', error);
       }
     );
 
@@ -380,9 +309,9 @@ const FriendsScreen = ({ navigation }) => {
       friendsRef.off('value', callback);
       childUnsubs.forEach(fn => fn());
     };
-  };
+  }, []);
 
-  const getUserChats = (currentUser) => {
+  const getUserChats = useCallback((currentUser) => {
     const user = currentUser || auth().currentUser;
     if (!user) return () => {};
     const db = database();
@@ -445,7 +374,125 @@ const FriendsScreen = ({ navigation }) => {
     return () => {
       userChatsRef.off('value', callback);
     };
+  }, []);
+
+  // ── Realtime Listeners & Focus Refresh ─────────────────────
+  useEffect(() => {
+    let cleanupFns = [];
+
+    const attachAll = (user) => {
+      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
+      cleanupFns = [];
+
+      if (!user) {
+        setFriendsList([]);
+        setFriendRequests([]);
+        setSentRequests([]);
+        setChatsData({});
+        return;
+      }
+
+      const unsubReq = getFriendRequests(user);
+      const unsubSent = getFriendSentRequests(user);
+      const unsubFriends = getFriends(user);
+      const unsubChats = getUserChats(user);
+
+      if (typeof unsubReq === 'function') cleanupFns.push(unsubReq);
+      if (typeof unsubSent === 'function') cleanupFns.push(unsubSent);
+      if (typeof unsubFriends === 'function') cleanupFns.push(unsubFriends);
+      if (typeof unsubChats === 'function') cleanupFns.push(unsubChats);
+    };
+
+    const current = auth().currentUser;
+    if (current) {
+      attachAll(current);
+    }
+
+    const authUnsub = auth().onAuthStateChanged((user) => {
+      attachAll(user);
+    });
+
+    return () => {
+      authUnsub();
+      cleanupFns.forEach(fn => typeof fn === 'function' && fn());
+    };
+  }, [getFriendRequests, getFriendSentRequests, getFriends, getUserChats]);
+
+  // Quick refresh whenever screen gains focus
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth().currentUser;
+      if (!user) return;
+
+      // Refresh locked chats
+      getLockedUserIds(user.uid).then((ids) => {
+        setLockedUserIds(ids);
+      });
+
+      const db = database();
+
+      // Refresh user_chats previews and unread counts
+      db.ref(`user_chats/${user.uid}`).once('value').then((snap) => {
+        const chatsVal = snap.val();
+        if (chatsVal && typeof chatsVal === 'object') {
+          const map = {};
+          Object.keys(chatsVal).forEach((chatId) => {
+            const chat = chatsVal[chatId];
+            if (chat && chat.otherUserId) {
+              map[chat.otherUserId] = {
+                chatId,
+                ...chat,
+                unreadCount: typeof chat.unreadCount === 'number' ? chat.unreadCount : 0,
+              };
+            }
+          });
+          setChatsData(map);
+        }
+      }).catch(e => console.warn('Focus user_chats error:', e));
+
+      db.ref(`user_friend_requests/${user.uid}`).once('value').then(async (snap) => {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          const userDetails = await Promise.all(
+            Object.keys(val).map(uid => getUserFriendDetails(uid))
+          );
+          setSentRequests(userDetails.filter(Boolean));
+        } else {
+          setSentRequests([]);
+        }
+      }).catch(e => console.warn('Focus sent requests error:', e));
+
+      db.ref(`friend_requests/${user.uid}`).once('value').then(async (snap) => {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          const userDetails = await Promise.all(
+            Object.keys(val).map(uid => getUserFriendDetails(uid))
+          );
+          setFriendRequests(userDetails.filter(Boolean));
+        } else {
+          setFriendRequests([]);
+        }
+      }).catch(e => console.warn('Focus friend requests error:', e));
+    }, [getUserFriendDetails])
+  );
+
+  // ── Avatar color generator ────────────────────────────────
+  const generateAvatarColor = (str) => {
+    const palette = [
+      colors.PRIMARY_COLOR,
+      colors.PURPLE_ACCENT,
+      colors.CYAN_ACCENT,
+      colors.ACCEPT_GREEN,
+      colors.FILM_GOLD,
+    ];
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return palette[Math.abs(hash) % palette.length];
   };
+
+
 
   const acceptFriendRequest = async (userId) => {
     try {
@@ -478,33 +525,7 @@ const FriendsScreen = ({ navigation }) => {
     }
   };
 
-  const getUserFriendDetails = async (userId) => {
-    try {
-      const db = database();
-      const snapshot = await db.ref(`users/${userId}`).once('value');
-      const val = snapshot.val();
-      if (val) {
-        return {
-          ...val,
-          userId: val.userId || val.uid || val.id || userId,
-          username: val.username || val.displayName || (val.email ? val.email.split('@')[0] : 'Crew Member'),
-          email: val.email || '',
-        };
-      }
-      return {
-        userId,
-        username: 'Crew Member',
-        email: '',
-      };
-    } catch (e) {
-      console.warn('getUserFriendDetails error for', userId, e);
-      return {
-        userId,
-        username: 'Crew Member',
-        email: '',
-      };
-    }
-  };
+
 
   const isFriendIsOrNot = async (userId) => {
     const db = database();

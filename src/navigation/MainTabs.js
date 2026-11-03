@@ -79,6 +79,68 @@ const MainTabs = () => {
   );
 };
 
+const TabBarButton = ({
+  route,
+  descriptor,
+  isFocused,
+  totalUnread,
+  onPress,
+}) => {
+  const { options } = descriptor;
+  const label = options.tabBarLabel || route.name;
+  const isFriends = route.name === 'Friends';
+
+  const animatedIconStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: withSpring(isFocused ? 1 : 1) }],
+    opacity: withSpring(isFocused ? 1 : 0.6),
+  }));
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={styles.tabButton}
+      activeOpacity={0.7}>
+      {isFocused ? (
+        <LinearGradient
+          colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.activeTabBg}>
+          <View style={styles.iconWrap}>
+            <Animated.View style={animatedIconStyle}>
+              {options.tabBarIcon({ focused: true })}
+            </Animated.View>
+            {isFriends && totalUnread > 0 && (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>
+                  {totalUnread > 99 ? '99+' : totalUnread}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.tabTextFocused}>{label}</Text>
+        </LinearGradient>
+      ) : (
+        <View style={styles.inactiveTab}>
+          <View style={styles.iconWrap}>
+            <Animated.View style={animatedIconStyle}>
+              {options.tabBarIcon({ focused: false })}
+            </Animated.View>
+            {isFriends && totalUnread > 0 && (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>
+                  {totalUnread > 99 ? '99+' : totalUnread}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.tabText}>{label}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+};
+
 const CustomTabBar = ({ state, descriptors, navigation }) => {
   const [totalUnread, setTotalUnread] = useState(0);
 
@@ -121,64 +183,20 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
   return (
     <View style={styles.tabBarContainer}>
       {state.routes.map((route, index) => {
-        const { options } = descriptors[route.key];
-        const label = options.tabBarLabel || route.name;
         const isFocused = state.index === index;
-        const isFriends = route.name === 'Friends';
-
         const onPress = () => {
           if (!isFocused) navigation.navigate(route.name);
         };
 
-        const animatedIconStyle = useAnimatedStyle(() => ({
-          transform: [{ scale: withSpring(isFocused ? 1 : 1) }],
-          opacity: withSpring(isFocused ? 1 : 0.6),
-        }));
-
         return (
-          <TouchableOpacity
+          <TabBarButton
             key={route.key}
+            route={route}
+            descriptor={descriptors[route.key]}
+            isFocused={isFocused}
+            totalUnread={totalUnread}
             onPress={onPress}
-            style={styles.tabButton}
-            activeOpacity={0.7}>
-            {isFocused ? (
-              <LinearGradient
-                colors={[colors.GRADIENT_START, colors.GRADIENT_END]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.activeTabBg}>
-                <View style={styles.iconWrap}>
-                  <Animated.View style={animatedIconStyle}>
-                    {options.tabBarIcon({ focused: true })}
-                  </Animated.View>
-                  {isFriends && totalUnread > 0 && (
-                    <View style={styles.tabBadge}>
-                      <Text style={styles.tabBadgeText}>
-                        {totalUnread > 99 ? '99+' : totalUnread}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.tabTextFocused}>{label}</Text>
-              </LinearGradient>
-            ) : (
-              <View style={styles.inactiveTab}>
-                <View style={styles.iconWrap}>
-                  <Animated.View style={animatedIconStyle}>
-                    {options.tabBarIcon({ focused: false })}
-                  </Animated.View>
-                  {isFriends && totalUnread > 0 && (
-                    <View style={styles.tabBadge}>
-                      <Text style={styles.tabBadgeText}>
-                        {totalUnread > 99 ? '99+' : totalUnread}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.tabText}>{label}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          />
         );
       })}
     </View>

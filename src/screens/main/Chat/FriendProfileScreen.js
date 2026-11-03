@@ -55,7 +55,7 @@ const OnlineRing = () => {
     );
     loop.start();
     return () => loop.stop();
-  }, []);
+  }, [opacAnim, scaleAnim]);
 
   return (
     <Animated.View

@@ -190,7 +190,7 @@ const CreateRoomScreen = ({ navigation, route }) => {
       isMounted = false;
       clearTimeout(handler);
     };
-  }, [streamUrl, isEditing]);
+  }, [streamUrl, isEditing, editingRoom?.streamUrl]);
 
   // Fetch connected friends for production-ready member invites
   useEffect(() => {

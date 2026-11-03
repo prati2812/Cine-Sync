@@ -28,11 +28,11 @@
     },
     "chats": {
       "$chatId": {
-        ".read": "auth != null",
-        ".write": "auth != null",
+        ".read": "auth != null && (data.child('participants/' + auth.uid).val() === true || root.child('user_chats/' + auth.uid + '/' + $chatId).exists())",
+        ".write": "auth != null && (!data.exists() || data.child('participants/' + auth.uid).val() === true || root.child('user_chats/' + auth.uid + '/' + $chatId).exists() || newData.child('participants/' + auth.uid).val() === true)",
         "messages": {
-          ".read": "auth != null",
-          ".write": "auth != null",
+          ".read": "auth != null && (root.child('chats/' + $chatId + '/participants/' + auth.uid).val() === true || root.child('user_chats/' + auth.uid + '/' + $chatId).exists())",
+          ".write": "auth != null && (root.child('chats/' + $chatId + '/participants/' + auth.uid).val() === true || root.child('user_chats/' + auth.uid + '/' + $chatId).exists())",
           ".indexOn": ["timestamp", "senderId", "seen", "type"]
         }
       }
@@ -57,7 +57,7 @@
     "rooms_playback": {
       "$roomId": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": "auth != null && (!data.exists() || root.child('rooms/' + $roomId + '/creator/uid').val() === auth.uid || root.child('rooms/' + $roomId + '/creator/userId').val() === auth.uid || root.child('rooms/' + $roomId + '/coHosts/' + auth.uid).exists())"
       }
     },
     "user_rooms": {
@@ -86,7 +86,7 @@
       ".read": "auth != null",
       ".indexOn": ["senderId", "createdAt"],
       "$mediaId": {
-        ".write": "auth != null"
+        ".write": "auth != null && (!data.exists() || data.child('senderId').val() === auth.uid || !newData.exists())"
       }
     },
     "friends": {

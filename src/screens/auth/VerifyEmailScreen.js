@@ -58,7 +58,7 @@ const VerifyEmailScreen = ({ onSuccess, navigation }) => {
       -1,
       true
     );
-  }, []);
+  }, [pulseOpacity, pulseScale]);
 
   const animatedPulseDotStyle = useAnimatedStyle(() => ({
     opacity: pulseOpacity.value,

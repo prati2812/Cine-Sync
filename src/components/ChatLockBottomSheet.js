@@ -102,7 +102,7 @@ const ChatLockBottomSheet = ({
       showSub.remove();
       hideSub.remove();
     };
-  }, []);
+  }, [insets.bottom, keyboardAnim]);
 
   const triggerClose = (postCloseCallback) => {
     if (isClosingRef.current) return;
@@ -189,7 +189,7 @@ const ChatLockBottomSheet = ({
       backdropAnim.setValue(0);
       keyboardAnim.setValue(0);
     }
-  }, [visible, mode]);
+  }, [visible, mode, backdropAnim, keyboardAnim, slideAnim]);
 
   const triggerShake = () => {
     Animated.sequence([

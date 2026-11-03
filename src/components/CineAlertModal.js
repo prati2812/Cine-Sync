@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Dimensions,
   TextInput,
   TouchableWithoutFeedback,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   Keyboard,
@@ -108,67 +107,9 @@ const CineAlertModal = () => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [insets.bottom]);
+  }, [insets.bottom, keyboardAnim]);
 
-  useEffect(() => {
-    registerAlertListener((config) => {
-      if (config) {
-        isClosingRef.current = false;
-        inputValueRef.current = config.initialValue || '';
-        if (config.roomList && config.roomList.length > 0) {
-          const initialRoom = config.roomList[0];
-          selectedRoomRef.current = initialRoom;
-          setSelectedRoomId(initialRoom?.roomId);
-        } else {
-          selectedRoomRef.current = null;
-          setSelectedRoomId(null);
-        }
-        setAlertConfig(config);
-      } else {
-        closeAlert();
-      }
-    });
-
-    return () => {
-      unregisterAlertListener();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (alertConfig) {
-      // Cine-Sync Rule 8: Always enforce bottom sheet presentation (never centered modals)
-      const isBottomSheet = true;
-
-      // Reset values
-      backdropAnim.setValue(0);
-      slideAnim.setValue(350);
-      keyboardAnim.setValue(0);
-
-      Animated.parallel([
-        Animated.timing(backdropAnim, {
-          toValue: 1,
-          duration: 220,
-          easing: Easing.out(Easing.ease),
-          useNativeDriver: true,
-        }),
-        isBottomSheet
-          ? Animated.spring(slideAnim, {
-              toValue: 0,
-              tension: 65,
-              friction: 10,
-              useNativeDriver: true,
-            })
-          : Animated.spring(scaleAnim, {
-              toValue: 1,
-              tension: 70,
-              friction: 8,
-              useNativeDriver: true,
-            }),
-      ]).start();
-    }
-  }, [alertConfig]);
-
-  const closeAlert = (callback) => {
+  const closeAlert = useCallback((callback) => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
 
@@ -207,7 +148,65 @@ const CineAlertModal = () => {
         callback(submittedValue);
       }
     });
-  };
+  }, [alertConfig?.roomList, backdropAnim, scaleAnim, slideAnim]);
+
+  useEffect(() => {
+    registerAlertListener((config) => {
+      if (config) {
+        isClosingRef.current = false;
+        inputValueRef.current = config.initialValue || '';
+        if (config.roomList && config.roomList.length > 0) {
+          const initialRoom = config.roomList[0];
+          selectedRoomRef.current = initialRoom;
+          setSelectedRoomId(initialRoom?.roomId);
+        } else {
+          selectedRoomRef.current = null;
+          setSelectedRoomId(null);
+        }
+        setAlertConfig(config);
+      } else {
+        closeAlert();
+      }
+    });
+
+    return () => {
+      unregisterAlertListener();
+    };
+  }, [closeAlert]);
+
+  useEffect(() => {
+    if (alertConfig) {
+      // Cine-Sync Rule 8: Always enforce bottom sheet presentation (never centered modals)
+      const isBottomSheet = true;
+
+      // Reset values
+      backdropAnim.setValue(0);
+      slideAnim.setValue(350);
+      keyboardAnim.setValue(0);
+
+      Animated.parallel([
+        Animated.timing(backdropAnim, {
+          toValue: 1,
+          duration: 220,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        isBottomSheet
+          ? Animated.spring(slideAnim, {
+              toValue: 0,
+              tension: 65,
+              friction: 10,
+              useNativeDriver: true,
+            })
+          : Animated.spring(scaleAnim, {
+              toValue: 1,
+              tension: 70,
+              friction: 8,
+              useNativeDriver: true,
+            }),
+      ]).start();
+    }
+  }, [alertConfig, backdropAnim, keyboardAnim, scaleAnim, slideAnim]);
 
   if (!alertConfig) return null;
 

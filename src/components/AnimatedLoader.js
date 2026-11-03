@@ -1,14 +1,14 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet, Easing } from 'react-native';
 import Logo1 from './Logo1';
 
 const AnimatedLoader = ({ size = 'large' }) => {
-  const rotateValue = new Animated.Value(0);
-  const scaleValue = new Animated.Value(0.8);
+  const rotateValue = useRef(new Animated.Value(0)).current;
+  const scaleValue = useRef(new Animated.Value(0.8)).current;
 
   useEffect(() => {
     // Rotation animation
-    Animated.loop(
+    const rotateAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(rotateValue, {
           toValue: 1,
@@ -17,10 +17,11 @@ const AnimatedLoader = ({ size = 'large' }) => {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+    rotateAnim.start();
 
     // Pulse animation
-    Animated.loop(
+    const pulseAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(scaleValue, {
           toValue: 1,
@@ -35,8 +36,14 @@ const AnimatedLoader = ({ size = 'large' }) => {
           useNativeDriver: true,
         }),
       ])
-    ).start();
-  }, []);
+    );
+    pulseAnim.start();
+
+    return () => {
+      rotateAnim.stop();
+      pulseAnim.stop();
+    };
+  }, [rotateValue, scaleValue]);
 
   const rotate = rotateValue.interpolate({
     inputRange: [0, 1],
