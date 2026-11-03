@@ -983,6 +983,50 @@ const ChatScreen = ({ route, navigation }) => {
   const messageInputRef = useRef(null);
   const photoPreviewImageRef = useRef(null);
 
+  // ── Chat List & Inverted Scroll Tracking References ──
+  const flatListRef = useRef(null);
+  const isAtBottomRef = useRef(true);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+  const scrollBottomBtnAnim = useRef(new Animated.Value(0)).current;
+
+  // Inverted messages array: newest messages at index 0 (rendered at bottom of screen)
+  const invertedMessages = useMemo(() => {
+    return [...messages].reverse();
+  }, [messages]);
+
+  const updateScrollBottomVisibility = useCallback((show) => {
+    setShowScrollBottomBtn((prev) => {
+      if (prev !== show) {
+        Animated.timing(scrollBottomBtnAnim, {
+          toValue: show ? 1 : 0,
+          duration: 180,
+          useNativeDriver: true,
+        }).start();
+        return show;
+      }
+      return prev;
+    });
+  }, [scrollBottomBtnAnim]);
+
+  const handleJumpToLatest = useCallback(() => {
+    isAtBottomRef.current = true;
+    updateScrollBottomVisibility(false);
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, [updateScrollBottomVisibility]);
+
+  const handleScroll = useCallback((event) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    // In an inverted FlatList, offset 0 is physically at the bottom (latest messages)
+    isAtBottomRef.current = offsetY <= 60;
+
+    // Show jump-to-bottom button when scrolled up into history (offsetY > 250)
+    if (offsetY > 250 && messages.length > 5) {
+      updateScrollBottomVisibility(true);
+    } else {
+      updateScrollBottomVisibility(false);
+    }
+  }, [messages.length, updateScrollBottomVisibility]);
+
   // ── Keyboard Visibility & Height Handling (Android & iOS) ──
   const keyboardHeightAnim = useRef(new Animated.Value(0)).current;
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -1004,18 +1048,11 @@ const ChatScreen = ({ route, navigation }) => {
           toValue: targetHeight,
           duration: 150,
           useNativeDriver: false,
-        }).start(() => {
-          requestAnimationFrame(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          });
-        });
+        }).start();
       }
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 60);
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 180);
+      if (isAtBottomRef.current) {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      }
     });
 
     const hideSub = Keyboard.addListener(hideEvent, () => {
@@ -1025,21 +1062,8 @@ const ChatScreen = ({ route, navigation }) => {
           toValue: 0,
           duration: 150,
           useNativeDriver: false,
-        }).start(() => {
-          requestAnimationFrame(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          });
-        });
+        }).start();
       }
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 60);
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 180);
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-      }, 240);
     });
 
     return () => {
@@ -1059,9 +1083,9 @@ const ChatScreen = ({ route, navigation }) => {
   // Handler to scroll to quoted message and highlight it
   const handleScrollToMessage = useCallback(
     (targetId) => {
-      if (!targetId || !messages || messages.length === 0) return;
+      if (!targetId || !invertedMessages || invertedMessages.length === 0) return;
 
-      const targetIndex = messages.findIndex(
+      const targetIndex = invertedMessages.findIndex(
         (m) => m.id === targetId || m.key === targetId
       );
 
@@ -1090,7 +1114,7 @@ const ChatScreen = ({ route, navigation }) => {
         Alert.alert('Message not found', 'The quoted message is not available in the current chat view.');
       }
     },
-    [messages]
+    [invertedMessages]
   );
 
   // Swipe to reply handler
@@ -1150,7 +1174,6 @@ const ChatScreen = ({ route, navigation }) => {
         isViewOnce: false,
       }));
   }, [messages]);
-  const flatListRef = useRef(null);
   const activeMessagesRef = useRef(null);
   const activeUserChatsRef = useRef(null);
   const activeStatusRef = useRef(null);
@@ -1207,7 +1230,11 @@ const ChatScreen = ({ route, navigation }) => {
 
   useEffect(() => {
     chatIdRef.current = chatId;
-  }, [chatId]);
+    isAtBottomRef.current = true;
+    prevMessagesCountRef.current = 0;
+    setShowScrollBottomBtn(false);
+    scrollBottomBtnAnim.setValue(0);
+  }, [chatId, scrollBottomBtnAnim]);
 
   const otherUsername = route.params?.username || 'Chat';
   const otherUserId = route.params?.userId || route.params?.id || route.params?.friendId;
@@ -1509,10 +1536,8 @@ const ChatScreen = ({ route, navigation }) => {
     typingRef.on('value', (snapshot) => {
       const isTyping = Boolean(snapshot.val());
       setIsOtherUserTyping(isTyping);
-      if (isTyping) {
-        requestAnimationFrame(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        });
+      if (isTyping && isAtBottomRef.current) {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
       }
     });
   };
@@ -1616,11 +1641,11 @@ const ChatScreen = ({ route, navigation }) => {
           }
         }
 
-        // Only auto-scroll when message count actually increases (prevents jump on seen receipt update)
+        // Auto-scroll logic for inverted list: new messages smoothly scroll if user is at bottom
         if (mergedMessages.length > prevMessagesCountRef.current) {
-          requestAnimationFrame(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          });
+          if (prevMessagesCountRef.current > 0 && isAtBottomRef.current) {
+            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }
         }
         prevMessagesCountRef.current = mergedMessages.length;
       } else {
@@ -1682,9 +1707,8 @@ const ChatScreen = ({ route, navigation }) => {
     pendingMessagesRef.current.set(tempId, optimisticMessage);
     setMessages((prev) => [...prev, optimisticMessage]);
     prevMessagesCountRef.current += 1;
-    requestAnimationFrame(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    });
+    isAtBottomRef.current = true;
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
 
     // 4. Send to Firebase RTDB asynchronously
     try {
@@ -1792,9 +1816,8 @@ const ChatScreen = ({ route, navigation }) => {
     }
     await db.ref().update(updates);
 
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    isAtBottomRef.current = true;
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
   };
 
   const autoInviteSentRef = useRef(false);
@@ -2212,9 +2235,8 @@ const ChatScreen = ({ route, navigation }) => {
 
     setMessages((prev) => [...prev, ...optimisticMessages]);
     prevMessagesCountRef.current += optimisticMessages.length;
-    requestAnimationFrame(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    });
+    isAtBottomRef.current = true;
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
 
     try {
       const messagesRef = database().ref(`chats/${effectiveChatId}/messages`);
@@ -2416,10 +2438,11 @@ const ChatScreen = ({ route, navigation }) => {
 
     const dateSeparator = (() => {
       const currentMessageDate = new Date(item.timestamp || Date.now());
-      const previousMessage = index > 0 ? messages[index - 1] : null;
-      const previousMessageDate = previousMessage ? new Date(previousMessage.timestamp || Date.now()) : null;
+      // In an inverted FlatList, older messages in time are at higher indices (index + 1)
+      const olderMessage = index < invertedMessages.length - 1 ? invertedMessages[index + 1] : null;
+      const olderMessageDate = olderMessage ? new Date(olderMessage.timestamp || Date.now()) : null;
 
-      if (!previousMessageDate || !isSameDay(currentMessageDate, previousMessageDate)) {
+      if (!olderMessageDate || !isSameDay(currentMessageDate, olderMessageDate)) {
         return (
           <View style={styles.dateSeparator}>
             <Text style={styles.dateText}>{getDateLabel(currentMessageDate)}</Text>
@@ -4103,7 +4126,7 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   const renderEmptyChat = () => (
-    <View style={styles.emptyChatWrap}>
+    <View style={[styles.emptyChatWrap, { transform: [{ scaleY: -1 }] }]}>
       <View style={[styles.emptyChatIconBox, isSelfChat && { borderColor: 'rgba(124, 58, 237, 0.4)' }]}>
         <LinearGradient
           colors={
@@ -4339,7 +4362,8 @@ const ChatScreen = ({ route, navigation }) => {
           {/* ── CHAT MESSAGES STREAM ───────────────────────────────── */}
           <FlatList
             ref={flatListRef}
-            data={messages}
+            data={invertedMessages}
+            inverted
             renderItem={renderMessage}
             keyExtractor={(item) => item.id || `temp_${item.timestamp}`}
             style={styles.messagesList}
@@ -4347,7 +4371,7 @@ const ChatScreen = ({ route, navigation }) => {
             showsVerticalScrollIndicator={false}
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             ListEmptyComponent={renderEmptyChat}
-            ListFooterComponent={
+            ListHeaderComponent={
               isOtherUserTyping && !isSelfChat ? (
                 <View style={styles.typingIndicatorRow}>
                   <View style={styles.typingIndicatorBubble}>
@@ -4360,8 +4384,10 @@ const ChatScreen = ({ route, navigation }) => {
             initialNumToRender={20}
             maxToRenderPerBatch={15}
             windowSize={11}
-            removeClippedSubviews={Platform.OS === 'android'}
+            removeClippedSubviews={false}
             keyboardShouldPersistTaps="handled"
+            onScroll={handleScroll}
+            scrollEventThrottle={32}
             onScrollToIndexFailed={(info) => {
               const offset = info.averageItemLength
                 ? info.averageItemLength * info.index
@@ -4391,6 +4417,35 @@ const ChatScreen = ({ route, navigation }) => {
 
           {/* Fullscreen Photo Lightbox Modal */}
           {renderImageViewerModal()}
+
+          {/* Floating Jump to Latest Message Button */}
+          {showScrollBottomBtn && (
+            <Animated.View
+              style={[
+                styles.floatingScrollBottomWrap,
+                {
+                  opacity: scrollBottomBtnAnim,
+                  transform: [
+                    {
+                      scale: scrollBottomBtnAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.75, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+              pointerEvents={showScrollBottomBtn ? 'auto' : 'none'}
+            >
+              <TouchableOpacity
+                style={styles.floatingScrollBottomBtn}
+                onPress={handleJumpToLatest}
+                activeOpacity={0.82}
+              >
+                <MaterialIcons name="keyboard-arrow-down" size={24} color={colors.CYAN_ACCENT} />
+              </TouchableOpacity>
+            </Animated.View>
+          )}
 
           {/* ── FLOATING BOTTOM CHAT INPUT BAR ───────────────────────── */}
           <View
@@ -5372,6 +5427,30 @@ const styles = StyleSheet.create({
     marginTop: 7,
     textAlign: 'center',
     letterSpacing: 0.2,
+  },
+
+  // ── Floating Jump To Latest Button ──
+  floatingScrollBottomWrap: {
+    position: 'absolute',
+    right: 16,
+    bottom: 74,
+    zIndex: 99,
+    elevation: 8,
+  },
+  floatingScrollBottomBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.SURFACE_ELEVATED,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.4)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 5,
+    elevation: 6,
   },
 
   // ── Bottom Input Dock ─────────────
